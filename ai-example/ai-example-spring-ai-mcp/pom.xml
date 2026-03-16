@@ -5,21 +5,18 @@
 
     <parent>
         <groupId>org.javaup</groupId>
-        <artifactId>super-ai-hub</artifactId>
+        <artifactId>ai-example</artifactId>
         <version>${revision}</version>
     </parent>
 
 
-    <artifactId>ai-example</artifactId>
+    <artifactId>ai-example-spring-ai-mcp</artifactId>
     <packaging>pom</packaging>
 
-    <name>ai-example</name>
-    <description>ai示例</description>
+    <name>ai-example-spring-ai-mcp</name>
+    <description>springai的mcp示例</description>
 
     <modules>
-        <module>ai-example-one</module>
-        <module>ai-example-spring-ai</module>
-        <module>ai-example-spring-ai-mcp</module>
-        <module>ai-example-spring-ai-alibaba</module>
+        <module>ai-example-spring-ai-office-mcp-server</module>
     </modules>
 </project>

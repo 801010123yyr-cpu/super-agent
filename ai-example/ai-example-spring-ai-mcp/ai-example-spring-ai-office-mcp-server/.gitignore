@@ -3,11 +3,6 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-logs/
-
-### Agent ###
-cookasyncagent/
-**/dependency-reduced-pom.xml
 
 ### STS ###
 .apt_generated
@@ -23,9 +18,7 @@ cookasyncagent/
 *.iws
 *.iml
 *.ipr
-*.log
-*.hprof
-.flattened-pom.xml
+
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
@@ -37,12 +30,6 @@ build/
 !**/src/test/**/build/
 
 ### VS Code ###
-.vscode
-.qoder
-.cursor
-.trae
-.codex
-.claude
-.agents
+.vscode/
+
 CLAUDE.md
-AGENTS.md
