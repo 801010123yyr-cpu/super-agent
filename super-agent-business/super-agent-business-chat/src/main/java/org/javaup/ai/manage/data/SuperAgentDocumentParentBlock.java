@@ -10,14 +10,18 @@ import lombok.NoArgsConstructor;
 import org.javaup.database.data.BaseTableData;
 
 /**
- * 文档切块实体。
+ * 文档父块实体。
+ *
+ * <p>这是 Parent-Child / Small-to-Big 结构里的父层持久化对象。
+ * 它保存的是更稳定的大语义单元，后续回答阶段会优先回到这层取上下文，
+ * 而不是继续依赖查询阶段临时拼邻块。</p>
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@TableName("super_agent_document_chunk")
+@TableName("super_agent_document_parent_block")
 @EqualsAndHashCode(callSuper = true)
-public class SuperAgentDocumentChunk extends BaseTableData {
+public class SuperAgentDocumentParentBlock extends BaseTableData {
 
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
@@ -38,18 +42,9 @@ public class SuperAgentDocumentChunk extends BaseTableData {
     private Long planId;
 
     /**
-     * 所属父块 id。
-     *
-     * <p>Child 负责召回，Parent 负责回答。
-     * 因此每个 child chunk 都必须稳定挂到一个 parent block 下，
-     * 后续检索命中后才能从 child 提升回 parent。</p>
+     * 父块序号。
      */
-    private Long parentBlockId;
-
-    /**
-     * 切块序号。
-     */
-    private Integer chunkNo;
+    private Integer parentNo;
 
     /**
      * 内容来源。
@@ -67,9 +62,9 @@ public class SuperAgentDocumentChunk extends BaseTableData {
     private String pageNo;
 
     /**
-     * 切块内容。
+     * 父块完整正文。
      */
-    private String chunkText;
+    private String parentText;
 
     /**
      * 字符数。
@@ -82,17 +77,17 @@ public class SuperAgentDocumentChunk extends BaseTableData {
     private Integer tokenCount;
 
     /**
-     * 向量状态。
+     * 父块内部 child 数量。
      */
-    private Integer vectorStatus;
+    private Integer childCount;
 
     /**
-     * 向量库类型。
+     * 父块映射到的第一个 child 序号。
      */
-    private Integer vectorStoreType;
+    private Integer startChunkNo;
 
     /**
-     * 向量主键。
+     * 父块映射到的最后一个 child 序号。
      */
-    private String vectorId;
+    private Integer endChunkNo;
 }
