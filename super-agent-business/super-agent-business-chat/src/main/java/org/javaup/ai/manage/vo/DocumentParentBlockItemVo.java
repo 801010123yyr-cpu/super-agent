@@ -5,26 +5,16 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 文档 chunk 单条出参。
+ * 文档父块详情出参。
  */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class DocumentChunkItemVo {
-
-    private Long chunkId;
+public class DocumentParentBlockItemVo {
 
     private Long parentBlockId;
 
     private Integer parentBlockNo;
-
-    private Integer parentChildCount;
-
-    private Integer parentStartChunkNo;
-
-    private Integer parentEndChunkNo;
-
-    private Integer chunkNo;
 
     private String sectionPath;
 
@@ -38,9 +28,11 @@ public class DocumentChunkItemVo {
 
     private Integer tokenCount;
 
-    private Integer vectorStatus;
+    private Integer childCount;
 
-    private String vectorStatusName;
+    private Integer startChunkNo;
 
-    private String chunkText;
+    private Integer endChunkNo;
+
+    private String parentText;
 }
