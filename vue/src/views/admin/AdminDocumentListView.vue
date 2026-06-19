@@ -417,12 +417,6 @@ onMounted(() => {
 
 <style scoped>
 .document-page {
-  --color-border: #e4e8ed;
-  --color-surface-soft: #f7f8fa;
-  --radius-lg: 12px;
-  --radius-md: 8px;
-  --radius-sm: 6px;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -505,8 +499,8 @@ onMounted(() => {
 
 .field input:focus,
 .search-input:focus {
-  border-color: rgba(37, 87, 214, 0.28);
-  box-shadow: 0 0 0 3px rgba(37, 87, 214, 0.08);
+  border-color: rgba(192, 80, 45, 0.28);
+  box-shadow: 0 0 0 3px rgba(192, 80, 45, 0.08);
 }
 
 .upload-hint {
@@ -570,9 +564,9 @@ onMounted(() => {
 }
 
 .page-notice-info {
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
   color: #1f4ebb;
-  border-color: rgba(37, 87, 214, 0.1);
+  border-color: rgba(192, 80, 45, 0.1);
 }
 
 .page-notice-success {
@@ -650,7 +644,7 @@ onMounted(() => {
 }
 
 .document-table-row:hover {
-  background: rgba(37, 87, 214, 0.04);
+  background: rgba(192, 80, 45, 0.04);
 }
 
 .document-table-row td {
@@ -729,8 +723,8 @@ onMounted(() => {
   min-width: 108px;
   padding: 8px 14px;
   border-radius: var(--radius-sm);
-  background: rgba(37, 87, 214, 0.08);
-  border: 1px solid rgba(37, 87, 214, 0.12);
+  background: rgba(192, 80, 45, 0.08);
+  border: 1px solid rgba(192, 80, 45, 0.12);
   color: #1f4ebb;
   font-size: 12px;
   font-weight: 500;
@@ -816,7 +810,7 @@ onMounted(() => {
 }
 
 .ghost-button:hover:not(:disabled) {
-  background: rgba(37, 87, 214, 0.14);
+  background: rgba(192, 80, 45, 0.14);
 }
 
 .file-input::file-selector-button {
@@ -824,7 +818,7 @@ onMounted(() => {
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   margin-right: 12px;
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
   color: #1f4ebb;
 }
 

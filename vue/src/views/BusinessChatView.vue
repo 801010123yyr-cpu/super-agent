@@ -880,7 +880,7 @@ onMounted(async () => {
 }
 
 .session-card:hover {
-  border-color: rgba(37, 87, 214, 0.2);
+  border-color: rgba(192, 80, 45, 0.2);
 }
 
 .session-card.active {
@@ -984,7 +984,7 @@ onMounted(async () => {
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   background: var(--color-primary-soft);
-  border: 1px solid rgba(37, 87, 214, 0.1);
+  border: 1px solid rgba(192, 80, 45, 0.1);
   color: var(--color-primary);
 }
 
@@ -1057,7 +1057,7 @@ onMounted(async () => {
 }
 
 .prompt-chip:hover {
-  border-color: rgba(37, 87, 214, 0.2);
+  border-color: rgba(192, 80, 45, 0.2);
   background: var(--color-surface-soft);
 }
 /* PLACEHOLDER_CHAT_STYLES_PART4 */
@@ -1143,7 +1143,7 @@ onMounted(async () => {
   align-items: center;
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
   color: var(--color-primary);
   font-size: 13px;
   font-weight: 500;

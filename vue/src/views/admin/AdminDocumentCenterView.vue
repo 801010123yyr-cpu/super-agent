@@ -1701,12 +1701,12 @@ onBeforeUnmount(() => {
 }
 
 .pipeline-headline-parent {
-  border-bottom-color: rgba(37, 87, 214, 0.22);
+  border-bottom-color: rgba(192, 80, 45, 0.22);
 }
 
 .section-headline.pipeline-headline-parent h4,
 .section-headline.pipeline-headline-parent span {
-  color: #2557d6;
+  color: #c0502d;
 }
 
 .pipeline-headline-child {
@@ -1930,7 +1930,7 @@ onBeforeUnmount(() => {
 .document-row-title span,
 .document-row-main p,
 .document-row-meta {
-  color: #677f97;
+  color: #8a8175;
 }
 
 .document-row.active .document-row-title span,
@@ -2053,13 +2053,13 @@ onBeforeUnmount(() => {
 }
 
 .strategy-status-step-current {
-  border-color: rgba(37, 87, 214, 0.16);
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.06), rgba(255, 255, 255, 0.96));
+  border-color: rgba(192, 80, 45, 0.16);
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.06), rgba(255, 255, 255, 0.96));
 }
 
 .strategy-status-step-current .strategy-status-index {
-  background: rgba(37, 87, 214, 0.14);
-  color: #2557d6;
+  background: rgba(192, 80, 45, 0.14);
+  color: #c0502d;
 }
 
 .strategy-status-step-failed {
@@ -2169,7 +2169,7 @@ onBeforeUnmount(() => {
 
 .strategy-lane-parent .strategy-lane-kicker,
 .strategy-lane-parent .strategy-lane-titlebox h5 {
-  color: #2557d6;
+  color: #c0502d;
 }
 
 .strategy-lane-child .strategy-lane-kicker,
@@ -2301,7 +2301,7 @@ onBeforeUnmount(() => {
 
 .strategy-lane-parent .strategy-lane-kicker,
 .strategy-lane-parent .strategy-lane-titlebox h5 {
-  color: #2557d6;
+  color: #c0502d;
 }
 
 .strategy-lane-child .strategy-lane-kicker,
@@ -2476,7 +2476,7 @@ onBeforeUnmount(() => {
 }
 
 .selected-flow-board-parent {
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.05), rgba(37, 87, 214, 0.015));
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.05), rgba(192, 80, 45, 0.015));
 }
 
 .selected-flow-board-child {
@@ -2484,13 +2484,13 @@ onBeforeUnmount(() => {
 }
 
 .timeline-list-parent .timeline-item {
-  border-color: rgba(37, 87, 214, 0.12);
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.04), rgba(255, 255, 255, 0.96));
+  border-color: rgba(192, 80, 45, 0.12);
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.04), rgba(255, 255, 255, 0.96));
 }
 
 .timeline-list-parent .timeline-index {
-  background: rgba(37, 87, 214, 0.12);
-  color: #2557d6;
+  background: rgba(192, 80, 45, 0.12);
+  color: #c0502d;
 }
 
 .timeline-list-child .timeline-item {
@@ -2512,7 +2512,7 @@ onBeforeUnmount(() => {
 }
 
 .selected-flow-label-parent {
-  color: #2557d6 !important;
+  color: #c0502d !important;
 }
 
 .selected-flow-label-child {
@@ -2603,12 +2603,12 @@ onBeforeUnmount(() => {
 }
 
 .selected-flow-board-parent .selected-flow-card {
-  border-color: rgba(37, 87, 214, 0.14);
-  box-shadow: 0 12px 24px rgba(37, 87, 214, 0.07);
+  border-color: rgba(192, 80, 45, 0.14);
+  box-shadow: 0 12px 24px rgba(192, 80, 45, 0.07);
 }
 
 .selected-flow-board-parent .selected-flow-order {
-  background: linear-gradient(135deg, #173da8, #2557d6);
+  background: linear-gradient(135deg, #9d3d20, #c0502d);
 }
 
 .selected-flow-board-child .selected-flow-card {
@@ -2686,18 +2686,18 @@ onBeforeUnmount(() => {
 }
 
 .strategy-picker-parent .strategy-chip.active {
-  border-color: rgba(37, 87, 214, 0.4);
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.14), rgba(37, 87, 214, 0.04));
-  box-shadow: 0 4px 16px rgba(37, 87, 214, 0.16);
+  border-color: rgba(192, 80, 45, 0.4);
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.14), rgba(192, 80, 45, 0.04));
+  box-shadow: 0 4px 16px rgba(192, 80, 45, 0.16);
 }
 
 .strategy-picker-parent .strategy-chip.active .strategy-chip-state {
-  background: rgba(37, 87, 214, 0.16);
-  color: #2557d6;
+  background: rgba(192, 80, 45, 0.16);
+  color: #c0502d;
 }
 
 .strategy-picker-parent .strategy-chip-check {
-  color: #2557d6;
+  color: #c0502d;
 }
 
 .strategy-picker-child .strategy-chip.active {
@@ -2787,8 +2787,8 @@ onBeforeUnmount(() => {
 }
 
 .preview-box-parent {
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.05), rgba(37, 87, 214, 0.015));
-  border-color: rgba(37, 87, 214, 0.18);
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.05), rgba(192, 80, 45, 0.015));
+  border-color: rgba(192, 80, 45, 0.18);
 }
 
 .preview-box-child {
@@ -2806,7 +2806,7 @@ onBeforeUnmount(() => {
 }
 
 .preview-box-title-parent {
-  color: #2557d6 !important;
+  color: #c0502d !important;
 }
 
 .preview-box-title-child {

@@ -270,13 +270,13 @@ onMounted(() => {
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.16), rgba(239, 123, 57, 0.12));
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.16), rgba(239, 123, 57, 0.12));
   border: 1px solid rgba(17, 24, 39, 0.08);
   color: var(--color-primary-strong);
 }
 
 .message-user .avatar {
-  background: rgba(37, 87, 214, 0.1);
+  background: rgba(192, 80, 45, 0.1);
 }
 
 .bubble {
@@ -291,7 +291,7 @@ onMounted(() => {
 
 .message-user .bubble {
   max-width: min(760px, 100%);
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.08), rgba(37, 87, 214, 0.03));
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.08), rgba(192, 80, 45, 0.03));
 }
 
 .bubble-header {
@@ -349,8 +349,8 @@ onMounted(() => {
 }
 
 .message-status {
-  border: 1px solid rgba(37, 87, 214, 0.14);
-  background: rgba(37, 87, 214, 0.06);
+  border: 1px solid rgba(192, 80, 45, 0.14);
+  background: rgba(192, 80, 45, 0.06);
   color: var(--color-primary-strong);
 }
 
@@ -492,8 +492,8 @@ onMounted(() => {
 }
 
 .route-candidate-primary {
-  border-color: rgba(37, 87, 214, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(37, 87, 214, 0.08);
+  border-color: rgba(192, 80, 45, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(192, 80, 45, 0.08);
 }
 
 .route-candidate-card strong {
@@ -549,7 +549,7 @@ onMounted(() => {
 .markdown-body :deep(a) {
   color: var(--color-primary-strong);
   text-decoration: underline;
-  text-decoration-color: rgba(37, 87, 214, 0.22);
+  text-decoration-color: rgba(192, 80, 45, 0.22);
   text-underline-offset: 3px;
 }
 
@@ -597,8 +597,8 @@ onMounted(() => {
 }
 
 .recommend-chip {
-  border: 1px solid rgba(37, 87, 214, 0.12);
-  background: rgba(37, 87, 214, 0.06);
+  border: 1px solid rgba(192, 80, 45, 0.12);
+  background: rgba(192, 80, 45, 0.06);
   color: var(--color-primary-strong);
   border-radius: 999px;
   padding: 10px 14px;
@@ -609,8 +609,8 @@ onMounted(() => {
 
 .recommend-chip:hover {
   transform: translateY(-1px);
-  background: rgba(37, 87, 214, 0.1);
-  border-color: rgba(37, 87, 214, 0.18);
+  background: rgba(192, 80, 45, 0.1);
+  border-color: rgba(192, 80, 45, 0.18);
 }
 
 .icon {

@@ -507,7 +507,7 @@ onMounted(loadSessions)
 .filter-field select:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(37, 87, 214, 0.1);
+  box-shadow: 0 0 0 3px rgba(192, 80, 45, 0.1);
 }
 
 .filter-actions {

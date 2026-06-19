@@ -1,72 +1,80 @@
 <template>
   <section class="dashboard-page">
-    <div class="hero-card">
-      <div class="hero-copy">
+    <header class="page-intro">
+      <div class="page-intro-text">
         <h3>把文档接入、切块策略和索引构建串成一条可观察的业务流水线</h3>
-        <p class="section-description">
-          后台管理台聚焦在文档进入系统后的关键节点：上传、推荐策略、策略确认、索引构建和对话观测。
+        <p>
+          后台聚焦文档进入系统后的关键节点：上传、推荐策略、策略确认、索引构建和对话观测。
         </p>
-        <button class="primary-link" type="button" @click="goDocuments">前往文档接入</button>
       </div>
-    </div>
+      <button class="btn-primary" type="button" @click="goDocuments">前往文档接入</button>
+    </header>
 
     <div class="metrics-grid">
       <article class="metric-card">
-        <span>文档总数</span>
-        <strong>{{ formatCount(summary.total) }}</strong>
-        <p>已进入管理台的文档记录</p>
+        <span class="metric-label">文档总数</span>
+        <strong class="metric-value">{{ formatCount(summary.total) }}</strong>
+        <p class="metric-hint">已进入管理台的文档记录</p>
       </article>
       <article class="metric-card">
-        <span>解析成功</span>
-        <strong>{{ formatCount(summary.parseSuccess) }}</strong>
-        <p>可进入策略确认阶段的文档</p>
+        <span class="metric-label">解析成功</span>
+        <strong class="metric-value">{{ formatCount(summary.parseSuccess) }}</strong>
+        <p class="metric-hint">可进入策略确认阶段的文档</p>
       </article>
       <article class="metric-card">
-        <span>策略已确认</span>
-        <strong>{{ formatCount(summary.strategyConfirmed) }}</strong>
-        <p>已经形成最终切块链路</p>
+        <span class="metric-label">策略已确认</span>
+        <strong class="metric-value">{{ formatCount(summary.strategyConfirmed) }}</strong>
+        <p class="metric-hint">已经形成最终切块链路</p>
       </article>
       <article class="metric-card">
-        <span>索引完成</span>
-        <strong>{{ formatCount(summary.indexSuccess) }}</strong>
-        <p>可直接参与 RAG 检索问答</p>
+        <span class="metric-label">索引完成</span>
+        <strong class="metric-value">{{ formatCount(summary.indexSuccess) }}</strong>
+        <p class="metric-hint">可直接参与 RAG 检索问答</p>
       </article>
     </div>
 
     <div class="dashboard-grid">
       <article class="panel-card">
         <div class="panel-header">
-          <div>
-            <h4>建议演示路径</h4>
-          </div>
+          <h4>建议演示路径</h4>
         </div>
 
         <ol class="flow-list">
           <li>
-            <strong>上传文档</strong>
-            <span>通过假登录后的管理台上传 PDF / Word / Markdown 文档。</span>
+            <span class="flow-index">1</span>
+            <div class="flow-body">
+              <strong>上传文档</strong>
+              <span>通过假登录后的管理台上传 PDF / Word / Markdown 文档。</span>
+            </div>
           </li>
           <li>
-            <strong>查看系统推荐策略</strong>
-            <span>根据文档结构与内容长度，观察结构切块、递归分块、语义分块和智能切块的组合。</span>
+            <span class="flow-index">2</span>
+            <div class="flow-body">
+              <strong>查看系统推荐策略</strong>
+              <span>根据文档结构与内容长度，观察结构切块、递归分块、语义分块和智能切块的组合。</span>
+            </div>
           </li>
           <li>
-            <strong>确认并构建索引</strong>
-            <span>在推荐结果基础上补充或移除策略，再触发异步构建索引。</span>
+            <span class="flow-index">3</span>
+            <div class="flow-body">
+              <strong>确认并构建索引</strong>
+              <span>在推荐结果基础上补充或移除策略，再触发异步构建索引。</span>
+            </div>
           </li>
           <li>
-            <strong>做对话观测</strong>
-            <span>查看真实会话在当前文档问答与开放式提问两种模式下的执行轨迹。</span>
+            <span class="flow-index">4</span>
+            <div class="flow-body">
+              <strong>做对话观测</strong>
+              <span>查看真实会话在当前文档问答与开放式提问两种模式下的执行轨迹。</span>
+            </div>
           </li>
         </ol>
       </article>
 
       <article class="panel-card">
         <div class="panel-header">
-          <div>
-            <h4>最近接入文档</h4>
-          </div>
-          <button class="ghost-link" type="button" @click="loadDashboard">刷新</button>
+          <h4>最近接入文档</h4>
+          <button class="btn-ghost" type="button" @click="loadDashboard">刷新</button>
         </div>
 
         <div v-if="loading" class="empty-block">正在加载后台概览...</div>
@@ -144,96 +152,118 @@ onMounted(loadDashboard)
 .dashboard-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
-.hero-card,
-.metric-card,
-.panel-card {
-  background: #fff;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg, 12px);
-  box-shadow: var(--shadow-sm);
+/* ── 页眉：直接落在灰底上，不套卡片 ── */
+.page-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
 }
 
-.hero-card {
-  padding: 28px 30px;
+.page-intro-text {
+  max-width: 720px;
 }
 
-.hero-copy {
-  max-width: 860px;
-}
-
-.hero-card h3 {
+.page-intro h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
+  line-height: 1.5;
   color: var(--color-text-strong);
 }
 
-.section-description {
-  margin: 12px 0 16px;
+.page-intro p {
+  margin: 8px 0 0;
   color: var(--color-muted);
-  line-height: 1.8;
+  font-size: 13.5px;
+  line-height: 1.7;
 }
 
-.primary-link,
-.ghost-link {
-  border: none;
-  border-radius: var(--radius-sm, 6px);
+/* ── 按钮 ── */
+.btn-primary,
+.btn-ghost {
+  border-radius: var(--radius-sm);
   padding: 8px 16px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: opacity 0.2s ease;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.primary-link {
+.btn-primary {
+  border: 1px solid var(--color-primary);
   color: #fff;
   background: var(--color-primary);
 }
 
-.ghost-link {
-  color: var(--color-text);
-  background: #fff;
-  border: 1px solid var(--color-border);
+.btn-primary:hover {
+  background: var(--color-primary-strong);
+  border-color: var(--color-primary-strong);
 }
 
+.btn-ghost {
+  color: var(--color-muted-strong);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+}
+
+.btn-ghost:hover {
+  color: var(--color-text-strong);
+  border-color: var(--color-muted);
+}
+
+/* ── 指标卡 ── */
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  gap: 14px;
 }
 
 .metric-card {
-  padding: 22px;
+  padding: 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
 }
 
-.metric-card span {
-  font-size: 13px;
+.metric-label {
+  font-size: 12.5px;
   color: var(--color-muted);
+  font-weight: 500;
 }
 
-.metric-card strong {
+.metric-value {
   display: block;
-  margin-top: 12px;
-  font-size: 28px;
+  margin-top: 10px;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--color-text-strong);
 }
 
-.metric-card p {
-  margin: 12px 0 0;
+.metric-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
   color: var(--color-muted);
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
+/* ── 双栏面板 ── */
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1.05fr 0.95fr;
-  gap: 16px;
+  gap: 14px;
 }
 
 .panel-card {
-  padding: 24px 26px;
+  padding: 20px 22px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
 }
 
 .panel-header {
@@ -246,31 +276,57 @@ onMounted(loadDashboard)
 
 .panel-header h4 {
   margin: 0;
-  font-size: 16px;
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--color-text-strong);
 }
 
+/* ── 流程步骤 ── */
 .flow-list {
   margin: 0;
-  padding-left: 20px;
-  color: var(--color-muted-strong);
+  padding: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  line-height: 1.7;
+  gap: 14px;
 }
 
-.flow-list strong {
+.flow-list li {
+  display: flex;
+  gap: 12px;
+}
+
+.flow-index {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.flow-body strong {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+  font-size: 13.5px;
   color: var(--color-text-strong);
 }
 
+.flow-body span {
+  font-size: 12.5px;
+  color: var(--color-muted);
+  line-height: 1.7;
+}
+
+/* ── 最近文档 ── */
 .recent-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .recent-item {
@@ -278,18 +334,27 @@ onMounted(loadDashboard)
   justify-content: space-between;
   gap: 16px;
   align-items: start;
-  padding: 16px 18px;
-  border-radius: var(--radius-md, 8px);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
   background: var(--color-surface-soft);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.recent-item:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
 }
 
 .recent-item-main strong {
   display: block;
+  font-size: 13.5px;
   color: var(--color-text-strong);
 }
 
 .recent-item-main p {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
+  font-size: 12px;
   color: var(--color-muted);
   word-break: break-all;
 }
@@ -302,13 +367,14 @@ onMounted(loadDashboard)
 }
 
 .empty-block {
-  min-height: 220px;
+  min-height: 200px;
   display: grid;
   place-items: center;
   text-align: center;
+  font-size: 13px;
   color: var(--color-muted);
-  border-radius: var(--radius-md, 8px);
-  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--color-border-strong);
 }
 
 @media (max-width: 1080px) {
@@ -319,6 +385,10 @@ onMounted(loadDashboard)
 }
 
 @media (max-width: 768px) {
+  .page-intro {
+    flex-direction: column;
+  }
+
   .panel-header,
   .recent-item {
     flex-direction: column;

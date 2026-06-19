@@ -1352,10 +1352,10 @@ onMounted(loadAll)
 }
 
 .workbench-pill {
-  border: 1px solid rgba(37, 87, 214, 0.12);
+  border: 1px solid rgba(192, 80, 45, 0.12);
   border-radius: 999px;
   padding: 9px 14px;
-  background: rgba(37, 87, 214, 0.06);
+  background: rgba(192, 80, 45, 0.06);
   color: var(--color-primary-strong);
   font-weight: 600;
   cursor: pointer;
@@ -1445,7 +1445,7 @@ onMounted(loadAll)
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #2557d6, #0f766e);
+  background: linear-gradient(90deg, #c0502d, #0f766e);
 }
 
 .coverage-rate {
@@ -1487,7 +1487,7 @@ onMounted(loadAll)
   width: 18px;
   height: 18px;
   border-radius: 6px;
-  border: 1px solid rgba(37, 87, 214, 0.22);
+  border: 1px solid rgba(192, 80, 45, 0.22);
   background: #fff;
   display: inline-flex;
   align-items: center;
@@ -1594,7 +1594,7 @@ onMounted(loadAll)
   align-items: center;
   padding: 7px 12px;
   border-radius: 999px;
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
   color: var(--color-primary-strong);
   font-size: 12px;
   font-weight: 600;
@@ -1633,7 +1633,7 @@ onMounted(loadAll)
   padding: 16px;
   border-radius: 12px;
   border: 1px solid var(--color-border);
-  background: linear-gradient(135deg, rgba(37, 87, 214, 0.05), rgba(239, 123, 57, 0.05));
+  background: linear-gradient(135deg, rgba(192, 80, 45, 0.05), rgba(239, 123, 57, 0.05));
   display: grid;
   gap: 14px;
 }
@@ -1704,9 +1704,9 @@ onMounted(loadAll)
 
 .list-row.active,
 .document-row.active {
-  border-color: rgba(37, 87, 214, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(37, 87, 214, 0.08);
-  background: rgba(37, 87, 214, 0.04);
+  border-color: rgba(192, 80, 45, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(192, 80, 45, 0.08);
+  background: rgba(192, 80, 45, 0.04);
 }
 
 .topic-meta-row {
@@ -1805,7 +1805,7 @@ onMounted(loadAll)
   align-items: center;
   padding: 7px 10px;
   border-radius: 999px;
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
   color: var(--color-primary-strong);
   font-size: 12px;
 }
@@ -1953,11 +1953,11 @@ onMounted(loadAll)
 }
 
 .tab-btn:hover {
-  background: rgba(37, 87, 214, 0.04);
+  background: rgba(192, 80, 45, 0.04);
 }
 
 .tab-btn.active {
-  background: rgba(37, 87, 214, 0.08);
+  background: rgba(192, 80, 45, 0.08);
 }
 
 .tab-step {
@@ -2023,13 +2023,13 @@ onMounted(loadAll)
 }
 
 .data-card:hover {
-  border-color: rgba(37, 87, 214, 0.2);
-  box-shadow: 0 2px 8px rgba(37, 87, 214, 0.06);
+  border-color: rgba(192, 80, 45, 0.2);
+  box-shadow: 0 2px 8px rgba(192, 80, 45, 0.06);
 }
 
 .data-card.active {
-  border-color: rgba(37, 87, 214, 0.3);
-  background: rgba(37, 87, 214, 0.04);
+  border-color: rgba(192, 80, 45, 0.3);
+  background: rgba(192, 80, 45, 0.04);
 }
 
 .data-card-head {

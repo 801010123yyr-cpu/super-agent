@@ -102,9 +102,9 @@ function mapTaskClass(code) {
 }
 
 .status-processing {
-  background: rgba(37, 87, 214, 0.1);
+  background: rgba(192, 80, 45, 0.1);
   color: #1f4ebb;
-  border-color: rgba(37, 87, 214, 0.2);
+  border-color: rgba(192, 80, 45, 0.2);
 }
 
 .status-success {
