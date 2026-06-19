@@ -1,4 +1,5 @@
 <template>
+  <ConfirmDialog />
   <router-view v-if="isFullscreenLayout" />
 
   <div v-else class="app-shell">
@@ -21,6 +22,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import IcpFooter from './components/IcpFooter.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
 
 const route = useRoute()
 

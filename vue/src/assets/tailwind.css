@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * shadcn-vue 语义 token —— 取值与阶段一 main.css 的赤陶暖色体系同源：
+ *   primary  = 赤陶 #c0502d        background = 暖中性 #f6f5f2
+ *   card     = 纯白 #ffffff         border     = 暖灰 #e9e5df
+ * 颜色以 "H S% L%" 三元组存放，供 tailwind.config.js 里 hsl(var(--x)) 消费。
+ */
+@layer base {
+  :root {
+    --background: 40 20% 96%;
+    --foreground: 30 13% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 30 13% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 30 13% 15%;
+
+    --primary: 14 62% 46%;
+    --primary-foreground: 40 33% 98%;
+
+    --secondary: 40 17% 95%;
+    --secondary-foreground: 30 13% 18%;
+
+    --muted: 40 17% 95%;
+    --muted-foreground: 33 9% 50%;
+
+    --accent: 40 17% 95%;
+    --accent-foreground: 30 13% 18%;
+
+    --destructive: 12 58% 44%;
+    --destructive-foreground: 40 33% 98%;
+
+    --border: 36 16% 89%;
+    --border-strong: 38 17% 82%;
+    --input: 36 16% 89%;
+    --ring: 14 62% 46%;
+
+    --radius: 0.625rem;
+  }
+}
+
+/*
+ * preflight 已关闭，这里只补 shadcn 组件刚需的边框默认，且影响面可控：
+ * Tailwind 的 `border` 工具类只设宽度，依赖默认 border-width:0 + style:solid + 默认色。
+ *   - border-width:0 是关键：让元素默认不显示边框，加了 `border` 工具类才出现
+ *     （等价于 preflight 的边框三件套，缺它会导致每个元素都顶着浏览器默认 medium 边框）。
+ *   - 老页面画边框一律用 `border: 1px solid ...` 简写（已显式带 width+style），不受此默认影响。
+ */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-width: 0;
+    border-style: solid;
+    border-color: hsl(var(--border));
+  }
+}
+

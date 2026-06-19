@@ -1,41 +1,53 @@
 <template>
-  <section class="login-shell">
-    <div class="login-panel">
-      <div class="login-copy">
-        <h1>进入管理后台工作台</h1>
-        <p class="login-description">
+  <section class="relative grid min-h-screen place-items-center bg-background px-8 pb-16 pt-8">
+    <div class="grid w-[min(960px,100%)] overflow-hidden rounded-lg shadow-md md:grid-cols-[1.15fr_0.9fr]">
+      <div class="flex flex-col justify-center bg-card p-10">
+        <h1 class="m-0 text-2xl font-semibold text-foreground">进入管理后台工作台</h1>
+        <p class="mt-3.5 max-w-xl text-[15px] leading-relaxed text-muted-foreground">
           这里用于管理文档接入、知识路由与对话观测。账号和密码由当前部署环境配置，登录后才能进入后台。
         </p>
       </div>
 
-      <form class="login-form" @submit.prevent="submitLogin">
-        <div class="form-header">
-          <p>后台入口</p>
-          <h2>管理台登录</h2>
+      <form class="flex flex-col justify-center border-l border-border bg-card p-10 max-md:border-l-0 max-md:border-t" @submit.prevent="submitLogin">
+        <div>
+          <p class="m-0 text-[13px] font-semibold text-primary">后台入口</p>
+          <h2 class="mt-2 text-xl text-foreground">管理台登录</h2>
         </div>
 
-        <label class="field">
-          <span>账号</span>
-          <input v-model="form.username" type="text" placeholder="请输入后台账号" autocomplete="username" />
-        </label>
+        <div class="mt-5 flex flex-col gap-2">
+          <Label for="login-username" class="text-muted-foreground">账号</Label>
+          <Input
+            id="login-username"
+            v-model="form.username"
+            type="text"
+            placeholder="请输入后台账号"
+            autocomplete="username"
+          />
+        </div>
 
-        <label class="field">
-          <span>密码</span>
-          <input v-model="form.password" type="password" placeholder="请输入后台密码" autocomplete="current-password" />
-        </label>
+        <div class="mt-5 flex flex-col gap-2">
+          <Label for="login-password" class="text-muted-foreground">密码</Label>
+          <Input
+            id="login-password"
+            v-model="form.password"
+            type="password"
+            placeholder="请输入后台密码"
+            autocomplete="current-password"
+          />
+        </div>
 
-        <p v-if="errorMessage" class="error-message">{{ errorMessage }}</p>
+        <p v-if="errorMessage" class="mt-4 text-sm text-destructive">{{ errorMessage }}</p>
 
-        <div class="form-actions">
-          <button class="secondary-button" type="button" @click="goBackChat">返回聊天</button>
-          <button class="primary-button" type="submit" :disabled="submitting">
+        <div class="mt-6 flex gap-3">
+          <Button class="flex-1" variant="outline" type="button" @click="goBackChat">返回聊天</Button>
+          <Button class="flex-1" type="submit" :disabled="submitting">
             {{ submitting ? '登录中...' : '进入管理台' }}
-          </button>
+          </Button>
         </div>
       </form>
     </div>
 
-    <IcpFooter class="login-icp" />
+    <IcpFooter class="absolute inset-x-8 bottom-[22px] max-md:inset-x-[18px] max-md:bottom-[18px]" />
   </section>
 </template>
 
@@ -45,6 +57,9 @@ import { useRoute, useRouter } from 'vue-router'
 import IcpFooter from '../components/IcpFooter.vue'
 import { adminAuthApi, APIError } from '../api/api'
 import { saveAdminAuth } from '../utils/adminAuth'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 const router = useRouter()
 const route = useRoute()
@@ -90,180 +105,3 @@ function goBackChat() {
   router.push('/chat')
 }
 </script>
-
-<style scoped>
-.login-shell {
-  position: relative;
-  min-height: 100vh;
-  padding: 32px 32px 64px;
-  display: grid;
-  place-items: center;
-  background: var(--color-bg);
-}
-
-.login-panel {
-  width: min(960px, 100%);
-  display: grid;
-  grid-template-columns: 1.15fr 0.9fr;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-}
-
-.login-copy {
-  background: #fff;
-  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
-  padding: 40px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.login-copy h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
-  color: var(--color-text-strong);
-}
-
-.login-description {
-  max-width: 580px;
-  margin: 14px 0 0;
-  font-size: 15px;
-  line-height: 1.7;
-  color: var(--color-muted);
-}
-
-.login-form {
-  background: #fff;
-  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
-  border-left: 1px solid var(--color-border);
-  padding: 40px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.form-header p {
-  margin: 0;
-  color: var(--color-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.form-header h2 {
-  margin: 8px 0 0;
-  font-size: 20px;
-  color: var(--color-text-strong);
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 20px;
-}
-
-.field span {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-muted);
-}
-
-.field input {
-  width: 100%;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  background: #ffffff;
-  color: var(--color-text);
-  outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.field input:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-soft);
-}
-
-.error-message {
-  margin: 16px 0 0;
-  color: var(--color-danger);
-  font-size: 14px;
-}
-
-.form-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 24px;
-}
-
-.primary-button,
-.secondary-button {
-  flex: 1;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-}
-
-.primary-button {
-  color: #ffffff;
-  background: var(--color-primary);
-}
-
-.primary-button:hover {
-  opacity: 0.9;
-}
-
-.secondary-button {
-  color: var(--color-text);
-  background: #fff;
-  border-color: var(--color-border);
-}
-
-.secondary-button:hover {
-  background: var(--color-surface-soft);
-}
-
-.login-icp {
-  position: absolute;
-  left: 32px;
-  right: 32px;
-  bottom: 22px;
-}
-
-@media (max-width: 960px) {
-  .login-shell {
-    padding: 18px 18px 58px;
-  }
-
-  .login-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .login-copy {
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  }
-
-  .login-form {
-    border-left: none;
-    border-top: 1px solid var(--color-border);
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  }
-
-  .login-copy,
-  .login-form {
-    padding: 28px;
-  }
-
-  .login-icp {
-    left: 18px;
-    right: 18px;
-    bottom: 18px;
-  }
-}
-</style>
