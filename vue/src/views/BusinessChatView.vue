@@ -1,5 +1,5 @@
 <template>
-  <section class="grid min-h-[calc(100vh-220px)] grid-cols-[320px_minmax(0,1fr)] gap-[18px] max-[1120px]:grid-cols-1">
+  <section class="grid min-h-screen grid-cols-[320px_minmax(0,1fr)] gap-[18px] p-4 md:p-6 max-[1120px]:grid-cols-1">
     <aside
       class="flex flex-col gap-4 rounded-lg border border-border bg-card p-[22px] shadow-sm max-[1120px]:fixed max-[1120px]:bottom-[18px] max-[1120px]:left-[18px] max-[1120px]:top-[18px] max-[1120px]:z-30 max-[1120px]:w-[min(360px,calc(100vw-36px))] max-[1120px]:transition-[transform] max-[1120px]:duration-[240ms] max-[768px]:p-4"
       :class="sidebarOpen ? 'max-[1120px]:translate-x-0' : 'max-[1120px]:-translate-x-[110%]'"
@@ -11,7 +11,7 @@
         </button>
       </div>
 
-      <button class="inline-flex w-full items-center justify-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="isStreaming" @click="startNewConversation">
+      <button class="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50" type="button" :disabled="isStreaming" @click="startNewConversation">
         <PlusIcon class="h-[18px] w-[18px]" />
         新对话
       </button>
@@ -55,7 +55,7 @@
           <h2 class="m-0 text-lg font-semibold text-foreground">{{ activeSessionTitle }}</h2>
         </div>
         <div class="flex items-center gap-3 max-[768px]:w-full">
-          <a class="inline-flex items-center gap-1.5 rounded-full bg-foreground px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 max-[768px]:flex-1 max-[768px]:justify-center" :href="adminConsoleHref" target="_blank" rel="noopener noreferrer">
+          <a class="inline-flex items-center gap-1.5 rounded-lg bg-foreground px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 max-[768px]:flex-1 max-[768px]:justify-center" :href="adminConsoleHref" target="_blank" rel="noopener noreferrer">
             <BuildingOffice2Icon class="h-[18px] w-[18px]" />
             管理后台
           </a>
@@ -134,13 +134,13 @@
 
         <div class="mt-3 flex items-center justify-end gap-2.5 max-[768px]:flex-col max-[768px]:items-stretch">
           <button v-if="isStreaming"
-            class="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50"
             type="button" :disabled="isStopping" @click="stopStreaming">
             <StopIcon class="h-[18px] w-[18px]" />
             {{ isStopping ? '停止中...' : '停止生成' }}
           </button>
           <button
-            class="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 max-[768px]:justify-center"
+            class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 max-[768px]:justify-center"
             type="button" :disabled="isStreaming || !canSend" @click="sendMessage()">
             <PaperAirplaneIcon class="h-[18px] w-[18px]" />
             发送

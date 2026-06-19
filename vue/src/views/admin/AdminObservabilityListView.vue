@@ -4,7 +4,6 @@
     <header class="border-b border-border pb-5">
       <div class="flex items-start justify-between gap-4 max-[640px]:flex-col">
         <div>
-          <span class="font-mono text-xs uppercase tracking-widest text-muted-foreground">Conversation Observatory</span>
           <h2 class="my-2.5 text-[22px] font-semibold leading-snug text-foreground">先选会话，再进入整页观测详情</h2>
           <p class="m-0 max-w-[680px] text-sm leading-relaxed text-[var(--color-muted-strong)]">
             列表页只负责定位问题会话，详情页再按单轮执行阶段展开。这样不会把大量轨迹信息压缩在同一块区域里，
@@ -32,7 +31,7 @@
     <!-- 筛选栏 -->
     <section class="flex flex-wrap items-end gap-3 border-b border-border pb-4 max-[980px]:flex-col max-[980px]:items-stretch">
       <div class="flex min-w-[200px] flex-1 flex-col gap-1.5">
-        <span class="text-xs uppercase tracking-wider text-muted-foreground">搜索会话</span>
+        <span class="text-xs text-muted-foreground">搜索会话</span>
         <Input
           v-model.trim="keyword"
           type="text"
@@ -43,7 +42,7 @@
       </div>
 
       <div class="flex flex-col gap-1.5">
-        <span class="text-xs uppercase tracking-wider text-muted-foreground">提问模式</span>
+        <span class="text-xs text-muted-foreground">提问模式</span>
         <select
           v-model="modeFilter"
           class="h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
@@ -56,7 +55,7 @@
       </div>
 
       <div class="flex flex-col gap-1.5">
-        <span class="text-xs uppercase tracking-wider text-muted-foreground">最近状态</span>
+        <span class="text-xs text-muted-foreground">最近状态</span>
         <select
           v-model="statusFilter"
           class="h-10 rounded-md border border-input bg-background px-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"

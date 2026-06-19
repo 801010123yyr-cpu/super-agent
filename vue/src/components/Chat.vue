@@ -1,18 +1,18 @@
 <template>
   <article class="mb-[18px] flex gap-3.5" :class="isUser ? 'flex-row-reverse' : ''">
     <div
-      class="grid h-[42px] w-[42px] flex-none place-items-center rounded-[14px] border border-foreground/[0.08] text-[var(--color-primary-strong)]"
-      :class="isUser ? 'bg-primary/10' : 'bg-gradient-to-br from-primary/[0.16] to-[#ef7b39]/[0.12]'"
+      class="grid h-[42px] w-[42px] flex-none place-items-center rounded-xl border border-foreground/[0.08] text-[var(--color-primary-strong)]"
+      :class="isUser ? 'bg-primary/10' : 'bg-primary/10'"
     >
       <UserIcon v-if="isUser" class="h-[18px] w-[18px]" />
       <SparklesIcon v-else class="h-[18px] w-[18px]" />
     </div>
 
     <div
-      class="min-w-0 flex-1 rounded-[18px] border border-foreground/[0.08] p-[18px]"
+      class="min-w-0 flex-1 rounded-2xl border border-foreground/[0.08] p-[18px]"
       :class="isUser
-        ? 'max-w-[min(760px,100%)] bg-gradient-to-br from-primary/[0.08] to-primary/[0.03]'
-        : 'bg-white/[0.94]'"
+        ? 'max-w-[min(760px,100%)] bg-primary/[0.08]'
+        : 'bg-white'"
     >
       <div class="mb-3 flex items-center justify-between gap-3">
         <div>
@@ -38,7 +38,7 @@
         <section v-if="showRouteExplainCard" class="mt-4 rounded-[16px] border p-4" :class="routeCardClass(routeExplain.statusTone)">
           <div class="flex items-start justify-between gap-3 max-[768px]:flex-col">
             <div>
-              <p class="m-0 text-xs uppercase tracking-[0.08em] text-muted-foreground">{{ routeExplain.modeLabel }}</p>
+              <p class="m-0 text-xs text-muted-foreground">{{ routeExplain.modeLabel }}</p>
               <h4 class="mt-1.5 text-[15px] text-foreground">{{ routeExplain.confidenceBand.label }} · 置信度 {{ routeExplain.confidenceText }}</h4>
             </div>
             <span class="inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-bold" :class="routeStatusBadgeClass(routeExplain.statusTone)">
@@ -57,7 +57,6 @@
             <article v-for="(item, index) in routeExplain.topDocuments" :key="`${message.id}-route-doc-${item.documentId || index}`"
               class="grid gap-1.5 rounded-[14px] border border-foreground/[0.08] bg-white/[0.74] p-3"
               :class="index === 0 ? '!border-primary/[0.18]' : ''">
-              <p class="m-0 text-xs uppercase tracking-[0.08em] text-muted-foreground">候选 {{ index + 1 }}</p>
               <strong class="text-foreground">{{ item.documentName || item.documentId }}</strong>
               <span class="text-xs text-muted-foreground">匹配分 {{ item.scoreText }}</span>
               <small class="text-xs text-muted-foreground">{{ item.reason || '基于文档画像与元数据综合召回' }}</small>
@@ -68,14 +67,12 @@
             <summary class="cursor-pointer font-semibold text-[var(--color-primary-strong)]">查看范围与主题候选</summary>
             <div class="mt-3 grid grid-cols-2 gap-3">
               <div v-if="routeExplain.scopePreview?.length" class="grid gap-2">
-                <p class="m-0 text-xs uppercase tracking-[0.08em] text-muted-foreground">范围候选</p>
                 <div class="flex flex-wrap gap-2">
                   <span v-for="(item, index) in routeExplain.scopePreview" :key="`${message.id}-route-scope-${item.scopeCode || index}`"
                     class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.scopeName || item.scopeCode }} · {{ item.scoreText }}</span>
                 </div>
               </div>
               <div v-if="routeExplain.topicPreview?.length" class="grid gap-2">
-                <p class="m-0 text-xs uppercase tracking-[0.08em] text-muted-foreground">主题候选</p>
                 <div class="flex flex-wrap gap-2">
                   <span v-for="(item, index) in routeExplain.topicPreview" :key="`${message.id}-route-topic-${item.topicCode || index}`"
                     class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.topicName || item.topicCode }} · {{ item.scoreText }}</span>
@@ -89,7 +86,7 @@
       <div v-if="isStreaming" class="stream-cursor mt-3"></div>
 
       <section v-if="showRecommendationBar" class="mt-4 border-t border-foreground/[0.08] pt-3.5">
-        <p class="mb-2.5 text-[12px] uppercase tracking-[0.12em] text-muted-foreground">推荐追问</p>
+        <p class="mb-2.5 text-[12px] font-medium text-muted-foreground">推荐追问</p>
         <div class="flex flex-wrap gap-2.5">
           <button v-for="(item, index) in message.recommendations" :key="`${message.id}-recommend-${index}`"
             class="rounded-full border border-primary/[0.12] bg-primary/[0.06] px-3.5 py-2.5 text-[13px] font-semibold text-[var(--color-primary-strong)] transition-all hover:-translate-y-px hover:border-primary/[0.18] hover:bg-primary/10"

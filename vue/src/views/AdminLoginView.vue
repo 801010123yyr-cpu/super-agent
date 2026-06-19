@@ -10,8 +10,7 @@
 
       <form class="flex flex-col justify-center border-l border-border bg-card p-10 max-md:border-l-0 max-md:border-t" @submit.prevent="submitLogin">
         <div>
-          <p class="m-0 text-[13px] font-semibold text-primary">后台入口</p>
-          <h2 class="mt-2 text-xl text-foreground">管理台登录</h2>
+          <h2 class="m-0 text-xl text-foreground">管理台登录</h2>
         </div>
 
         <div class="mt-5 flex flex-col gap-2">

@@ -203,18 +203,7 @@ function isNavItemActive(targetPath) {
 .nav-item.active {
   color: var(--color-primary);
   background: var(--color-primary-soft);
-  font-weight: 500;
-}
-
-.nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: -12px;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: var(--color-primary);
+  font-weight: 600;
 }
 
 .nav-icon {

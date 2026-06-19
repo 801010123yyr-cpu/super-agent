@@ -10,12 +10,12 @@
       <Button size="sm" class="whitespace-nowrap" type="button" @click="goDocuments">前往文档接入</Button>
     </header>
 
-    <div class="grid grid-cols-4 gap-3.5 max-[1080px]:grid-cols-2 max-md:grid-cols-1">
-      <Card v-for="metric in metricCards" :key="metric.label" class="p-[18px]">
-        <span class="text-[12.5px] font-medium text-muted-foreground">{{ metric.label }}</span>
-        <strong class="mt-2.5 block text-[26px] font-semibold tracking-tight text-foreground">{{ formatCount(metric.value) }}</strong>
-        <p class="mt-2 text-xs leading-relaxed text-muted-foreground">{{ metric.hint }}</p>
-      </Card>
+    <div class="flex flex-wrap rounded-lg border border-border bg-card divide-x divide-border">
+      <div v-for="metric in metricCards" :key="metric.label" class="flex-1 min-w-[140px] px-5 py-4">
+        <span class="text-[12px] text-muted-foreground">{{ metric.label }}</span>
+        <strong class="mt-1.5 block text-[22px] font-semibold tracking-tight text-foreground">{{ formatCount(metric.value) }}</strong>
+        <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground">{{ metric.hint }}</p>
+      </div>
     </div>
 
     <div class="grid grid-cols-[1.05fr_0.95fr] gap-3.5 max-[1080px]:grid-cols-2 max-md:grid-cols-1">

@@ -8,11 +8,11 @@
   font-weight: 400;
   --font-sans: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-display: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --color-bg: #f6f5f2;
+  --color-bg: #fafafa;
   --color-surface: #ffffff;
-  --color-surface-soft: #f4f2ee;
-  --color-border: #e9e5df;
-  --color-border-strong: #d8d2c8;
+  --color-surface-soft: #f4f4f4;
+  --color-border: #e5e5e5;
+  --color-border-strong: #d1d1d1;
   --color-text: #2b2620;
   --color-text-strong: #1b1712;
   --color-muted: #8a8175;

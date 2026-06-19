@@ -16,7 +16,6 @@
 
     <template v-else>
       <header class="border-b border-border pb-5">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Round Detail</span>
         <h2 class="my-2 text-xl font-semibold leading-snug text-foreground">{{ activeExchange.question || '未记录问题' }}</h2>
         <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">{{ currentExchangeNarrative }}</p>
         <div class="mt-3.5 flex flex-wrap gap-1.5">
@@ -35,7 +34,6 @@
       </header>
 
       <section>
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Trace Timeline</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">执行阶段时间线</h3>
         <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">先浏览整个执行顺序，再点击某个阶段进入子页面查看这个阶段的详细过程。</p>
         <div v-if="!stageTraces.length" class="mt-3 rounded-md border border-dashed border-border px-6 py-6 text-center text-sm text-muted-foreground">当前轮次还没有可展示的阶段轨迹。</div>
@@ -66,14 +64,13 @@
       </section>
 
       <section>
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Round Summary</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">这轮回答的关键结果</h3>
         <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">这里是当前轮次的摘要信息，帮助你快速判断这轮是否正常，再决定要点开哪个阶段。</p>
         <div class="mt-4 flex flex-col gap-4">
           <article v-for="stage in exchangeStages" :key="stage.key" class="rounded-lg border border-border bg-card p-4">
             <div class="flex items-start justify-between gap-3">
               <div>
-                <span class="text-[11px] uppercase tracking-widest text-muted-foreground">{{ stage.eyebrow || stage.key }}</span>
+                <span class="text-[11px] text-muted-foreground">{{ stage.eyebrow || stage.key }}</span>
                 <h4 class="m-0 mt-1 text-sm font-semibold text-foreground">{{ stage.title }}</h4>
                 <p class="mt-0.5 text-[13px] text-muted-foreground">{{ stage.subtitle }}</p>
               </div>
@@ -101,7 +98,6 @@
       </section>
 
       <section v-if="channelExecutions.length > 0">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Channel Performance</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">通道执行对比</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">对比各检索通道的性能和效果。</p>
         <div class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
@@ -123,7 +119,6 @@
       </section>
 
       <section v-if="groupedRetrievalResults.length > 0">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Retrieval Results</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">检索结果详情</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">查看每个通道检索到的文档块、分数变化和最终选择情况。</p>
         <div v-for="subQ in groupedRetrievalResults" :key="subQ.index" class="mt-4">
@@ -161,7 +156,6 @@
       </section>
 
       <section v-if="evidenceBudgetSnapshot">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Evidence Budget</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">证据预算分析</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">查看证据选择过程和预算使用情况。</p>
         <div class="mt-4 flex flex-wrap gap-4">
@@ -185,7 +179,6 @@
       </section>
 
       <section v-if="hasPromptData">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Prompt Preview</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">Prompt 预览</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">查看最终喂给模型的完整 Prompt。</p>
         <div class="mt-4 flex gap-2">
@@ -198,7 +191,6 @@
       </section>
 
       <section v-if="stageTraces.length > 0 && stageBenchmarks.length > 0">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Performance Benchmark</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">阶段性能基准对比</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">对比当前执行与历史基准（P50/P90/P99），识别异常慢的阶段。</p>
         <div class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
@@ -229,7 +221,6 @@
         <aside class="absolute bottom-0 right-0 top-0 flex w-[540px] max-w-[90vw] flex-col bg-card shadow-[-4px_0_24px_rgba(15,23,42,0.14)]" @click.stop>
           <div class="flex items-start justify-between gap-3 border-b border-border px-6 py-5">
             <div>
-              <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Trace Detail</span>
               <h3 class="mt-1 text-base font-semibold text-foreground">{{ overlayInspector.title }}</h3>
               <p class="mt-0.5 text-[13px] text-[var(--color-muted-strong)]">{{ overlayInspector.summary || '这个阶段已经执行完成，下面是它记录下来的结构化细节。' }}</p>
             </div>

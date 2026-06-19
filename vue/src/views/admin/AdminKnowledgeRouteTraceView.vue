@@ -3,7 +3,6 @@
     <!-- 页头 -->
     <header class="flex flex-none items-center gap-4 rounded-lg border border-border bg-card px-5 py-3.5 shadow-sm">
       <div class="flex-none">
-        <span class="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Route Trace</span>
         <h3 class="m-0 text-base font-semibold text-foreground">知识路由追踪</h3>
       </div>
       <div class="flex flex-1 flex-wrap justify-center gap-5 max-[860px]:hidden">

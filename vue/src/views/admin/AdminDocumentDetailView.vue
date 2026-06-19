@@ -126,11 +126,11 @@
       <div class="p-5">
         <section v-show="activeWorkbenchSection === 'overview'" ref="overviewSectionRef" data-workbench-section="overview">
           <div class="mb-4 flex items-start justify-between gap-3">
-            <div><span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Overview</span><h2 class="mt-1 text-lg font-semibold text-foreground">文档概览</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先确认文档状态、关键指标和当前工作焦点，再进入下方流程。</p></div>
+            <div><h2 class="mt-1 text-lg font-semibold text-foreground">文档概览</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先确认文档状态、关键指标和当前工作焦点，再进入下方流程。</p></div>
             <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ workflowCurrentPhase.shortLabel }}</span>
           </div>
           <div class="mb-4 flex items-start justify-between gap-4 rounded-xl border border-border bg-secondary p-4 max-md:flex-col">
-            <div><p class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Current Document</p><h3 class="mt-1 text-base font-semibold text-foreground">{{ documentDetail.documentName }}</h3><p v-if="showOriginalFileName" class="mt-0.5 text-xs text-muted-foreground">{{ documentDetail.originalFileName }}</p></div>
+            <div><h3 class="mt-1 text-base font-semibold text-foreground">{{ documentDetail.documentName }}</h3><p v-if="showOriginalFileName" class="mt-0.5 text-xs text-muted-foreground">{{ documentDetail.originalFileName }}</p></div>
             <div class="flex flex-col items-end gap-2">
               <div class="flex flex-wrap gap-1.5"><AdminStatusBadge :label="documentDetail.parseStatusName" :code="documentDetail.parseStatus" type="parse" /><AdminStatusBadge :label="documentDetail.strategyStatusName" :code="documentDetail.strategyStatus" type="strategy" /><AdminStatusBadge :label="documentDetail.indexStatusName" :code="documentDetail.indexStatus" type="index" /></div>
               <span class="text-xs text-muted-foreground">{{ workflowCurrentPhase.title }}</span>
@@ -138,18 +138,17 @@
           </div>
           <div class="mb-4 grid grid-cols-2 gap-3 max-sm:grid-cols-1">
             <article class="grid gap-2 rounded-xl border p-4" :class="guidanceCardClass(workflowCurrentPhase.tone)">
-              <span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">当前阶段</span>
+
               <strong class="text-sm text-foreground">{{ workflowCurrentPhase.title }}</strong>
               <p class="text-xs text-muted-foreground">{{ workflowCurrentPhase.description }}</p>
             </article>
             <article class="grid gap-2 rounded-xl border border-border bg-secondary p-4">
-              <span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">下一步建议</span>
+
               <strong class="text-sm text-foreground">{{ workflowNextAction.title }}</strong>
               <p class="text-xs text-muted-foreground">{{ workflowNextAction.description }}</p>
             </article>
           </div>
           <div class="rounded-xl border border-border bg-secondary p-4">
-            <p class="mb-2 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Quick Routes</p>
             <div class="flex flex-wrap gap-2">
               <button class="rounded-full border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="scrollToWorkbenchSection('strategy')">查看策略配置</button>
               <button class="rounded-full border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="scrollToWorkbenchSection('execution')">前往确认与构建</button>
@@ -160,7 +159,7 @@
 
         <section v-show="activeWorkbenchSection === 'strategy'" ref="strategySectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="strategy">
           <div class="mb-4 flex items-start justify-between gap-3">
-            <div><span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Step 1</span><h2 class="mt-1 text-lg font-semibold text-foreground">配置策略</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先阅读系统推荐，再分别调整父块和子块流水线，形成最终执行方案。</p></div>
+            <div><h2 class="mt-1 text-lg font-semibold text-foreground">配置策略</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先阅读系统推荐，再分别调整父块和子块流水线，形成最终执行方案。</p></div>
             <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ strategySectionStatusText }}</span>
           </div>
           <div v-if="documentDetail.parseErrorMsg" class="mb-3 rounded-md border border-destructive/10 bg-destructive/[0.06] px-3 py-2.5 text-sm text-destructive">{{ documentDetail.parseErrorMsg }}</div>
@@ -174,12 +173,11 @@
           <div v-else-if="!strategyPlan?.planReady" class="rounded-md border border-dashed border-border py-6 text-center text-sm text-muted-foreground">当前文档尚未生成策略方案，解析完成后可点击刷新查看。</div>
           <template v-else>
             <div class="mb-4 rounded-lg border border-border bg-secondary p-4">
-              <p class="mb-1 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Recommendation Summary</p>
               <p class="text-[13px] text-[var(--color-muted-strong)]">{{ strategyPlan.plan?.recommendReason || '系统已生成推荐策略，可以根据业务需要再做补充。' }}</p>
             </div>
             <div class="mb-5 grid grid-cols-2 gap-3 max-md:grid-cols-1">
               <section v-for="pipeline in strategyPipelineLibrary" :key="`recommended-${pipeline.key}`" class="rounded-lg border p-4" :class="pipeline.key === 'parent' ? 'border-primary/20 bg-primary/[0.03]' : 'border-[#0f766e]/20 bg-[#0f766e]/[0.03]'">
-                <p class="text-[11px] font-medium uppercase tracking-widest" :class="pipeline.key === 'parent' ? 'text-primary' : 'text-[#0f766e]'">{{ pipeline.key === 'parent' ? 'Answer Context Pipeline' : 'Retrieval Recall Pipeline' }}</p>
+                <p class="text-[11px] font-medium" :class="pipeline.key === 'parent' ? 'text-primary' : 'text-[#0f766e]'">{{ pipeline.key === 'parent' ? '父块流水线（回答上下文）' : '子块流水线（检索召回）' }}</p>
                 <h5 class="mt-1 mb-3 text-sm font-semibold text-foreground">{{ pipeline.label }}</h5>
                 <div v-if="resolvePlanPipeline(strategyPlan.plan, pipeline.key)?.steps?.length" class="flex flex-col gap-2">
                   <template v-for="(step, index) in resolvePlanPipeline(strategyPlan.plan, pipeline.key).steps" :key="`${strategyPlan.plan.planId}-${pipeline.key}-${step.stepNo}`">
@@ -191,12 +189,11 @@
               </section>
             </div>
             <div class="mb-5">
-              <p class="mb-0.5 text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Adjustment Workspace</p>
               <h5 class="mb-0.5 text-sm font-semibold text-foreground">双流水线调整</h5>
               <p class="mb-4 text-xs text-muted-foreground">分别配置父块回答流水线和子块召回流水线，并通过上移 / 下移调整顺序。</p>
               <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
                 <section v-for="pipeline in strategyPipelineLibrary" :key="`editor-${pipeline.key}`" class="rounded-lg border p-4" :class="pipeline.key === 'parent' ? 'border-primary/20' : 'border-[#0f766e]/20'">
-                  <p class="text-[11px] font-medium uppercase tracking-widest" :class="pipeline.key === 'parent' ? 'text-primary' : 'text-[#0f766e]'">{{ pipeline.key === 'parent' ? 'Answer Context Pipeline' : 'Retrieval Recall Pipeline' }}</p>
+                  <p class="text-[11px] font-medium" :class="pipeline.key === 'parent' ? 'text-primary' : 'text-[#0f766e]'">{{ pipeline.key === 'parent' ? '父块流水线（回答上下文）' : '子块流水线（检索召回）' }}</p>
                   <h5 class="mt-1 mb-3 text-sm font-semibold text-foreground">{{ pipeline.label }}</h5>
                   <div class="mb-3 rounded-md border p-3" :class="pipeline.key === 'parent' ? 'border-primary/20 bg-primary/[0.03]' : 'border-[#0f766e]/20 bg-[#0f766e]/[0.03]'">
                     <p class="mb-2 text-xs font-semibold" :class="pipeline.key === 'parent' ? 'text-primary' : 'text-[#0f766e]'">当前配置</p>
@@ -233,7 +230,7 @@
 
         <section v-show="activeWorkbenchSection === 'execution'" ref="executionSectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="execution">
           <div class="mb-4 flex items-start justify-between gap-3">
-            <div><span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Step 2</span><h2 class="mt-1 text-lg font-semibold text-foreground">确认并构建</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先确认策略方案，再执行构建索引，并在同一处查看执行轨迹。</p></div>
+            <div><h2 class="mt-1 text-lg font-semibold text-foreground">确认并构建</h2><p class="mt-0.5 text-[13px] text-muted-foreground">先确认策略方案，再执行构建索引，并在同一处查看执行轨迹。</p></div>
             <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ executionSectionStatusText }}</span>
           </div>
           <div class="mb-4 grid grid-cols-3 gap-3 max-sm:grid-cols-1">
@@ -289,7 +286,7 @@
 
         <section v-show="activeWorkbenchSection === 'chunk'" ref="chunkSectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="chunk">
           <div class="mb-4 flex items-start justify-between gap-3 max-md:flex-col">
-            <div><span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Step 3</span><h2 class="mt-1 text-lg font-semibold text-foreground">验证 Chunk 结果</h2><p class="mt-0.5 text-[13px] text-muted-foreground">在这里检查父子分块结构、分页浏览内容，并抽样验证切块是否符合预期。</p></div>
+            <div><h2 class="mt-1 text-lg font-semibold text-foreground">验证 Chunk 结果</h2><p class="mt-0.5 text-[13px] text-muted-foreground">在这里检查父子分块结构、分页浏览内容，并抽样验证切块是否符合预期。</p></div>
             <div class="flex flex-wrap items-center gap-2">
               <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ chunkSectionStatusText }}</span>
               <span class="text-xs text-muted-foreground">{{ chunkQuery?.taskId ? `任务 ${chunkQuery.taskId} · ${chunkQuery.total||0} 条` : '当前还没有可展示的 chunk' }}</span>
@@ -369,7 +366,7 @@
 
         <section v-show="activeWorkbenchSection === 'tasks'" ref="taskSectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="tasks">
           <div class="mb-4 flex items-start justify-between gap-3">
-            <div><span class="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">Step 4</span><h2 class="mt-1 text-lg font-semibold text-foreground">查看任务记录</h2><p class="mt-0.5 text-[13px] text-muted-foreground">通过最近任务摘要和完整时间线快速复盘当前文档的执行过程与异常信息。</p></div>
+            <div><h2 class="mt-1 text-lg font-semibold text-foreground">查看任务记录</h2><p class="mt-0.5 text-[13px] text-muted-foreground">通过最近任务摘要和完整时间线快速复盘当前文档的执行过程与异常信息。</p></div>
             <div class="flex items-center gap-2">
               <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ taskSectionStatusText }}</span>
               <button class="rounded-full border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="!documentDetail.latestTaskId" @click="openLogDrawer">查看完整任务时间线</button>

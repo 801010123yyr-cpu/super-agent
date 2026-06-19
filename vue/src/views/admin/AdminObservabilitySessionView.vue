@@ -33,7 +33,6 @@
     <template v-else>
       <!-- 页头 -->
       <header class="border-b border-border pb-5">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Conversation Chain</span>
         <h2 class="my-1.5 text-xl font-semibold leading-snug text-foreground">{{ activeSession.selectedDocumentName || sessionTitle(activeSession) }}</h2>
         <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">
           这个页面只负责看整条会话里的每次问答，不展示单轮内部细节。先从下方轮次列表里找到你关心的那一轮，再进入专门的轮次详情页。
@@ -60,7 +59,6 @@
 
       <!-- 会话上下文 -->
       <section class="border-b border-border pb-5">
-        <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Session Context</span>
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">会话级背景</h3>
         <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">只解释整条会话的上下文、最近状态和记忆压缩，不进入某一轮内部链路。</p>
 
@@ -72,7 +70,6 @@
         </dl>
 
         <div v-if="activeSession.memorySummary?.compressionApplied" class="mt-4 border-t border-border pt-4">
-          <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Memory</span>
           <h4 class="mb-2.5 mt-1 text-[15px] font-semibold text-foreground">长期摘要快照</h4>
           <div class="mb-2.5 flex flex-wrap gap-1.5">
             <span v-for="chip in memoryChips" :key="chip" class="inline-flex rounded bg-[#17304f]/[0.06] px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--color-muted-strong)]">{{ chip }}</span>
@@ -87,7 +84,6 @@
       <!-- 轮次时间线 -->
       <section class="flex flex-col gap-3">
         <div>
-          <span class="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Round List</span>
           <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">本会话的每次一来一回</h3>
           <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">这里是整条会话的轮次总览，点击某一轮后会跳转到独立的轮次详情页。</p>
         </div>

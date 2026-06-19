@@ -2,7 +2,6 @@
   <section class="flex flex-col gap-4">
     <header class="flex items-start justify-between gap-5 rounded-lg border border-border bg-card px-[26px] py-6 shadow-sm max-[900px]:flex-col">
       <div>
-        <span class="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Knowledge Routing</span>
         <h3 class="m-0 mt-0.5 text-base font-semibold text-foreground">知识路由配置</h3>
         <p class="mt-1.5 text-sm text-muted-foreground">按 范围 → 主题 → 画像 → 关联 的顺序逐步配置，构建自动知识问答的候选预选体系。</p>
       </div>
@@ -25,7 +24,6 @@
     <div class="rounded-lg border border-border bg-card p-[18px] shadow-sm">
       <div class="flex cursor-pointer select-none items-start justify-between gap-4" @click="coveragePanelCollapsed = !coveragePanelCollapsed">
         <div>
-          <span class="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Scope Coverage</span>
           <h4 class="m-0 mt-1.5 text-sm font-semibold text-foreground">范围覆盖率统计</h4>
         </div>
         <div class="flex items-center gap-2.5">
@@ -133,7 +131,6 @@
         <div v-if="profileAnomalyRows.length" class="mt-4 rounded-lg border border-border bg-card p-[18px]">
           <div class="flex cursor-pointer select-none items-start justify-between gap-4" @click="anomalyCollapsed = !anomalyCollapsed">
             <div>
-              <span class="text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground">Profile Anomalies</span>
               <h4 class="m-0 mt-1.5 text-sm font-semibold text-foreground">画像异常清单 ({{ profileAnomalyRows.length }})</h4>
             </div>
             <div class="flex items-center gap-2.5">
