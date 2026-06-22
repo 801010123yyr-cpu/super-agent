@@ -23,6 +23,14 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String STRUCTURE_NODE_TYPE = "structureNodeType";
     public static final String CANONICAL_PATH = "canonicalPath";
     public static final String ITEM_INDEX = "itemIndex";
+    public static final String CONTENT_WITH_WEIGHT = "contentWithWeight";
+    public static final String CHUNK_TYPE = "chunkType";
+    public static final String KEYWORDS = "keywords";
+    public static final String QUESTIONS = "questions";
+    public static final String PAGE_NO = "pageNo";
+    public static final String PAGE_RANGE = "pageRange";
+    public static final String BBOX_JSON = "bboxJson";
+    public static final String SOURCE_BLOCK_IDS = "sourceBlockIds";
     public static final String KNOWLEDGE_SCOPE_CODE = "knowledgeScopeCode";
     public static final String KNOWLEDGE_SCOPE_NAME = "knowledgeScopeName";
     public static final String BUSINESS_CATEGORY = "businessCategory";
@@ -32,6 +40,10 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String TOOL_NAME = "toolName";
     public static final String ORIGINAL_SNIPPET = "originalSnippet";
     public static final String RRF_SCORE = "rrfScore";
+    public static final String HYBRID_SCORE = "hybridScore";
+    public static final String METADATA_BOOST = "metadataBoost";
+    public static final String VECTOR_SCORE = "vectorScore";
+    public static final String KEYWORD_SCORE = "keywordScore";
 
     private DocumentKnowledgeMetadataKeys() {
     }

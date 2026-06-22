@@ -16,6 +16,8 @@ public interface DocumentStorageService {
 
     String uploadParsedText(Long documentId, String parsedText);
 
+    String uploadParseArtifact(Long documentId, Long taskId, String fileName, byte[] bytes, String contentType);
+
     byte[] downloadObject(String objectName);
 
     String downloadText(String objectName);

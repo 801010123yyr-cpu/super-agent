@@ -172,14 +172,29 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
                         }
 
                         bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                            .field("title")
+                            .query(retrievalQuery)
+                            .boost(10.0f)
+                        ));
+                        bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
                             .field("sectionPath")
                             .query(retrievalQuery)
                             .boost(8.0f)
                         ));
                         bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                            .field("contentWithWeight")
+                            .query(retrievalQuery)
+                            .boost(6.0f)
+                        ));
+                        bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
+                            .field("questions")
+                            .query(retrievalQuery)
+                            .boost(5.5f)
+                        ));
+                        bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
                             .field("chunkText")
                             .query(retrievalQuery)
-                            .boost(5.0f)
+                            .boost(4.0f)
                         ));
                         bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
                             .field("documentName")
@@ -188,7 +203,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
                         ));
                         bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                             .query(retrievalQuery)
-                            .fields("sectionPath^6", "documentName^4", "knowledgeScopeName^3", "chunkText")
+                            .fields("title^10", "sectionPath^8", "contentWithWeight^6", "questions^5",
+                                "keywords^5", "documentName^4", "knowledgeScopeName^3", "chunkText^2")
                             .type(TextQueryType.BestFields)
                         ));
                         if (filters != null && CollUtil.isNotEmpty(filters.getBusinessCategoryHints())) {
@@ -202,28 +218,29 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
                         if (filters != null && CollUtil.isNotEmpty(filters.getDocumentTagHints())) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", filters.getDocumentTagHints()))
-                                .fields("documentTags^4", "documentName^2", "chunkText")
+                                .fields("documentTags^4", "keywords^3", "documentName^2", "contentWithWeight^2", "chunkText")
                                 .type(TextQueryType.BestFields)
                             ));
                         }
                         if (filters != null && CollUtil.isNotEmpty(filters.getDocumentNameHints())) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", filters.getDocumentNameHints()))
-                                .fields("documentName^6", "sectionPath^2", "chunkText")
+                                .fields("documentName^6", "title^4", "sectionPath^2", "contentWithWeight", "chunkText")
                                 .type(TextQueryType.BestFields)
                             ));
                         }
                         if (filters != null && CollUtil.isNotEmpty(filters.getSectionPathHints())) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", filters.getSectionPathHints()))
-                                .fields("sectionPath^7", "chunkText")
+                                .fields("sectionPath^7", "title^5", "contentWithWeight^2", "chunkText")
                                 .type(TextQueryType.BestFields)
                             ));
                         }
                         if (CollUtil.isNotEmpty(queryContextHints)) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", queryContextHints))
-                                .fields("documentName^2", "knowledgeScopeName^2", "sectionPath^2", "chunkText")
+                                .fields("documentName^2", "knowledgeScopeName^2", "title^3", "sectionPath^2",
+                                    "keywords^3", "questions^3", "contentWithWeight^2", "chunkText")
                                 .type(TextQueryType.BestFields)
                             ));
                         }
@@ -298,10 +315,19 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
             .structureNodeType(chunk.getStructureNodeType())
             .canonicalPath(safeText(chunk.getCanonicalPath()))
             .itemIndex(chunk.getItemIndex())
+            .pageNo(chunk.getPageNo())
+            .pageRange(safeText(chunk.getPageRange()))
+            .bboxJson(safeText(chunk.getBboxJson()))
+            .sourceBlockIds(safeText(chunk.getSourceBlockIds()))
             .knowledgeScopeCode(document == null ? "" : safeText(document.getKnowledgeScopeCode()))
             .knowledgeScopeName(document == null ? "" : safeText(document.getKnowledgeScopeName()))
             .businessCategory(document == null ? "" : safeText(document.getBusinessCategory()))
             .documentTags(splitTags(document == null ? "" : document.getDocumentTags()))
+            .contentWithWeight(safeText(chunk.getContentWithWeight()))
+            .chunkType(safeText(chunk.getChunkType()))
+            .title(safeText(chunk.getTitle()))
+            .keywords(readStringArray(chunk.getKeywords()))
+            .questions(readStringArray(chunk.getQuestions()))
             .chunkText(safeText(chunk.getChunkText()))
             .build();
     }
@@ -321,11 +347,20 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE, source.getStructureNodeType());
         metadata.put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, safeText(source.getCanonicalPath()));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.ITEM_INDEX, source.getItemIndex());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, source.getPageNo());
+        metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, safeText(source.getPageRange()));
+        metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, safeText(source.getBboxJson()));
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(source.getSourceBlockIds()));
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(source.getDocumentName()));
         metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE, safeText(source.getKnowledgeScopeCode()));
         metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME, safeText(source.getKnowledgeScopeName()));
         metadata.put(DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY, safeText(source.getBusinessCategory()));
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS, String.join(",", source.getDocumentTags()));
+        metadata.put(DocumentKnowledgeMetadataKeys.CONTENT_WITH_WEIGHT, safeText(source.getContentWithWeight()));
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, safeText(source.getChunkType()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(source.getTitle()));
+        metadata.put(DocumentKnowledgeMetadataKeys.KEYWORDS, String.join(",", source.getKeywords()));
+        metadata.put(DocumentKnowledgeMetadataKeys.QUESTIONS, String.join(",", source.getQuestions()));
 
         return Document.builder()
             .id(source.getChunkId())
@@ -359,6 +394,21 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         }
         return Arrays.stream(documentTags.split(","))
             .map(String::trim)
+            .filter(StrUtil::isNotBlank)
+            .distinct()
+            .toList();
+    }
+
+    private List<String> readStringArray(String text) {
+        if (StrUtil.isBlank(text)) {
+            return List.of();
+        }
+        String normalized = text.trim();
+        if (normalized.startsWith("[") && normalized.endsWith("]")) {
+            normalized = normalized.substring(1, normalized.length() - 1);
+        }
+        return Arrays.stream(normalized.split(","))
+            .map(item -> item.replace("\"", "").trim())
             .filter(StrUtil::isNotBlank)
             .distinct()
             .toList();

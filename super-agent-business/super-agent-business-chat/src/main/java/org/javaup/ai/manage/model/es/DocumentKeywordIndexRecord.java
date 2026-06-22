@@ -42,6 +42,14 @@ public class DocumentKeywordIndexRecord {
 
     private Integer itemIndex;
 
+    private Integer pageNo;
+
+    private String pageRange;
+
+    private String bboxJson;
+
+    private String sourceBlockIds;
+
     private String knowledgeScopeCode;
 
     private String knowledgeScopeName;
@@ -50,6 +58,18 @@ public class DocumentKeywordIndexRecord {
 
     @Builder.Default
     private List<String> documentTags = new ArrayList<>();
+
+    private String contentWithWeight;
+
+    private String chunkType;
+
+    private String title;
+
+    @Builder.Default
+    private List<String> keywords = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> questions = new ArrayList<>();
 
     private String chunkText;
 }

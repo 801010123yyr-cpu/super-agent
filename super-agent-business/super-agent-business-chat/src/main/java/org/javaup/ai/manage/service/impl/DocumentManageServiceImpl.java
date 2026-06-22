@@ -41,6 +41,7 @@ import org.javaup.ai.manage.mq.message.DocumentIndexBuildMessage;
 import org.javaup.ai.manage.mq.message.DocumentParseRouteMessage;
 import org.javaup.ai.manage.service.DocumentManageService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
+import org.javaup.ai.manage.service.DocumentParseArtifactService;
 import org.javaup.ai.manage.service.DocumentStorageService;
 import org.javaup.ai.manage.service.DocumentStructureGraphProjectionService;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
@@ -98,6 +99,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -138,6 +140,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     private final SuperAgentTopicDocumentRelationMapper topicDocumentRelationMapper;
 
     private final DocumentStorageService storageService;
+
+    private final DocumentParseArtifactService parseArtifactService;
 
     private final DocumentStructureNodeService structureNodeService;
 
@@ -295,7 +299,11 @@ public class DocumentManageServiceImpl implements DocumentManageService {
                 "当前文档存在进行中的任务，请等待任务结束后再删除。");
         }
 
-        storageService.deleteObjects(List.of(document.getObjectName(), document.getParseTextPath()));
+        List<String> objectNames = new ArrayList<>();
+        objectNames.add(document.getObjectName());
+        objectNames.add(document.getParseTextPath());
+        objectNames.addAll(parseArtifactService.listObjectNamesByDocumentId(documentId));
+        storageService.deleteObjects(objectNames);
         vectorGateway.deleteByDocumentId(documentId);
 
         DocumentKeywordSearchGateway keywordSearchGateway = keywordSearchGatewayProvider.getIfAvailable();
@@ -328,6 +336,7 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         chunkMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentChunk>()
             .eq(SuperAgentDocumentChunk::getDocumentId, documentId));
         structureNodeService.deleteByDocumentId(documentId);
+        parseArtifactService.deleteByDocumentId(documentId);
         taskLogMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentTaskLog>()
             .eq(SuperAgentDocumentTaskLog::getDocumentId, documentId));
         stepMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentStrategyStep>()
@@ -881,6 +890,15 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             chunk.getTokenCount(),
             chunk.getVectorStatus(),
             enumMsg(DocumentVectorStatusEnum.getRc(chunk.getVectorStatus())),
+            chunk.getPageNo(),
+            chunk.getPageRange(),
+            chunk.getBboxJson(),
+            chunk.getSourceBlockIds(),
+            chunk.getContentWithWeight(),
+            chunk.getChunkType(),
+            chunk.getTitle(),
+            chunk.getKeywords(),
+            chunk.getQuestions(),
             chunk.getChunkText()
         );
     }
@@ -900,6 +918,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             parentBlock.getChildCount(),
             parentBlock.getStartChunkNo(),
             parentBlock.getEndChunkNo(),
+            parentBlock.getPageRange(),
+            parentBlock.getSourceBlockIds(),
             parentBlock.getParentText()
         );
     }

@@ -35,4 +35,8 @@ public class DocumentAnalysisResult {
     private Integer maxParagraphLength;
 
     private List<DocumentStructureNodeCandidate> structureNodes = new ArrayList<>();
+
+    private List<DocumentParseArtifactCandidate> parseArtifacts = new ArrayList<>();
+
+    private List<DocumentBlockCandidate> blocks = new ArrayList<>();
 }

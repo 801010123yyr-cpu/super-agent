@@ -53,6 +53,8 @@ public class ChatRagProperties {
 
     private boolean keywordChannelEnabled = true;
 
+    private HybridProperties hybrid = new HybridProperties();
+
     private boolean rerankEnabled = true;
 
     private String noEvidenceReply = "当前没有从已接入文档中检索到足够证据，暂时不能给出可靠结论。";
@@ -60,8 +62,6 @@ public class ChatRagProperties {
     private String answerSystemPrompt = "";
 
     private HistorySummaryProperties historySummary = new HistorySummaryProperties();
-
-    private RerankProperties rerank = new RerankProperties();
 
     @Data
     public static class HistorySummaryProperties {
@@ -90,20 +90,18 @@ public class ChatRagProperties {
     }
 
     @Data
-    public static class RerankProperties {
+    public static class HybridProperties {
 
-        private boolean enabled = false;
+        private double vectorWeight = 1.0D;
 
-        private String url = "https://api.siliconflow.cn/v1/rerank";
+        private double keywordWeight = 1.0D;
 
-        private String apiKey;
+        private double rankWeight = 1.0D;
 
-        private String model = "BAAI/bge-reranker-v2-m3";
+        private double originalScoreWeight = 0.08D;
 
-        private int topN = 5;
+        private double metadataBoostWeight = 0.04D;
 
-        private int connectTimeoutMs = 3000;
-
-        private int readTimeoutMs = 6000;
+        private double maxMetadataBoost = 1.0D;
     }
 }

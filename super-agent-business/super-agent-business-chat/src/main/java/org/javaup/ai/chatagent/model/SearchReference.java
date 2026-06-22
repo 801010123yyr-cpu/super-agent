@@ -59,6 +59,26 @@ public class SearchReference {
 
     private String knowledgeScopeName;
 
+    private Integer pageNo;
+
+    private String pageRange;
+
+    private String bboxJson;
+
+    private String sourceBlockIds;
+
+    private String answerSegment;
+
+    private String quoteText;
+
+    private Double citationScore;
+
+    private Integer citationSegmentIndex;
+
+    private Integer citationRank;
+
+    private boolean citationRepaired;
+
     public SearchReference(String title, String url, String snippet) {
         this.sourceType = "WEB";
         this.title = title;

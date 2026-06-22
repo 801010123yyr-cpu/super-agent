@@ -234,6 +234,53 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_task_log` (
     KEY `idx_stage_type` (`stage_type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档任务日志表';
 
+CREATE TABLE IF NOT EXISTS `super_agent_document_parse_artifact` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `artifact_type` varchar(32) NOT NULL COMMENT '产物类型 MARKDOWN/JSON/PAGE_IMAGE/TABLE_IMAGE/OCR_JSON',
+   `object_name` varchar(512) NOT NULL COMMENT 'MinIO对象名称',
+   `content_hash` varchar(128) DEFAULT NULL COMMENT '内容hash',
+   `parser_name` varchar(128) DEFAULT NULL COMMENT '解析器名称',
+   `parser_version` varchar(64) DEFAULT NULL COMMENT '解析器版本',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_task_artifact_type` (`task_id`, `artifact_type`),
+   KEY `idx_content_hash` (`content_hash`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档解析产物表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_document_block` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `block_no` int NOT NULL COMMENT '解析任务内的稳定block序号',
+   `block_type` varchar(32) NOT NULL COMMENT 'block类型 TEXT/TITLE/TABLE/IMAGE/FIGURE/FORMULA/CODE/HEADER/FOOTER',
+   `parent_block_id` bigint DEFAULT NULL COMMENT '父级document block id',
+   `section_path` varchar(1000) DEFAULT NULL COMMENT '章节路径',
+   `canonical_path` varchar(1000) DEFAULT NULL COMMENT '稳定结构路径',
+   `page_no` int DEFAULT NULL COMMENT '所在页码',
+   `page_range` varchar(64) DEFAULT NULL COMMENT '跨页范围',
+   `bbox_json` text COMMENT '版面坐标JSON',
+   `text` longtext COMMENT 'block文本',
+   `content_with_weight` longtext COMMENT '带标题/章节/关键词等权重信息的检索文本',
+   `table_html` longtext COMMENT '表格HTML',
+   `image_object_name` varchar(512) DEFAULT NULL COMMENT '图片对象名称',
+   `image_caption` varchar(1000) DEFAULT NULL COMMENT '图片说明',
+   `metadata_json` text COMMENT '扩展元数据JSON',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `uk_task_block_no` (`task_id`, `block_no`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_task_block_type` (`task_id`, `block_type`),
+   KEY `idx_parent_block_id` (`parent_block_id`),
+   KEY `idx_page_no` (`page_no`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档解析block表';
+
 CREATE TABLE IF NOT EXISTS `super_agent_document_structure_node` (
    `id` bigint NOT NULL COMMENT '主键id',
    `document_id` bigint NOT NULL COMMENT '文档id',
@@ -280,6 +327,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_parent_block` (
     `child_count` int DEFAULT '0' COMMENT '父块内部child数量',
     `start_chunk_no` int DEFAULT NULL COMMENT '父块映射到的第一个child序号',
     `end_chunk_no` int DEFAULT NULL COMMENT '父块映射到的最后一个child序号',
+    `page_range` varchar(64) DEFAULT NULL COMMENT '父块覆盖页码范围',
+    `source_block_ids` text COMMENT '父块来源document_block id列表JSON',
     `create_time` datetime DEFAULT NULL COMMENT '创建时间',
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
@@ -304,11 +353,20 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_chunk` (
     `canonical_path` varchar(1000) DEFAULT NULL COMMENT '结构节点稳定路径',
     `item_index` int DEFAULT NULL COMMENT '列表项/步骤项序号',
     `chunk_text` longtext COMMENT '切块内容',
+    `content_with_weight` longtext COMMENT '带标题/章节/关键词/问题等权重信息的检索文本',
+    `chunk_type` varchar(32) DEFAULT NULL COMMENT 'chunk类型 TEXT/TITLE/TABLE/IMAGE/FIGURE/CODE/FORMULA/MIXED',
+    `title` varchar(1000) DEFAULT NULL COMMENT 'chunk所属标题或章节标题',
+    `keywords` text COMMENT 'chunk关键词 JSON 数组',
+    `questions` text COMMENT 'chunk典型问题 JSON 数组',
     `char_count` int DEFAULT '0' COMMENT '字符数',
     `token_count` int DEFAULT '0' COMMENT 'token数',
     `vector_status` tinyint NOT NULL DEFAULT '1' COMMENT '向量状态 1:待向量化 2:向量化中 3:向量化成功 4:向量化失败',
     `vector_store_type` tinyint NOT NULL DEFAULT '1' COMMENT '向量库类型 1:Milvus 2:PGVector 3:Elasticsearch',
     `vector_id` varchar(128) DEFAULT NULL COMMENT '向量库主键',
+    `page_no` int DEFAULT NULL COMMENT '命中块所在页码',
+    `page_range` varchar(64) DEFAULT NULL COMMENT '命中块覆盖页码范围',
+    `bbox_json` text COMMENT '命中块版面坐标JSON',
+    `source_block_ids` text COMMENT 'chunk来源document_block id列表JSON',
     `create_time` datetime DEFAULT NULL COMMENT '创建时间',
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
@@ -316,6 +374,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_chunk` (
     UNIQUE KEY `uk_task_chunk_no` (`task_id`, `chunk_no`),
     KEY `idx_document_id` (`document_id`),
     KEY `idx_parent_block_id` (`parent_block_id`),
+    KEY `idx_chunk_type` (`chunk_type`),
     KEY `idx_vector_status` (`vector_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档切块表';
 
@@ -442,7 +501,11 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_retrieval_result (
     rrf_rank INT DEFAULT NULL COMMENT 'RRF融合后排名',
     final_rank INT DEFAULT NULL COMMENT '最终排名（rerank后或最终裁剪后）',
     original_score DECIMAL(12, 6) DEFAULT NULL COMMENT '通道原始分数',
-    rrf_score DECIMAL(12, 6) DEFAULT NULL COMMENT 'RRF融合分数',
+    rrf_score DECIMAL(12, 6) DEFAULT NULL COMMENT 'RRF排名特征分数',
+    hybrid_score DECIMAL(12, 6) DEFAULT NULL COMMENT 'weighted hybrid最终融合分数',
+    metadata_boost DECIMAL(12, 6) DEFAULT NULL COMMENT '标题/章节/关键词等元数据加分',
+    vector_score DECIMAL(12, 6) DEFAULT NULL COMMENT '向量通道原始分数',
+    keyword_score DECIMAL(12, 6) DEFAULT NULL COMMENT '关键词通道原始分数',
     rerank_score DECIMAL(12, 6) DEFAULT NULL COMMENT 'Rerank精排分数',
     gate_passed TINYINT(1) DEFAULT '1' COMMENT '是否通过相关性闸门：1是 0否',
     is_elevated TINYINT(1) DEFAULT '0' COMMENT '是否提升到父块：1是 0否',
@@ -500,7 +563,7 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_channel_execution (
 CREATE TABLE IF NOT EXISTS super_agent_chat_stage_benchmark (
     id BIGINT NOT NULL COMMENT '主键id',
     stage_code VARCHAR(64) NOT NULL COMMENT '阶段编码',
-    execution_mode VARCHAR(32) NOT NULL COMMENT '执行模式：RAG_CHAT/REACT_AGENT',
+    execution_mode VARCHAR(32) NOT NULL COMMENT '执行模式：RETRIEVAL/GRAPH_ONLY/GRAPH_THEN_EVIDENCE/REACT_AGENT/CLARIFICATION',
     p50_duration_ms BIGINT DEFAULT NULL COMMENT 'P50耗时（毫秒）',
     p90_duration_ms BIGINT DEFAULT NULL COMMENT 'P90耗时（毫秒）',
     p99_duration_ms BIGINT DEFAULT NULL COMMENT 'P99耗时（毫秒）',

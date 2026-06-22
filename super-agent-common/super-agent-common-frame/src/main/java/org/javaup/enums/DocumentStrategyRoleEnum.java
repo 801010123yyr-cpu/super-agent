@@ -9,7 +9,7 @@ package org.javaup.enums;
 public enum DocumentStrategyRoleEnum {
     PRIMARY(1, "主策略"),
     OPTIMIZE(2, "优化策略"),
-    FALLBACK(3, "兜底策略"),
+    LENGTH_CONTROL(3, "长度控制策略"),
     ENHANCE(4, "增强策略");
 
     private final Integer code;

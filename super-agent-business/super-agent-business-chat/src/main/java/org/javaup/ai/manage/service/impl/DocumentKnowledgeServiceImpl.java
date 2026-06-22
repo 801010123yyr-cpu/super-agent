@@ -65,6 +65,15 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             canonical_path,
             item_index,
             chunk_text,
+            content_with_weight,
+            chunk_type,
+            title,
+            keywords,
+            questions,
+            page_no,
+            page_range,
+            bbox_json,
+            source_block_ids,
             1 - (embedding <=> CAST(? AS vector)) AS similarity_score
         FROM %s
         WHERE status = 1
@@ -85,6 +94,15 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             canonical_path,
             item_index,
             chunk_text,
+            content_with_weight,
+            chunk_type,
+            title,
+            keywords,
+            questions,
+            page_no,
+            page_range,
+            bbox_json,
+            source_block_ids,
             (%s) AS keyword_score
         FROM %s
         WHERE status = 1
@@ -193,6 +211,11 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return buildRetrievedDocument(
                 chunkId,
                 resultSet.getString("chunk_text"),
+                resultSet.getString("content_with_weight"),
+                resultSet.getString("chunk_type"),
+                resultSet.getString("title"),
+                resultSet.getString("keywords"),
+                resultSet.getString("questions"),
                 resultSet.getLong("task_id"),
                 resultSet.getLong("parent_block_id"),
                 resultSet.getInt("chunk_no"),
@@ -201,6 +224,10 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 getNullableInteger(resultSet, "structure_node_type"),
                 resultSet.getString("canonical_path"),
                 getNullableInteger(resultSet, "item_index"),
+                getNullableInteger(resultSet, "page_no"),
+                resultSet.getString("page_range"),
+                resultSet.getString("bbox_json"),
+                resultSet.getString("source_block_ids"),
                 descriptor,
                 "vector",
                 score
@@ -291,6 +318,11 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return buildRetrievedDocument(
                 chunkId,
                 resultSet.getString("chunk_text"),
+                resultSet.getString("content_with_weight"),
+                resultSet.getString("chunk_type"),
+                resultSet.getString("title"),
+                resultSet.getString("keywords"),
+                resultSet.getString("questions"),
                 resultSet.getLong("task_id"),
                 resultSet.getLong("parent_block_id"),
                 resultSet.getInt("chunk_no"),
@@ -299,6 +331,10 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 getNullableInteger(resultSet, "structure_node_type"),
                 resultSet.getString("canonical_path"),
                 getNullableInteger(resultSet, "item_index"),
+                getNullableInteger(resultSet, "page_no"),
+                resultSet.getString("page_range"),
+                resultSet.getString("bbox_json"),
+                resultSet.getString("source_block_ids"),
                 descriptor,
                 "keyword",
                 score
@@ -313,21 +349,21 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         }
 
         Map<Long, List<Document>> childGroupsByParent = new LinkedHashMap<>();
-        List<Document> fallbackDocuments = new ArrayList<>();
+        List<Document> directCandidateDocuments = new ArrayList<>();
         for (Document childDocument : childDocuments) {
             if (childDocument == null) {
                 continue;
             }
             Long parentBlockId = asLong(childDocument.getMetadata().get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
             if (parentBlockId == null) {
-                fallbackDocuments.add(childDocument);
+                directCandidateDocuments.add(childDocument);
                 continue;
             }
             childGroupsByParent.computeIfAbsent(parentBlockId, ignored -> new ArrayList<>()).add(childDocument);
         }
 
         if (childGroupsByParent.isEmpty()) {
-            return fallbackDocuments;
+            return directCandidateDocuments;
         }
 
         List<Long> parentBlockIds = new ArrayList<>(childGroupsByParent.keySet());
@@ -344,7 +380,7 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 LinkedHashMap::new
             ));
 
-        List<Document> elevatedDocuments = new ArrayList<>(childGroupsByParent.size() + fallbackDocuments.size());
+        List<Document> elevatedDocuments = new ArrayList<>(childGroupsByParent.size() + directCandidateDocuments.size());
         for (Map.Entry<Long, List<Document>> entry : childGroupsByParent.entrySet()) {
             SuperAgentDocumentParentBlock parentBlock = parentBlockMap.get(entry.getKey());
             if (parentBlock == null) {
@@ -353,13 +389,18 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             }
             elevatedDocuments.add(buildParentEvidenceDocument(parentBlock, entry.getValue(), maxChars));
         }
-        elevatedDocuments.addAll(fallbackDocuments);
+        elevatedDocuments.addAll(directCandidateDocuments);
         elevatedDocuments.sort(this::compareEvidenceDocument);
         return elevatedDocuments;
     }
 
     private Document buildRetrievedDocument(long chunkId,
                                             String chunkText,
+                                            String contentWithWeight,
+                                            String chunkType,
+                                            String title,
+                                            String keywords,
+                                            String questions,
                                             long taskId,
                                             long parentBlockId,
                                             int chunkNo,
@@ -368,6 +409,10 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                                             Integer structureNodeType,
                                             String canonicalPath,
                                             Integer itemIndex,
+                                            Integer pageNo,
+                                            String pageRange,
+                                            String bboxJson,
+                                            String sourceBlockIds,
                                             KnowledgeDocumentDescriptor descriptor,
                                             String channel,
                                             double score) {
@@ -385,6 +430,15 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE, structureNodeType);
         metadata.put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, safeText(canonicalPath));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.ITEM_INDEX, itemIndex);
+        metadata.put(DocumentKnowledgeMetadataKeys.CONTENT_WITH_WEIGHT, safeText(contentWithWeight));
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, safeText(chunkType));
+        metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(title));
+        metadata.put(DocumentKnowledgeMetadataKeys.KEYWORDS, safeText(keywords));
+        metadata.put(DocumentKnowledgeMetadataKeys.QUESTIONS, safeText(questions));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, pageNo);
+        metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, safeText(pageRange));
+        metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, safeText(bboxJson));
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(sourceBlockIds));
         metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, chunkText);
         if (descriptor != null) {
 
@@ -526,6 +580,8 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE, parentBlock.getStructureNodeType());
         metadata.put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, safeText(parentBlock.getCanonicalPath()));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.ITEM_INDEX, parentBlock.getItemIndex());
+        metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, safeText(parentBlock.getPageRange()));
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(parentBlock.getSourceBlockIds()));
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, parentScore);
         metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, safeText(parentBlock.getParentText()));
 

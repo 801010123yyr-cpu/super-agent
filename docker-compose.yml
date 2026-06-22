@@ -2,6 +2,13 @@
 name: milvus-stack
 
 services:
+  rag-tools:
+    container_name: super-agent-rag-tools
+    build:
+      context: ./super-agent-rag-tools
+    ports:
+      - "18080:18080"
+
   etcd:
     container_name: etcd
     image: quay.io/coreos/etcd:v3.5.18

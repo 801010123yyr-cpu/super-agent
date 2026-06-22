@@ -49,6 +49,16 @@ public class SuperAgentDocumentChunk extends BaseTableData {
 
     private String chunkText;
 
+    private String contentWithWeight;
+
+    private String chunkType;
+
+    private String title;
+
+    private String keywords;
+
+    private String questions;
+
     private Integer charCount;
 
     private Integer tokenCount;
@@ -58,4 +68,12 @@ public class SuperAgentDocumentChunk extends BaseTableData {
     private Integer vectorStoreType;
 
     private String vectorId;
+
+    private Integer pageNo;
+
+    private String pageRange;
+
+    private String bboxJson;
+
+    private String sourceBlockIds;
 }

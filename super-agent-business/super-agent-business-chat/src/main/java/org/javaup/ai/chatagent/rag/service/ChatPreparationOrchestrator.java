@@ -198,6 +198,7 @@ public class ChatPreparationOrchestrator {
             knowledgeRouteService.recordAutoRoute(conversationId, taskInfo.exchangeId(), question, rewriteQuestion, routeDecision);
             List<DocumentRouteCandidate> candidateDocuments = selectAutoCandidates(routeDecision, question, rewriteQuestion);
             if (shouldAskClarification(routeDecision, candidateDocuments)) {
+                recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, true, false, null);
                 return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
                     requiresCurrentDateAnchoring, requiresFreshSearch)
                     .mode(ExecutionMode.CLARIFICATION)
@@ -244,20 +245,7 @@ public class ChatPreparationOrchestrator {
                 .filter(StrUtil::isNotBlank)
                 .map(Long::valueOf)
                 .toList();
-            if (traceRecorder != null) {
-                traceRecorder.completeStage(
-                    traceRecorder.startStage(ConversationTraceStageCode.ROUTE, "AUTO_DOCUMENT", "正在生成知识范围候选。", null),
-                    "知识范围路由完成。",
-                    Map.of(
-                        "confidence", routeDecision == null || routeDecision.getConfidence() == null ? "" : routeDecision.getConfidence().toPlainString(),
-                        "routeStatus", routeDecision == null ? "" : StrUtil.blankToDefault(routeDecision.getRouteStatus(), ""),
-                        "candidateDocumentCount", candidateDocuments.size(),
-                        "confidentTopDocument", confidentTopDocument,
-                        "topDocumentId", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentId(), ""),
-                        "topDocumentName", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentName(), "")
-                    )
-                );
-            }
+            recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, false, confidentTopDocument, topDocument);
         }
         else if (chatMode == ChatQueryMode.DOCUMENT) {
             knowledgeRouteService.recordShadowRoute(conversationId, taskInfo.exchangeId(), selectedDocumentId, question, rewriteQuestion);
@@ -357,6 +345,112 @@ public class ChatPreparationOrchestrator {
             .requiresCurrentDateAnchoring(requiresCurrentDateAnchoring)
             .requiresFreshSearch(requiresFreshSearch)
             .noEvidenceReply(properties.getNoEvidenceReply());
+    }
+
+    private void recordAutoDocumentRouteTrace(ConversationTraceRecorder traceRecorder,
+                                              KnowledgeRouteDecision routeDecision,
+                                              List<DocumentRouteCandidate> candidateDocuments,
+                                              boolean clarificationRequired,
+                                              boolean confidentTopDocument,
+                                              DocumentRouteCandidate topDocument) {
+        if (traceRecorder == null) {
+            return;
+        }
+        Map<String, Object> snapshot = buildAutoDocumentRouteSnapshot(
+            routeDecision,
+            candidateDocuments,
+            clarificationRequired,
+            confidentTopDocument,
+            topDocument
+        );
+        ConversationTraceRecorder.StageHandle autoRouteStage = traceRecorder.startStage(
+            ConversationTraceStageCode.ROUTE,
+            "AUTO_DOCUMENT",
+            "正在执行知识范围、主题、候选文档路由。",
+            snapshot
+        );
+        traceRecorder.completeStage(
+            autoRouteStage,
+            clarificationRequired ? "知识路由存在歧义，已转入澄清。" : "知识范围路由完成。",
+            snapshot
+        );
+    }
+
+    private Map<String, Object> buildAutoDocumentRouteSnapshot(KnowledgeRouteDecision routeDecision,
+                                                               List<DocumentRouteCandidate> candidateDocuments,
+                                                               boolean clarificationRequired,
+                                                               boolean confidentTopDocument,
+                                                               DocumentRouteCandidate topDocument) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("routeStatus", routeDecision == null ? "" : StrUtil.blankToDefault(routeDecision.getRouteStatus(), ""));
+        snapshot.put("confidence", routeDecision == null || routeDecision.getConfidence() == null ? "" : routeDecision.getConfidence().toPlainString());
+        snapshot.put("reason", routeDecision == null ? "" : StrUtil.blankToDefault(routeDecision.getReason(), ""));
+        snapshot.put("clarificationRequired", clarificationRequired);
+        snapshot.put("confidentTopDocument", confidentTopDocument);
+        snapshot.put("topDocumentId", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentId(), ""));
+        snapshot.put("topDocumentName", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentName(), ""));
+        snapshot.put("scopeCandidates", buildScopeRouteTrace(routeDecision));
+        snapshot.put("topicCandidates", buildTopicRouteTrace(routeDecision));
+        snapshot.put("candidateDocuments", buildDocumentRouteTrace(candidateDocuments));
+        snapshot.put("candidateDocumentCount", candidateDocuments == null ? 0 : candidateDocuments.size());
+        return snapshot;
+    }
+
+    private List<Map<String, Object>> buildScopeRouteTrace(KnowledgeRouteDecision routeDecision) {
+        if (routeDecision == null || routeDecision.getScopes() == null) {
+            return List.of();
+        }
+        return routeDecision.getScopes().stream()
+            .limit(5)
+            .map(scope -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("scopeCode", StrUtil.blankToDefault(scope.getScopeCode(), ""));
+                item.put("scopeName", StrUtil.blankToDefault(scope.getScopeName(), ""));
+                item.put("score", scope.getScore() == null ? "" : scope.getScore().toPlainString());
+                item.put("reason", StrUtil.blankToDefault(scope.getReason(), ""));
+                return item;
+            })
+            .toList();
+    }
+
+    private List<Map<String, Object>> buildTopicRouteTrace(KnowledgeRouteDecision routeDecision) {
+        if (routeDecision == null || routeDecision.getTopics() == null) {
+            return List.of();
+        }
+        return routeDecision.getTopics().stream()
+            .limit(5)
+            .map(topic -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("scopeCode", StrUtil.blankToDefault(topic.getScopeCode(), ""));
+                item.put("topicCode", StrUtil.blankToDefault(topic.getTopicCode(), ""));
+                item.put("topicName", StrUtil.blankToDefault(topic.getTopicName(), ""));
+                item.put("score", topic.getScore() == null ? "" : topic.getScore().toPlainString());
+                item.put("reason", StrUtil.blankToDefault(topic.getReason(), ""));
+                return item;
+            })
+            .toList();
+    }
+
+    private List<Map<String, Object>> buildDocumentRouteTrace(List<DocumentRouteCandidate> candidateDocuments) {
+        if (candidateDocuments == null || candidateDocuments.isEmpty()) {
+            return List.of();
+        }
+        return candidateDocuments.stream()
+            .limit(8)
+            .map(document -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("documentId", StrUtil.blankToDefault(document.getDocumentId(), ""));
+                item.put("documentName", StrUtil.blankToDefault(document.getDocumentName(), ""));
+                item.put("lastIndexTaskId", StrUtil.blankToDefault(document.getLastIndexTaskId(), ""));
+                item.put("knowledgeScopeCode", StrUtil.blankToDefault(document.getKnowledgeScopeCode(), ""));
+                item.put("knowledgeScopeName", StrUtil.blankToDefault(document.getKnowledgeScopeName(), ""));
+                item.put("businessCategory", StrUtil.blankToDefault(document.getBusinessCategory(), ""));
+                item.put("documentTags", StrUtil.blankToDefault(document.getDocumentTags(), ""));
+                item.put("score", document.getScore() == null ? "" : document.getScore().toPlainString());
+                item.put("reason", StrUtil.blankToDefault(document.getReason(), ""));
+                return item;
+            })
+            .toList();
     }
 
     private Map<String, Object> buildRewriteStageSnapshot(String question,
@@ -500,7 +594,7 @@ public class ChatPreparationOrchestrator {
                                                               String question,
                                                               String rewriteQuestion) {
         if (routeDecision == null || routeDecision.getDocuments() == null || routeDecision.getDocuments().isEmpty()) {
-            return fallbackDocuments(question, rewriteQuestion, 5);
+            return expandCandidatesByDocumentProfile(question, rewriteQuestion, 5);
         }
         int candidateLimit = routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() >= 0.80D ? 3 : 5;
         List<DocumentRouteCandidate> candidates = routeDecision.getDocuments().stream()
@@ -508,26 +602,26 @@ public class ChatPreparationOrchestrator {
             .limit(candidateLimit)
             .toList();
         if (candidates.isEmpty()) {
-            return fallbackDocuments(question, rewriteQuestion, candidateLimit);
+            return expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit);
         }
         if (routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() < 0.55D) {
-            return mergeCandidates(candidates, fallbackDocuments(question, rewriteQuestion, candidateLimit), candidateLimit);
+            return mergeCandidates(candidates, expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit), candidateLimit);
         }
         return candidates;
     }
 
-    private List<DocumentRouteCandidate> fallbackDocuments(String question,
-                                                           String rewriteQuestion,
-                                                           int limit) {
+    private List<DocumentRouteCandidate> expandCandidatesByDocumentProfile(String question,
+                                                                           String rewriteQuestion,
+                                                                           int limit) {
         List<KnowledgeDocumentDescriptor> descriptors = documentKnowledgeService.listRetrievableDocuments();
         if (descriptors == null || descriptors.isEmpty()) {
             return List.of();
         }
-        List<String> queryTerms = extractFallbackTerms(question, rewriteQuestion);
+        List<String> queryTerms = extractRouteExpansionTerms(question, rewriteQuestion);
         return descriptors.stream()
             .sorted((left, right) -> Double.compare(
-                fallbackDescriptorScore(right, queryTerms),
-                fallbackDescriptorScore(left, queryTerms)
+                descriptorRouteScore(right, queryTerms),
+                descriptorRouteScore(left, queryTerms)
             ))
             .limit(Math.max(1, limit))
             .map(item -> new DocumentRouteCandidate(
@@ -538,8 +632,8 @@ public class ChatPreparationOrchestrator {
                 StrUtil.blankToDefault(item.getKnowledgeScopeName(), ""),
                 StrUtil.blankToDefault(item.getBusinessCategory(), ""),
                 StrUtil.blankToDefault(item.getDocumentTags(), ""),
-                BigDecimal.valueOf(fallbackDescriptorScore(item, queryTerms)).setScale(4, RoundingMode.HALF_UP),
-                "低置信度时基于文档元数据进行保守扩范围候选"
+                BigDecimal.valueOf(descriptorRouteScore(item, queryTerms)).setScale(4, RoundingMode.HALF_UP),
+                "低置信度时基于文档画像扩展候选范围"
             ))
             .toList();
     }
@@ -621,7 +715,7 @@ public class ChatPreparationOrchestrator {
         return "当前自动知识路由置信度为 " + confidenceText + "，候选文档数为 " + candidateCount + "，为避免误选文档，先返回澄清问题。";
     }
 
-    private List<String> extractFallbackTerms(String question, String rewriteQuestion) {
+    private List<String> extractRouteExpansionTerms(String question, String rewriteQuestion) {
         LinkedHashSet<String> terms = new LinkedHashSet<>();
         String routingText = (safeText(question) + " " + safeText(rewriteQuestion)).trim();
         for (String segment : routingText.split("[\\s、，,；;：:（）()\\-的和及与或]+")) {
@@ -641,8 +735,8 @@ public class ChatPreparationOrchestrator {
         return terms.stream().limit(40).toList();
     }
 
-    private double fallbackDescriptorScore(KnowledgeDocumentDescriptor descriptor, List<String> queryTerms) {
-        String content = normalizeFallbackText(String.join(" ",
+    private double descriptorRouteScore(KnowledgeDocumentDescriptor descriptor, List<String> queryTerms) {
+        String content = normalizeRouteExpansionText(String.join(" ",
             StrUtil.blankToDefault(descriptor.getDocumentName(), ""),
             StrUtil.blankToDefault(descriptor.getKnowledgeScopeCode(), ""),
             StrUtil.blankToDefault(descriptor.getKnowledgeScopeName(), ""),
@@ -654,7 +748,7 @@ public class ChatPreparationOrchestrator {
         }
         double score = 0D;
         List<String> sortedTerms = queryTerms.stream()
-            .map(this::normalizeFallbackText)
+            .map(this::normalizeRouteExpansionText)
             .filter(StrUtil::isNotBlank)
             .distinct()
             .sorted(Comparator.comparingInt(String::length).reversed())
@@ -687,7 +781,7 @@ public class ChatPreparationOrchestrator {
         return score;
     }
 
-    private String normalizeFallbackText(String value) {
+    private String normalizeRouteExpansionText(String value) {
         return StrUtil.blankToDefault(value, "")
             .replaceAll("[\\s>`*#_\\-，,。；;：:（）()“”\"'\\[\\]]+", "")
             .toLowerCase(Locale.ROOT);

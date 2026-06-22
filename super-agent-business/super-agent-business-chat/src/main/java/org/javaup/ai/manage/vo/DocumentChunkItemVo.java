@@ -43,5 +43,23 @@ public class DocumentChunkItemVo {
 
     private String vectorStatusName;
 
+    private Integer pageNo;
+
+    private String pageRange;
+
+    private String bboxJson;
+
+    private String sourceBlockIds;
+
+    private String contentWithWeight;
+
+    private String chunkType;
+
+    private String title;
+
+    private String keywords;
+
+    private String questions;
+
     private String chunkText;
 }

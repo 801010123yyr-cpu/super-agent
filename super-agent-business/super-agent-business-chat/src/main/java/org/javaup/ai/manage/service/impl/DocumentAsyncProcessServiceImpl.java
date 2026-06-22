@@ -7,9 +7,11 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import jakarta.annotation.Resource;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
+import org.javaup.ai.manage.data.SuperAgentDocumentParseArtifact;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
@@ -22,6 +24,7 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentStrategyStepMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.service.DocumentAsyncProcessService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
+import org.javaup.ai.manage.service.DocumentParseArtifactService;
 import org.javaup.ai.manage.service.DocumentParserService;
 import org.javaup.ai.manage.service.DocumentProfileService;
 import org.javaup.ai.manage.service.DocumentStorageService;
@@ -33,6 +36,8 @@ import org.javaup.ai.manage.service.DocumentVectorGateway;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.ChunkCandidate;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
+import org.javaup.ai.manage.support.DocumentBlockCandidate;
+import org.javaup.ai.manage.support.DocumentParseArtifactCandidate;
 import org.javaup.ai.manage.support.DocumentStrategyPlanDraft;
 import org.javaup.ai.manage.support.DocumentStrategyStepDraft;
 import org.javaup.ai.manage.support.ParentBlockCandidate;
@@ -57,8 +62,10 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -87,6 +94,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     private final SuperAgentDocumentChunkMapper chunkMapper;
 
     private final DocumentStorageService storageService;
+
+    private final DocumentParseArtifactService parseArtifactService;
 
     private final DocumentParserService parserService;
 
@@ -145,6 +154,7 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                 document.getMimeType(), DocumentFileTypeEnum.getRc(document.getFileType()));
 
             String parseTextPath = storageService.uploadParsedText(documentId, analysisResult.getParsedText());
+            saveParseArtifactsAndBlocks(documentId, taskId, analysisResult);
 
             List<SuperAgentDocumentStructureNode> structureNodes = structureNodeService.replaceDocumentNodes(
                 documentId,
@@ -167,7 +177,9 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                     "tokenCount", analysisResult.getTokenCount(),
                     "structureLevel", analysisResult.getStructureLevel(),
                     "contentQualityLevel", analysisResult.getContentQualityLevel(),
-                    "structureNodeCount", structureNodeCount
+                    "structureNodeCount", structureNodeCount,
+                    "artifactCount", analysisResult.getParseArtifacts() == null ? 0 : analysisResult.getParseArtifacts().size(),
+                    "blockCount", analysisResult.getBlocks() == null ? 0 : analysisResult.getBlocks().size()
                 ));
 
             task.setCurrentStage(DocumentTaskStageEnum.STRATEGY_ROUTE.getCode());
@@ -304,9 +316,12 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                 "开始执行切块流水线。",
                 Map.of("strategySnapshot", plan.getStrategySnapshot()));
 
-            String parsedText = storageService.downloadText(document.getParseTextPath());
+            List<SuperAgentDocumentBlock> documentBlocks = parseArtifactService.listBlocks(documentId, document.getLastParseTaskId());
+            if (documentBlocks.isEmpty()) {
+                throw new IllegalStateException("当前文档没有结构化解析 blocks，无法执行 Parent/Child 切块。");
+            }
 
-            List<ParentBlockCandidate> parentBlockCandidateList = strategyService.buildParentBlocks(document, plan, stepList, parsedText);
+            List<ParentBlockCandidate> parentBlockCandidateList = strategyService.buildParentBlocks(document, plan, stepList, documentBlocks);
 
             updateStepExecuteStatus(planId, DocumentStrategyExecuteStatusEnum.EXECUTE_SUCCESS.getCode());
 
@@ -497,11 +512,20 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                 chunk.setCanonicalPath(childCandidate.getCanonicalPath());
                 chunk.setItemIndex(childCandidate.getItemIndex());
                 chunk.setChunkText(childCandidate.getText().trim());
+                chunk.setContentWithWeight(StrUtil.blankToDefault(childCandidate.getContentWithWeight(), childCandidate.getText()).trim());
+                chunk.setChunkType(childCandidate.getChunkType());
+                chunk.setTitle(childCandidate.getTitle());
+                chunk.setKeywords(childCandidate.getKeywords());
+                chunk.setQuestions(childCandidate.getQuestions());
                 chunk.setCharCount(childCandidate.getText().length());
 
                 chunk.setTokenCount(estimateTokenCount(childCandidate.getText()));
                 chunk.setVectorStatus(DocumentVectorStatusEnum.WAIT_VECTOR.getCode());
                 chunk.setVectorStoreType(DocumentVectorStoreTypeEnum.PG_VECTOR.getCode());
+                chunk.setPageNo(childCandidate.getPageNo());
+                chunk.setPageRange(childCandidate.getPageRange());
+                chunk.setBboxJson(childCandidate.getBboxJson());
+                chunk.setSourceBlockIds(childCandidate.getSourceBlockIds());
                 chunk.setStatus(BusinessStatus.YES.getCode());
                 chunkEntityList.add(chunk);
                 childCount++;
@@ -510,10 +534,117 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             parentBlock.setChildCount(childCount);
             parentBlock.setStartChunkNo(childCount == 0 ? null : startChunkNo);
             parentBlock.setEndChunkNo(childCount == 0 ? null : globalChunkNo - 1);
+            parentBlock.setPageRange(parentCandidate.getPageRange());
+            parentBlock.setSourceBlockIds(parentCandidate.getSourceBlockIds());
             parentBlockEntityList.add(parentBlock);
         }
 
         return new ParentChildEntityBundle(parentBlockEntityList, chunkEntityList);
+    }
+
+    private void saveParseArtifactsAndBlocks(Long documentId, Long taskId, DocumentAnalysisResult analysisResult) {
+        List<SuperAgentDocumentParseArtifact> artifacts = buildParseArtifactEntities(
+            documentId,
+            taskId,
+            analysisResult == null ? List.of() : analysisResult.getParseArtifacts()
+        );
+        List<SuperAgentDocumentBlock> blocks = buildDocumentBlockEntities(
+            documentId,
+            taskId,
+            analysisResult == null ? List.of() : analysisResult.getBlocks()
+        );
+        parseArtifactService.replaceTaskArtifacts(documentId, taskId, artifacts, blocks);
+    }
+
+    private List<SuperAgentDocumentParseArtifact> buildParseArtifactEntities(Long documentId,
+                                                                             Long taskId,
+                                                                             List<DocumentParseArtifactCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        List<SuperAgentDocumentParseArtifact> artifacts = new ArrayList<>();
+        for (DocumentParseArtifactCandidate candidate : candidates) {
+            if (candidate == null || StrUtil.isBlank(candidate.getArtifactType()) || StrUtil.isBlank(candidate.getContentBase64())) {
+                continue;
+            }
+            byte[] content = decodeBase64(candidate.getContentBase64(), "解析产物 " + candidate.getFileName());
+            String objectName = storageService.uploadParseArtifact(
+                documentId,
+                taskId,
+                StrUtil.blankToDefault(candidate.getFileName(), candidate.getArtifactType().toLowerCase() + ".bin"),
+                content,
+                candidate.getContentType()
+            );
+
+            SuperAgentDocumentParseArtifact artifact = new SuperAgentDocumentParseArtifact();
+            artifact.setId(uidGenerator.getUid());
+            artifact.setDocumentId(documentId);
+            artifact.setTaskId(taskId);
+            artifact.setArtifactType(candidate.getArtifactType());
+            artifact.setObjectName(objectName);
+            artifact.setContentHash(StrUtil.blankToDefault(candidate.getContentHash(), sha256(content)));
+            artifact.setParserName(candidate.getParserName());
+            artifact.setParserVersion(candidate.getParserVersion());
+            artifact.setStatus(BusinessStatus.YES.getCode());
+            artifacts.add(artifact);
+        }
+        return artifacts;
+    }
+
+    private List<SuperAgentDocumentBlock> buildDocumentBlockEntities(Long documentId,
+                                                                     Long taskId,
+                                                                     List<DocumentBlockCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        Map<Integer, Long> idByBlockNo = new LinkedHashMap<>();
+        for (DocumentBlockCandidate candidate : candidates) {
+            if (candidate != null && candidate.getBlockNo() != null) {
+                idByBlockNo.put(candidate.getBlockNo(), uidGenerator.getUid());
+            }
+        }
+
+        List<SuperAgentDocumentBlock> blocks = new ArrayList<>();
+        for (DocumentBlockCandidate candidate : candidates) {
+            if (candidate == null || candidate.getBlockNo() == null || StrUtil.isBlank(candidate.getBlockType())) {
+                continue;
+            }
+            SuperAgentDocumentBlock block = new SuperAgentDocumentBlock();
+            block.setId(idByBlockNo.get(candidate.getBlockNo()));
+            block.setDocumentId(documentId);
+            block.setTaskId(taskId);
+            block.setBlockNo(candidate.getBlockNo());
+            block.setBlockType(candidate.getBlockType());
+            block.setParentBlockId(candidate.getParentBlockNo() == null ? null : idByBlockNo.get(candidate.getParentBlockNo()));
+            block.setSectionPath(candidate.getSectionPath());
+            block.setCanonicalPath(candidate.getCanonicalPath());
+            block.setPageNo(candidate.getPageNo());
+            block.setPageRange(candidate.getPageRange());
+            block.setBboxJson(candidate.getBboxJson());
+            block.setText(candidate.getText());
+            block.setContentWithWeight(candidate.getContentWithWeight());
+            block.setTableHtml(candidate.getTableHtml());
+            block.setImageObjectName(uploadBlockImage(documentId, taskId, candidate));
+            block.setImageCaption(candidate.getImageCaption());
+            block.setMetadataJson(candidate.getMetadataJson());
+            block.setStatus(BusinessStatus.YES.getCode());
+            blocks.add(block);
+        }
+        return blocks;
+    }
+
+    private String uploadBlockImage(Long documentId, Long taskId, DocumentBlockCandidate candidate) {
+        if (candidate == null || StrUtil.isBlank(candidate.getImageContentBase64())) {
+            return null;
+        }
+        byte[] content = decodeBase64(candidate.getImageContentBase64(), "block image " + candidate.getBlockNo());
+        return storageService.uploadParseArtifact(
+            documentId,
+            taskId,
+            StrUtil.blankToDefault(candidate.getImageFileName(), "block-" + candidate.getBlockNo() + ".png"),
+            content,
+            "image/png"
+        );
     }
 
     private int countChildCandidates(List<ParentBlockCandidate> parentBlockCandidateList) {
@@ -646,6 +777,22 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             detailMap.put(String.valueOf(keyValues[index]), keyValues[index + 1]);
         }
         return detailMap;
+    }
+
+    private byte[] decodeBase64(String contentBase64, String label) {
+        try {
+            return Base64.getDecoder().decode(contentBase64);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(label + " Base64 解码失败", exception);
+        }
+    }
+
+    private String sha256(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (Exception exception) {
+            throw new IllegalStateException("计算解析产物 hash 失败", exception);
+        }
     }
 
     private record ParentChildEntityBundle(

@@ -28,6 +28,10 @@ public class RetrievalResultView {
     private Integer finalRank;
     private BigDecimal originalScore;
     private BigDecimal rrfScore;
+    private BigDecimal hybridScore;
+    private BigDecimal metadataBoost;
+    private BigDecimal vectorScore;
+    private BigDecimal keywordScore;
     private BigDecimal rerankScore;
     private boolean gatePassed;
     private boolean isElevated;

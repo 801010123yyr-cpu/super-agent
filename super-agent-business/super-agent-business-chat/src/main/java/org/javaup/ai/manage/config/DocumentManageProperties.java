@@ -38,6 +38,7 @@ public class DocumentManageProperties {
         private String bucketName = "super-agent-document";
         private String objectPrefix = "rag/document";
         private String parsedTextPrefix = "rag/parsed-text";
+        private String parseArtifactPrefix = "rag/parse-artifact";
     }
 
     @Data

@@ -86,6 +86,12 @@ app:
   preview-mode:
     enabled: ${SUPER_AGENT_PREVIEW_MODE_ENABLED:false}
     message: ${SUPER_AGENT_PREVIEW_MODE_MESSAGE:线上环境为只读展示模式，仅开放浏览与检索能力}
+  rag-tools:
+    # Python RAG 工具服务地址。
+    # 当前 rerank 主链路已通过 RagRerankService 调用本服务；后续解析/OCR/表格等工具能力也会放在这里。
+    base-url: ${SUPER_AGENT_RAG_TOOLS_BASE_URL:http://127.0.0.1:18080}
+    connect-timeout-ms: 3000
+    read-timeout-ms: 10000
   chat:
     # 是否开启“推荐追问问题”能力。
     # 开启后，主回答生成完成后会额外调用一次模型，产出最多 3 个可继续追问的问题。
@@ -166,6 +172,20 @@ app:
       keyword-relative-score-floor: 0.35
       # 是否启用关键词检索通道。
       keyword-channel-enabled: true
+      hybrid:
+        # 向量通道权重。
+        # Phase H 后，融合不再是固定等权 RRF，而是 rank + 原始分 + 元数据 boost 的加权融合。
+        vector-weight: 1.0
+        # 关键词/BM25 通道权重。
+        keyword-weight: 1.0
+        # 排名贡献权重。排名分来自每个通道内部名次，稳定抵消不同分数尺度。
+        rank-weight: 1.0
+        # 原始通道分贡献权重。向量分和关键词分会先在各自通道内归一化。
+        original-score-weight: 0.08
+        # 元数据 boost 权重。标题、章节、关键词、问题、知识范围命中会产生小幅加分。
+        metadata-boost-weight: 0.04
+        # 单个候选允许的最大元数据 boost，避免 metadata 命中压过正文召回。
+        max-metadata-boost: 1.0
       # 是否启用重排序。
       # 当前已经把“融合前闸门”做进来了，开启 rerank 后会在较干净的候选集上继续精排。
       rerank-enabled: true
@@ -205,18 +225,6 @@ app:
         recent-transcript-max-chars: 2200
         # 长期摘要文本最大字符数。
         summary-max-chars: 1400
-      rerank:
-        # 是否启用基于 HTTP 的外部 Rerank 接口。
-        enabled: false
-        # 外部 Rerank 服务地址，默认沿用 SiliconFlow 兼容接口。
-        url: https://api.siliconflow.cn/v1/rerank
-        # Rerank API Key，默认和聊天模型密钥解耦，未配置时会自动回退到 spring.ai.openai.api-key。
-        api-key: ${RERANK_API_KEY:${spring.ai.openai.api-key}}
-        # Rerank 模型名称。
-        model: BAAI/bge-reranker-v2-m3
-        # 单次精排后保留的前 N 个候选。
-        top-n: 5
-
   tavily:
     # 是否启用 Tavily 联网搜索工具。
     # 关闭后，ReactAgent 即使判断需要搜索，也无法调用该工具。
@@ -265,9 +273,12 @@ app:
       # 原始文件对象前缀。
       # 最终对象路径一般会在这个前缀下再拼接文档 id 和文件名。
       object-prefix: rag/document
-      # 解析后纯文本对象前缀。
-      # Tika 解析完成后，会把纯文本结果单独存一份，方便后续切块和重建索引。
+      # 解析后纯文本副产物对象前缀。
+      # 当前解析主链路由 Python /document/parse 产出结构化 blocks；纯文本只作为解析产物和概要生成辅助，不再作为切块主输入。
       parsed-text-prefix: rag/parsed-text
+      # 结构化解析产物对象前缀。
+      # Python parser 后续生成的 Markdown、JSON、页面图片、表格图片、OCR JSON 都放在这个前缀下。
+      parse-artifact-prefix: rag/parse-artifact
     kafka:
       # 文档上传后，异步执行“解析 + 策略推荐”的主题。
       parse-topic: super-agent-document-parse-route
@@ -339,7 +350,7 @@ app:
       # 知识路由索引名称，粒度是 scope/topic/document 路由元数据，不和正文索引混用。
       route-index-name: ${prefix.distinction.name:super-agent}-knowledge-route
       # 建索引 analyzer。
-      # 如果本地未安装 IK 插件，启动时会自动回退到 standard。
+      # 如果使用 IK analyzer，本地 Elasticsearch 必须安装 IK 插件；配置错误会直接启动失败。
       analyzer: ik_max_word
       # 搜索 analyzer。
       search-analyzer: ik_smart

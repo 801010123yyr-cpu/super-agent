@@ -35,5 +35,9 @@ public class DocumentParentBlockItemVo {
 
     private Integer endChunkNo;
 
+    private String pageRange;
+
+    private String sourceBlockIds;
+
     private String parentText;
 }

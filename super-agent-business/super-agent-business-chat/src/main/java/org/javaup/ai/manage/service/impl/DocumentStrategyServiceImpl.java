@@ -7,6 +7,7 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
+import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
@@ -14,7 +15,6 @@ import org.javaup.ai.manage.service.DocumentStrategyService;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
 import org.javaup.ai.manage.support.ChunkCandidate;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
-import org.javaup.ai.manage.support.DocumentLineClassifier;
 import org.javaup.ai.manage.support.DocumentStrategyPlanDraft;
 import org.javaup.ai.manage.support.DocumentStrategyStepDraft;
 import org.javaup.ai.manage.support.ParentBlockCandidate;
@@ -29,17 +29,14 @@ import org.javaup.enums.DocumentStrategyRoleEnum;
 import org.javaup.enums.DocumentStrategySourceTypeEnum;
 import org.javaup.enums.DocumentStrategyTypeEnum;
 import org.javaup.enums.DocumentStructureLevelEnum;
-import org.javaup.enums.DocumentStructureNodeTypeEnum;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -62,6 +59,7 @@ import java.util.stream.Collectors;
 public class DocumentStrategyServiceImpl implements DocumentStrategyService {
 
     private static final Pattern ENGLISH_WORD_PATTERN = Pattern.compile("[A-Za-z0-9]{2,}");
+    private static final Pattern CHINESE_KEYWORD_PATTERN = Pattern.compile("[\\p{IsHan}]{2,12}");
 
     private static final int PARENT_BLOCK_MAX_CHARS = 2200;
     private static final int PARENT_BLOCK_OVERLAP_CHARS = 180;
@@ -71,7 +69,6 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     private final DocumentManageProperties properties;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<ChatModel> chatModelProvider;
-    private final DocumentLineClassifier documentLineClassifier;
     private final DocumentStructureNodeService structureNodeService;
     private final PromptTemplateService promptTemplateService;
 
@@ -119,8 +116,8 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         if (recursiveRecommended || llmRecommended || childStrategyTypes.isEmpty()) {
             childStrategyTypes.add(DocumentStrategyTypeEnum.RECURSIVE.getCode());
             childReasonMap.put(DocumentStrategyTypeEnum.RECURSIVE.getCode(),
-                "文档整体较长、存在超长段落，或需要在增强切块后追加长度兜底。");
-            reasonList.add("子块流水线追加递归分块，控制召回单元长度并作为兜底。");
+                "文档整体较长、存在超长段落，或需要在增强切块后追加长度控制步骤。");
+            reasonList.add("子块流水线追加递归分块，用于控制召回单元长度。");
         }
 
         List<DocumentStrategyStepDraft> parentSteps = buildDraftSteps(
@@ -174,7 +171,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     public List<ParentBlockCandidate> buildParentBlocks(SuperAgentDocument document,
                                                         SuperAgentDocumentStrategyPlan plan,
                                                         List<SuperAgentDocumentStrategyStep> steps,
-                                                        String parsedText) {
+                                                        List<SuperAgentDocumentBlock> documentBlocks) {
         List<SuperAgentDocumentStrategyStep> parentSteps = sortPipelineSteps(steps, DocumentStrategyPipelineTypeEnum.PARENT);
         List<SuperAgentDocumentStrategyStep> childSteps = sortPipelineSteps(steps, DocumentStrategyPipelineTypeEnum.CHILD);
         if (parentSteps.isEmpty()) {
@@ -184,17 +181,22 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             throw new IllegalStateException("当前方案缺少子块流水线，无法生成 Parent-Child 结构。");
         }
 
+        List<SuperAgentDocumentBlock> orderedBlocks = cleanupDocumentBlocks(documentBlocks);
+        if (orderedBlocks.isEmpty()) {
+            throw new IllegalStateException("当前文档没有可用于切块的结构化 blocks。");
+        }
+        Map<Long, SuperAgentDocumentBlock> blockMap = toBlockMap(orderedBlocks);
         List<SuperAgentDocumentStructureNode> structureNodes = structureNodeService.listDocumentNodes(
             document == null ? null : document.getId(),
             document == null ? null : document.getLastParseTaskId()
         );
-        List<ChunkCandidate> parentSeedList = buildParentSeedList(parsedText, parentSteps, structureNodes);
+        List<ChunkCandidate> parentSeedList = buildParentSeedList(orderedBlocks, parentSteps, structureNodes);
         List<ParentBlockCandidate> parentBlockList = new ArrayList<>();
         for (ChunkCandidate parentSeed : cleanupChunkList(parentSeedList)) {
             if (parentSeed == null || StrUtil.isBlank(parentSeed.getText())) {
                 continue;
             }
-            List<ChunkCandidate> childSeedList = buildChildSeedList(parentSeed, childSteps, structureNodes);
+            List<ChunkCandidate> childSeedList = buildChildSeedList(parentSeed, childSteps, blockMap);
             List<ChunkCandidate> finalChildren = cleanupChunkList(childSeedList);
             if (finalChildren.isEmpty()) {
                 finalChildren = List.of(cloneChunkCandidate(parentSeed, parentSeed.getText().trim()));
@@ -208,57 +210,43 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                 parentSeed.getItemIndex(),
                 parentSeed.getText().trim(),
                 parentSeed.getSourceType(),
-                finalChildren
+                finalChildren,
+                parentSeed.getPageRange(),
+                parentSeed.getSourceBlockIds()
             ));
         }
         return cleanupParentBlockList(parentBlockList);
     }
 
-    private List<ChunkCandidate> buildParentSeedList(String parsedText,
+    private List<ChunkCandidate> buildParentSeedList(List<SuperAgentDocumentBlock> documentBlocks,
                                                      List<SuperAgentDocumentStrategyStep> parentSteps,
                                                      List<SuperAgentDocumentStructureNode> structureNodes) {
-        if (containsStructureStep(parentSteps) && structureNodes != null && !structureNodes.isEmpty()) {
-            List<ChunkCandidate> structureSeeds = buildStructureParentSeeds(structureNodes);
-            if (structureSeeds.isEmpty()) {
-                return executePipeline(
-                    List.of(new ChunkCandidate("", parsedText, DocumentChunkSourceTypeEnum.ORIGINAL.getCode())),
-                    parentSteps,
-                    DocumentStrategyPipelineTypeEnum.PARENT
-                );
-            }
+        if (containsStructureStep(parentSteps)) {
+            List<ChunkCandidate> structureSeeds = buildBlockSectionParentSeeds(documentBlocks, structureNodes);
             List<SuperAgentDocumentStrategyStep> remainingSteps = stripStructureSteps(parentSteps);
             if (remainingSteps.isEmpty()) {
                 return structureSeeds;
             }
             return executePipeline(structureSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT);
         }
-        return executePipeline(
-            List.of(new ChunkCandidate("", parsedText, DocumentChunkSourceTypeEnum.ORIGINAL.getCode())),
-            parentSteps,
-            DocumentStrategyPipelineTypeEnum.PARENT
-        );
+        List<ChunkCandidate> parentSeeds = buildBlockWindowParentSeeds(documentBlocks, PARENT_BLOCK_MAX_CHARS);
+        List<SuperAgentDocumentStrategyStep> remainingSteps = stripRecursiveSteps(parentSteps);
+        return remainingSteps.isEmpty()
+            ? parentSeeds
+            : executePipeline(parentSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT);
     }
 
     private List<ChunkCandidate> buildChildSeedList(ChunkCandidate parentSeed,
                                                     List<SuperAgentDocumentStrategyStep> childSteps,
-                                                    List<SuperAgentDocumentStructureNode> structureNodes) {
-        if (containsStructureStep(childSteps)
-            && parentSeed != null
-            && parentSeed.getStructureNodeId() != null
-            && structureNodes != null
-            && !structureNodes.isEmpty()) {
-            List<ChunkCandidate> structureSeeds = buildStructureChildSeeds(parentSeed, structureNodes);
-            List<SuperAgentDocumentStrategyStep> remainingSteps = stripStructureSteps(childSteps);
-            if (remainingSteps.isEmpty()) {
-                return structureSeeds;
-            }
-            return executePipeline(structureSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.CHILD);
+                                                    Map<Long, SuperAgentDocumentBlock> blockMap) {
+        List<ChunkCandidate> blockSeeds = buildBlockChildSeeds(parentSeed, blockMap);
+        if (blockSeeds.isEmpty()) {
+            blockSeeds = List.of(cloneChunkCandidate(parentSeed, parentSeed.getText()));
         }
-        return executePipeline(
-            List.of(cloneChunkCandidate(parentSeed, parentSeed.getText())),
-            childSteps,
-            DocumentStrategyPipelineTypeEnum.CHILD
-        );
+        List<SuperAgentDocumentStrategyStep> remainingSteps = stripStructureSteps(childSteps);
+        return remainingSteps.isEmpty()
+            ? blockSeeds
+            : executePipeline(blockSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.CHILD);
     }
 
     private boolean containsStructureStep(List<SuperAgentDocumentStrategyStep> steps) {
@@ -271,81 +259,546 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             .toList();
     }
 
-    private List<ChunkCandidate> buildStructureParentSeeds(List<SuperAgentDocumentStructureNode> structureNodes) {
-        Map<Long, Boolean> parentHasChildSection = new LinkedHashMap<>();
-        for (SuperAgentDocumentStructureNode node : structureNodes) {
-            if (node == null || node.getParentNodeId() == null) {
-                continue;
-            }
-            if (DocumentStructureNodeTypeEnum.SECTION.getCode().equals(node.getNodeType())) {
-                parentHasChildSection.put(node.getParentNodeId(), true);
+    private List<SuperAgentDocumentStrategyStep> stripRecursiveSteps(List<SuperAgentDocumentStrategyStep> steps) {
+        return steps == null ? List.of() : steps.stream()
+            .filter(step -> !DocumentStrategyTypeEnum.RECURSIVE.getCode().equals(step.getStrategyType()))
+            .toList();
+    }
+
+    private List<SuperAgentDocumentBlock> cleanupDocumentBlocks(List<SuperAgentDocumentBlock> documentBlocks) {
+        if (documentBlocks == null || documentBlocks.isEmpty()) {
+            return List.of();
+        }
+        return documentBlocks.stream()
+            .filter(this::hasBlockContent)
+            .sorted(Comparator
+                .comparingInt((SuperAgentDocumentBlock block) -> block.getBlockNo() == null ? Integer.MAX_VALUE : block.getBlockNo())
+                .thenComparingLong(block -> block.getId() == null ? Long.MAX_VALUE : block.getId()))
+            .toList();
+    }
+
+    private Map<Long, SuperAgentDocumentBlock> toBlockMap(List<SuperAgentDocumentBlock> documentBlocks) {
+        Map<Long, SuperAgentDocumentBlock> blockMap = new LinkedHashMap<>();
+        for (SuperAgentDocumentBlock block : documentBlocks) {
+            if (block != null && block.getId() != null) {
+                blockMap.put(block.getId(), block);
             }
         }
+        return blockMap;
+    }
+
+    private List<ChunkCandidate> buildBlockSectionParentSeeds(List<SuperAgentDocumentBlock> documentBlocks,
+                                                              List<SuperAgentDocumentStructureNode> structureNodes) {
         List<ChunkCandidate> seeds = new ArrayList<>();
-        for (SuperAgentDocumentStructureNode node : structureNodes) {
-            if (node == null || !DocumentStructureNodeTypeEnum.SECTION.getCode().equals(node.getNodeType())) {
+        List<SuperAgentDocumentBlock> currentGroup = new ArrayList<>();
+        String currentSectionKey = "";
+        for (SuperAgentDocumentBlock block : documentBlocks) {
+            String sectionKey = sectionKey(block);
+            boolean sectionChanged = !currentGroup.isEmpty() && !StrUtil.equals(currentSectionKey, sectionKey);
+            boolean startsNewTitleSection = isTitleBlock(block) && sectionChanged;
+            if (sectionChanged || startsNewTitleSection) {
+                appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes);
+                currentGroup = new ArrayList<>();
+            }
+            if (currentGroup.isEmpty()) {
+                currentSectionKey = sectionKey;
+            }
+            currentGroup.add(block);
+        }
+        appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes);
+        return seeds.isEmpty() ? buildBlockWindowParentSeeds(documentBlocks, PARENT_BLOCK_MAX_CHARS, structureNodes) : seeds;
+    }
+
+    private void appendParentSeedsFromBlockGroup(List<ChunkCandidate> seeds,
+                                                 List<SuperAgentDocumentBlock> blockGroup,
+                                                 List<SuperAgentDocumentStructureNode> structureNodes) {
+        if (blockGroup == null || blockGroup.isEmpty()) {
+            return;
+        }
+        String text = joinBlockTexts(blockGroup);
+        if (text.length() <= PARENT_BLOCK_MAX_CHARS) {
+            seeds.add(toParentSeed(blockGroup, structureNodes));
+            return;
+        }
+        seeds.addAll(buildBlockWindowParentSeeds(blockGroup, PARENT_BLOCK_MAX_CHARS, structureNodes));
+    }
+
+    private List<ChunkCandidate> buildBlockWindowParentSeeds(List<SuperAgentDocumentBlock> documentBlocks, int maxChars) {
+        return buildBlockWindowParentSeeds(documentBlocks, maxChars, List.of());
+    }
+
+    private List<ChunkCandidate> buildBlockWindowParentSeeds(List<SuperAgentDocumentBlock> documentBlocks,
+                                                             int maxChars,
+                                                             List<SuperAgentDocumentStructureNode> structureNodes) {
+        List<ChunkCandidate> seeds = new ArrayList<>();
+        List<SuperAgentDocumentBlock> currentBlocks = new ArrayList<>();
+        int currentChars = 0;
+        for (SuperAgentDocumentBlock block : documentBlocks) {
+            String blockText = renderBlockContent(block);
+            if (StrUtil.isBlank(blockText)) {
                 continue;
             }
-            if (!isContentBearingSection(node, parentHasChildSection.getOrDefault(node.getId(), false))) {
+            if (blockText.length() > maxChars) {
+                appendParentSeedsFromBlockGroup(seeds, currentBlocks, structureNodes);
+                currentBlocks = new ArrayList<>();
+                currentChars = 0;
+                for (String splitText : recursiveSplit(blockText, maxChars, 0)) {
+                    seeds.add(toSplitBlockSeed(block, splitText, structureNodes));
+                }
                 continue;
             }
-            seeds.add(toChunkCandidate(node));
+            if (!currentBlocks.isEmpty() && currentChars + blockText.length() + 2 > maxChars) {
+                seeds.add(toParentSeed(currentBlocks, structureNodes));
+                currentBlocks = new ArrayList<>();
+                currentChars = 0;
+            }
+            currentBlocks.add(block);
+            currentChars += blockText.length() + 2;
+        }
+        if (!currentBlocks.isEmpty()) {
+            seeds.add(toParentSeed(currentBlocks, structureNodes));
         }
         return seeds;
     }
 
-    private List<ChunkCandidate> buildStructureChildSeeds(ChunkCandidate parentSeed,
-                                                          List<SuperAgentDocumentStructureNode> structureNodes) {
-        Map<Long, List<SuperAgentDocumentStructureNode>> childrenByParent = new LinkedHashMap<>();
-        for (SuperAgentDocumentStructureNode node : structureNodes) {
-            if (node == null || node.getParentNodeId() == null) {
-                continue;
-            }
-            childrenByParent.computeIfAbsent(node.getParentNodeId(), ignored -> new ArrayList<>()).add(node);
+    private List<ChunkCandidate> buildBlockChildSeeds(ChunkCandidate parentSeed,
+                                                      Map<Long, SuperAgentDocumentBlock> blockMap) {
+        if (parentSeed == null || blockMap == null || blockMap.isEmpty()) {
+            return List.of();
         }
         List<ChunkCandidate> seeds = new ArrayList<>();
-        for (SuperAgentDocumentStructureNode child : childrenByParent.getOrDefault(parentSeed.getStructureNodeId(), List.of())) {
-            if (child == null || StrUtil.isBlank(child.getContentText())) {
+        for (Long blockId : parseSourceBlockIds(parentSeed.getSourceBlockIds())) {
+            SuperAgentDocumentBlock block = blockMap.get(blockId);
+            if (block == null) {
                 continue;
             }
-            DocumentStructureNodeTypeEnum nodeType = DocumentStructureNodeTypeEnum.getRc(child.getNodeType());
-            if (nodeType == DocumentStructureNodeTypeEnum.SECTION
-                || nodeType == DocumentStructureNodeTypeEnum.STEP
-                || nodeType == DocumentStructureNodeTypeEnum.LIST_ITEM) {
-                seeds.add(toChunkCandidate(child));
+            ChunkCandidate child = toBlockChunkCandidate(block);
+            child.setSectionPath(StrUtil.blankToDefault(child.getSectionPath(), parentSeed.getSectionPath()));
+            child.setStructureNodeId(parentSeed.getStructureNodeId());
+            child.setStructureNodeType(parentSeed.getStructureNodeType());
+            child.setCanonicalPath(StrUtil.blankToDefault(child.getCanonicalPath(), parentSeed.getCanonicalPath()));
+            child.setItemIndex(parentSeed.getItemIndex());
+            seeds.add(child);
+        }
+        return seeds;
+    }
+
+    private ChunkCandidate toParentSeed(List<SuperAgentDocumentBlock> blocks,
+                                        List<SuperAgentDocumentStructureNode> structureNodes) {
+        String sectionPath = commonSectionPath(blocks);
+        String canonicalPath = firstNonBlank(blocks.stream().map(SuperAgentDocumentBlock::getCanonicalPath).toList());
+        SuperAgentDocumentStructureNode structureNode = findStructureNode(sectionPath, canonicalPath, structureNodes);
+        String text = joinBlockTexts(blocks);
+        String title = resolveTitle(blocks, sectionPath);
+        String chunkType = resolveChunkType(blocks);
+        String keywords = buildKeywords(title, sectionPath, text);
+        String questions = buildQuestions(title, chunkType, keywords);
+        return new ChunkCandidate(
+            sectionPath,
+            structureNode == null ? null : structureNode.getId(),
+            structureNode == null ? null : structureNode.getNodeType(),
+            structureNode == null ? canonicalPath : StrUtil.blankToDefault(structureNode.getCanonicalPath(), canonicalPath),
+            structureNode == null ? null : structureNode.getItemIndex(),
+            text,
+            buildContentWithWeight(text, sectionPath, title, chunkType, keywords, questions, joinBlockWeightedContents(blocks)),
+            chunkType,
+            title,
+            keywords,
+            questions,
+            DocumentChunkSourceTypeEnum.ORIGINAL.getCode(),
+            firstPageNo(blocks),
+            resolvePageRange(blocks),
+            blocks.size() == 1 ? blocks.get(0).getBboxJson() : null,
+            toSourceBlockIds(blocks)
+        );
+    }
+
+    private ChunkCandidate toSplitBlockSeed(SuperAgentDocumentBlock block,
+                                            String splitText,
+                                            List<SuperAgentDocumentStructureNode> structureNodes) {
+        SuperAgentDocumentStructureNode structureNode = findStructureNode(block.getSectionPath(), block.getCanonicalPath(), structureNodes);
+        String title = resolveTitle(List.of(block), block.getSectionPath());
+        String chunkType = resolveChunkType(List.of(block));
+        String keywords = buildKeywords(title, block.getSectionPath(), splitText);
+        String questions = buildQuestions(title, chunkType, keywords);
+        return new ChunkCandidate(
+            block.getSectionPath(),
+            structureNode == null ? null : structureNode.getId(),
+            structureNode == null ? null : structureNode.getNodeType(),
+            structureNode == null ? block.getCanonicalPath() : StrUtil.blankToDefault(structureNode.getCanonicalPath(), block.getCanonicalPath()),
+            structureNode == null ? null : structureNode.getItemIndex(),
+            splitText,
+            buildContentWithWeight(splitText, block.getSectionPath(), title, chunkType, keywords, questions, null),
+            chunkType,
+            title,
+            keywords,
+            questions,
+            DocumentChunkSourceTypeEnum.ORIGINAL.getCode(),
+            block.getPageNo(),
+            resolvePageRange(List.of(block)),
+            block.getBboxJson(),
+            toSourceBlockIds(List.of(block))
+        );
+    }
+
+    private ChunkCandidate toBlockChunkCandidate(SuperAgentDocumentBlock block) {
+        String text = renderBlockContent(block);
+        String title = resolveTitle(List.of(block), block.getSectionPath());
+        String chunkType = resolveChunkType(List.of(block));
+        String keywords = buildKeywords(title, block.getSectionPath(), text);
+        String questions = buildQuestions(title, chunkType, keywords);
+        return new ChunkCandidate(
+            block.getSectionPath(),
+            null,
+            null,
+            block.getCanonicalPath(),
+            null,
+            text,
+            buildContentWithWeight(text, block.getSectionPath(), title, chunkType, keywords, questions, renderBlockWeightedContent(block)),
+            chunkType,
+            title,
+            keywords,
+            questions,
+            DocumentChunkSourceTypeEnum.ORIGINAL.getCode(),
+            block.getPageNo(),
+            resolvePageRange(List.of(block)),
+            block.getBboxJson(),
+            toSourceBlockIds(List.of(block))
+        );
+    }
+
+    private SuperAgentDocumentStructureNode findStructureNode(String sectionPath,
+                                                             String canonicalPath,
+                                                             List<SuperAgentDocumentStructureNode> structureNodes) {
+        if (structureNodes == null || structureNodes.isEmpty()) {
+            return null;
+        }
+        String normalizedSection = StrUtil.blankToDefault(sectionPath, "").trim();
+        String normalizedCanonical = StrUtil.blankToDefault(canonicalPath, "").trim();
+        for (SuperAgentDocumentStructureNode node : structureNodes) {
+            if (node == null) {
+                continue;
+            }
+            if (StrUtil.isNotBlank(normalizedCanonical)
+                && normalizedCanonical.equals(StrUtil.blankToDefault(node.getCanonicalPath(), "").trim())) {
+                return node;
+            }
+            if (StrUtil.isNotBlank(normalizedSection)
+                && (normalizedSection.equals(StrUtil.blankToDefault(node.getSectionPath(), "").trim())
+                || normalizedSection.equals(StrUtil.blankToDefault(node.getTitle(), "").trim()))) {
+                return node;
             }
         }
-        if (!seeds.isEmpty()) {
-            return seeds;
-        }
-        return List.of(cloneChunkCandidate(parentSeed, parentSeed.getText()));
+        return null;
     }
 
-    private boolean isContentBearingSection(SuperAgentDocumentStructureNode node, boolean hasChildSection) {
-        if (node == null || StrUtil.isBlank(node.getContentText())) {
-            return false;
-        }
-        String content = node.getContentText().trim();
-        if (!hasChildSection) {
-            return true;
-        }
-        String headingText = StrUtil.blankToDefault(node.getAnchorText(), node.getTitle()).trim();
-        if (content.equals(headingText)) {
-            return false;
-        }
-        return content.length() > headingText.length() + 16 || content.contains("\n");
+    private boolean hasBlockContent(SuperAgentDocumentBlock block) {
+        return block != null && StrUtil.isNotBlank(renderBlockContent(block));
     }
 
-    private ChunkCandidate toChunkCandidate(SuperAgentDocumentStructureNode node) {
-        return new ChunkCandidate(
-            node.getSectionPath(),
-            node.getId(),
-            node.getNodeType(),
-            StrUtil.blankToDefault(node.getCanonicalPath(), ""),
-            node.getItemIndex(),
-            node.getContentText(),
-            DocumentChunkSourceTypeEnum.ORIGINAL.getCode()
-        );
+    private boolean isTitleBlock(SuperAgentDocumentBlock block) {
+        return block != null && "TITLE".equalsIgnoreCase(StrUtil.blankToDefault(block.getBlockType(), ""));
+    }
+
+    private String sectionKey(SuperAgentDocumentBlock block) {
+        if (block == null) {
+            return "";
+        }
+        return StrUtil.blankToDefault(block.getSectionPath(), "").trim();
+    }
+
+    private String commonSectionPath(List<SuperAgentDocumentBlock> blocks) {
+        return firstNonBlank(blocks.stream()
+            .map(SuperAgentDocumentBlock::getSectionPath)
+            .distinct()
+            .toList());
+    }
+
+    private String joinBlockTexts(List<SuperAgentDocumentBlock> blocks) {
+        return blocks.stream()
+            .map(this::renderBlockContent)
+            .filter(StrUtil::isNotBlank)
+            .collect(Collectors.joining("\n\n"));
+    }
+
+    private String joinBlockWeightedContents(List<SuperAgentDocumentBlock> blocks) {
+        return blocks.stream()
+            .map(this::renderBlockWeightedContent)
+            .filter(StrUtil::isNotBlank)
+            .collect(Collectors.joining("\n\n"));
+    }
+
+    private String renderBlockContent(SuperAgentDocumentBlock block) {
+        if (block == null) {
+            return "";
+        }
+        String blockType = StrUtil.blankToDefault(block.getBlockType(), "").trim().toUpperCase(Locale.ROOT);
+        String text = firstNonBlank(Arrays.asList(block.getText(), block.getImageCaption()));
+        if (StrUtil.isBlank(text) && StrUtil.isNotBlank(block.getTableHtml())) {
+            text = block.getTableHtml();
+        }
+        if (StrUtil.isBlank(text)) {
+            return "";
+        }
+        if ("TITLE".equals(blockType) && !text.startsWith("#")) {
+            return "# " + text;
+        }
+        if ("TABLE".equals(blockType) && StrUtil.isNotBlank(block.getTableHtml())
+            && !text.contains(block.getTableHtml())) {
+            return "[TABLE]\n" + text + "\n\n" + block.getTableHtml();
+        }
+        if (("IMAGE".equals(blockType) || "FIGURE".equals(blockType)) && StrUtil.isNotBlank(block.getImageCaption())) {
+            return "[IMAGE]\n" + block.getImageCaption();
+        }
+        return text;
+    }
+
+    private String renderBlockWeightedContent(SuperAgentDocumentBlock block) {
+        if (block == null) {
+            return "";
+        }
+        if (StrUtil.isNotBlank(block.getContentWithWeight())) {
+            return block.getContentWithWeight().trim();
+        }
+        String text = renderBlockContent(block);
+        String title = resolveTitle(List.of(block), block.getSectionPath());
+        String chunkType = resolveChunkType(List.of(block));
+        String keywords = buildKeywords(title, block.getSectionPath(), text);
+        String questions = buildQuestions(title, chunkType, keywords);
+        return buildContentWithWeight(text, block.getSectionPath(), title, chunkType, keywords, questions, null);
+    }
+
+    private String buildContentWithWeight(String text,
+                                          String sectionPath,
+                                          String title,
+                                          String chunkType,
+                                          String keywords,
+                                          String questions,
+                                          String parserWeightedContent) {
+        List<String> parts = new ArrayList<>();
+        if (StrUtil.isNotBlank(title)) {
+            parts.add("[TITLE]\n" + title.trim());
+        }
+        if (StrUtil.isNotBlank(sectionPath)) {
+            parts.add("[SECTION]\n" + sectionPath.trim());
+        }
+        if (StrUtil.isNotBlank(chunkType)) {
+            parts.add("[CHUNK_TYPE]\n" + chunkType.trim());
+        }
+        String keywordText = jsonArrayToDisplayText(keywords);
+        if (StrUtil.isNotBlank(keywordText)) {
+            parts.add("[KEYWORDS]\n" + keywordText);
+        }
+        String questionText = jsonArrayToDisplayText(questions);
+        if (StrUtil.isNotBlank(questionText)) {
+            parts.add("[QUESTIONS]\n" + questionText);
+        }
+
+        String weightedBody = StrUtil.blankToDefault(parserWeightedContent, "").trim();
+        if (StrUtil.isBlank(weightedBody)) {
+            weightedBody = StrUtil.blankToDefault(text, "").trim();
+        }
+        if (StrUtil.isNotBlank(weightedBody)) {
+            parts.add("[CONTENT]\n" + weightedBody);
+        }
+        return String.join("\n\n", parts).trim();
+    }
+
+    private String resolveChunkType(List<SuperAgentDocumentBlock> blocks) {
+        List<String> blockTypes = blocks.stream()
+            .map(SuperAgentDocumentBlock::getBlockType)
+            .filter(StrUtil::isNotBlank)
+            .map(type -> type.trim().toUpperCase(Locale.ROOT))
+            .distinct()
+            .toList();
+        if (blockTypes.isEmpty()) {
+            return "TEXT";
+        }
+        return blockTypes.size() == 1 ? blockTypes.get(0) : "MIXED";
+    }
+
+    private String resolveTitle(List<SuperAgentDocumentBlock> blocks, String sectionPath) {
+        for (SuperAgentDocumentBlock block : blocks == null ? List.<SuperAgentDocumentBlock>of() : blocks) {
+            if (isTitleBlock(block) && StrUtil.isNotBlank(block.getText())) {
+                return normalizeTitle(block.getText());
+            }
+        }
+        return normalizeTitle(lastSectionSegment(sectionPath));
+    }
+
+    private String normalizeTitle(String title) {
+        String normalized = StrUtil.blankToDefault(title, "").trim();
+        while (normalized.startsWith("#")) {
+            normalized = normalized.substring(1).trim();
+        }
+        return normalized;
+    }
+
+    private String lastSectionSegment(String sectionPath) {
+        if (StrUtil.isBlank(sectionPath)) {
+            return "";
+        }
+        String[] parts = sectionPath.split("[>/|]");
+        for (int index = parts.length - 1; index >= 0; index--) {
+            if (StrUtil.isNotBlank(parts[index])) {
+                return parts[index].trim();
+            }
+        }
+        return sectionPath.trim();
+    }
+
+    private String buildKeywords(String title, String sectionPath, String text) {
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        addKeyword(keywords, title);
+        if (StrUtil.isNotBlank(sectionPath)) {
+            for (String sectionPart : sectionPath.split("[>/|]")) {
+                addKeyword(keywords, sectionPart);
+            }
+        }
+
+        String sourceText = StrUtil.blankToDefault(text, "");
+        Matcher englishMatcher = ENGLISH_WORD_PATTERN.matcher(sourceText.toLowerCase(Locale.ROOT));
+        while (englishMatcher.find() && keywords.size() < 12) {
+            addKeyword(keywords, englishMatcher.group());
+        }
+
+        Matcher chineseMatcher = CHINESE_KEYWORD_PATTERN.matcher(sourceText);
+        while (chineseMatcher.find() && keywords.size() < 12) {
+            String keyword = chineseMatcher.group();
+            if (keyword.length() > 8) {
+                keyword = keyword.substring(0, 8);
+            }
+            addKeyword(keywords, keyword);
+        }
+        return toJsonArray(new ArrayList<>(keywords).stream().limit(12).toList());
+    }
+
+    private void addKeyword(Set<String> keywords, String keyword) {
+        String normalized = StrUtil.blankToDefault(keyword, "").trim();
+        if (normalized.length() >= 2) {
+            keywords.add(normalized);
+        }
+    }
+
+    private String buildQuestions(String title, String chunkType, String keywords) {
+        LinkedHashSet<String> questions = new LinkedHashSet<>();
+        String topic = StrUtil.blankToDefault(title, "").trim();
+        if (StrUtil.isBlank(topic)) {
+            List<String> keywordList = parseJsonArray(keywords);
+            topic = keywordList.isEmpty() ? "" : keywordList.get(0);
+        }
+        if (StrUtil.isNotBlank(topic)) {
+            questions.add("关于" + topic + "的核心内容是什么？");
+            questions.add(topic + "有哪些要求或注意事项？");
+        }
+        if ("TABLE".equalsIgnoreCase(chunkType)) {
+            questions.add("这个表格说明了什么？");
+        }
+        if ("IMAGE".equalsIgnoreCase(chunkType) || "FIGURE".equalsIgnoreCase(chunkType)) {
+            questions.add("这张图片说明了什么？");
+        }
+        return toJsonArray(new ArrayList<>(questions).stream().limit(4).toList());
+    }
+
+    private List<String> parseJsonArray(String jsonArray) {
+        if (StrUtil.isBlank(jsonArray)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(jsonArray, new TypeReference<List<String>>() {
+            }).stream().filter(StrUtil::isNotBlank).map(String::trim).toList();
+        }
+        catch (Exception ignored) {
+            String normalized = jsonArray.replace("[", "").replace("]", "").replace("\"", "");
+            return Arrays.stream(normalized.split(","))
+                .map(String::trim)
+                .filter(StrUtil::isNotBlank)
+                .toList();
+        }
+    }
+
+    private String jsonArrayToDisplayText(String jsonArray) {
+        List<String> values = parseJsonArray(jsonArray);
+        return values.isEmpty() ? "" : String.join("；", values);
+    }
+
+    private String toJsonArray(List<String> values) {
+        try {
+            return objectMapper.writeValueAsString(values == null ? List.of() : values);
+        }
+        catch (Exception exception) {
+            throw new IllegalStateException("序列化 chunk 检索增强字段失败。", exception);
+        }
+    }
+
+    private Integer firstPageNo(List<SuperAgentDocumentBlock> blocks) {
+        return blocks.stream()
+            .map(SuperAgentDocumentBlock::getPageNo)
+            .filter(pageNo -> pageNo != null && pageNo > 0)
+            .findFirst()
+            .orElse(null);
+    }
+
+    private String resolvePageRange(List<SuperAgentDocumentBlock> blocks) {
+        List<Integer> pages = blocks.stream()
+            .map(SuperAgentDocumentBlock::getPageNo)
+            .filter(pageNo -> pageNo != null && pageNo > 0)
+            .distinct()
+            .sorted()
+            .toList();
+        if (!pages.isEmpty()) {
+            int first = pages.get(0);
+            int last = pages.get(pages.size() - 1);
+            return first == last ? String.valueOf(first) : first + "-" + last;
+        }
+        return firstNonBlank(blocks.stream()
+            .map(SuperAgentDocumentBlock::getPageRange)
+            .distinct()
+            .toList());
+    }
+
+    private String toSourceBlockIds(List<SuperAgentDocumentBlock> blocks) {
+        List<Long> ids = blocks.stream()
+            .map(SuperAgentDocumentBlock::getId)
+            .filter(id -> id != null && id > 0)
+            .distinct()
+            .toList();
+        return ids.isEmpty()
+            ? "[]"
+            : ids.stream().map(String::valueOf).collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private List<Long> parseSourceBlockIds(String sourceBlockIds) {
+        if (StrUtil.isBlank(sourceBlockIds)) {
+            return List.of();
+        }
+        String normalized = sourceBlockIds.replace("[", "").replace("]", "").trim();
+        if (StrUtil.isBlank(normalized)) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>();
+        for (String rawId : normalized.split(",")) {
+            String trimmed = rawId.trim();
+            if (StrUtil.isBlank(trimmed)) {
+                continue;
+            }
+            try {
+                ids.add(Long.parseLong(trimmed));
+            }
+            catch (NumberFormatException ignored) {
+                log.warn("忽略非法 sourceBlockId: {}", trimmed);
+            }
+        }
+        return ids;
+    }
+
+    private String firstNonBlank(List<String> values) {
+        for (String value : values == null ? List.<String>of() : values) {
+            if (StrUtil.isNotBlank(value)) {
+                return value.trim();
+            }
+        }
+        return "";
     }
 
     private List<DocumentStrategyStepDraft> buildDraftSteps(DocumentStrategyPipelineTypeEnum pipelineType,
@@ -419,7 +872,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                 continue;
             }
             currentChunks = switch (strategyType) {
-                case STRUCTURE -> applyStructureChunking(currentChunks, pipelineType);
+                case STRUCTURE -> currentChunks;
                 case RECURSIVE -> applyRecursiveChunking(currentChunks, pipelineType);
                 case SEMANTIC -> applySemanticChunking(currentChunks, pipelineType);
                 case LLM -> applyLlmChunking(currentChunks, pipelineType);
@@ -473,73 +926,10 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     private boolean shouldUseLlm(DocumentAnalysisResult analysisResult) {
 
         return Boolean.TRUE.equals(properties.getChunk().getRecommendLlmWhenLowQuality())
+            && Boolean.TRUE.equals(properties.getChunk().getLlmEnabled())
+            && chatModelProvider.getIfAvailable() != null
             && analysisResult.getContentQualityLevel().equals(DocumentContentQualityLevelEnum.LOW.getCode())
             && analysisResult.getCharCount() >= properties.getChunk().getSemanticMinChars();
-    }
-
-    private List<ChunkCandidate> applyStructureChunking(String parsedText) {
-        return applyStructureChunking(
-            parsedText,
-            DocumentStrategyPipelineTypeEnum.PARENT,
-            "",
-            DocumentChunkSourceTypeEnum.ORIGINAL.getCode()
-        );
-    }
-
-    private List<ChunkCandidate> applyStructureChunking(List<ChunkCandidate> sourceList,
-                                                        DocumentStrategyPipelineTypeEnum pipelineType) {
-        List<ChunkCandidate> resultList = new ArrayList<>();
-        for (ChunkCandidate candidate : sourceList) {
-            if (candidate == null || StrUtil.isBlank(candidate.getText())) {
-                continue;
-            }
-            resultList.addAll(applyStructureChunking(
-                candidate.getText(),
-                pipelineType,
-                candidate.getSectionPath(),
-                candidate.getSourceType()
-            ));
-        }
-        return resultList;
-    }
-
-    private List<ChunkCandidate> applyStructureChunking(String parsedText,
-                                                        DocumentStrategyPipelineTypeEnum pipelineType,
-                                                        String baseSectionPath,
-                                                        Integer sourceType) {
-        List<ChunkCandidate> candidateList = new ArrayList<>();
-        Deque<String> headingStack = new ArrayDeque<>();
-        StringBuilder currentChunk = new StringBuilder();
-        String currentSectionPath = StrUtil.blankToDefault(baseSectionPath, "");
-
-        for (String line : parsedText.split("\n")) {
-            String trimmed = line.trim();
-            DocumentLineClassifier.LineClassification classification = documentLineClassifier.classify(trimmed);
-            if (classification.isHeading()) {
-
-                flushChunk(candidateList, currentSectionPath, sourceType, currentChunk);
-
-                while (headingStack.size() >= classification.level()) {
-                    headingStack.removeLast();
-                }
-                headingStack.addLast(classification.title());
-                currentSectionPath = composeSectionPath(baseSectionPath, String.join(" > ", headingStack));
-                currentChunk.append(trimmed).append('\n');
-                continue;
-            }
-
-            currentChunk.append(line).append('\n');
-        }
-        flushChunk(candidateList, currentSectionPath, sourceType, currentChunk);
-
-        if (candidateList.isEmpty()) {
-
-            return applyRecursiveChunking(
-                List.of(new ChunkCandidate(baseSectionPath, parsedText, sourceType)),
-                pipelineType
-            );
-        }
-        return candidateList;
     }
 
     private List<ChunkCandidate> applyRecursiveChunking(List<ChunkCandidate> sourceList) {
@@ -590,8 +980,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                                                   DocumentStrategyPipelineTypeEnum pipelineType) {
         ChatModel chatModel = chatModelProvider.getIfAvailable();
         if (!Boolean.TRUE.equals(properties.getChunk().getLlmEnabled()) || chatModel == null) {
-
-            return applySemanticChunking(sourceList, pipelineType);
+            throw new IllegalStateException("当前切块方案包含 LLM 策略，但 LLM 切块未启用或 ChatModel 不可用。");
         }
 
         List<ChunkCandidate> resultList = new ArrayList<>();
@@ -608,9 +997,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             for (String sourceText : sourceTextList) {
                 List<String> llmChunkList = llmSplit(chatModel, sourceText);
                 if (llmChunkList.isEmpty()) {
-
-                    resultList.addAll(semanticSplit(cloneChunkCandidate(candidate, sourceText), pipelineType));
-                    continue;
+                    throw new IllegalStateException("LLM 切块没有返回有效片段。");
                 }
                 for (String llmChunk : llmChunkList) {
                     resultList.add(cloneChunkCandidate(candidate, llmChunk));
@@ -891,8 +1278,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             return resultList.stream().filter(StrUtil::isNotBlank).map(String::trim).toList();
         }
         catch (Exception exception) {
-            log.warn("大模型智能切块失败，回退到语义切块", exception);
-            return List.of();
+            throw new IllegalStateException("大模型智能切块失败。", exception);
         }
     }
 
@@ -938,38 +1324,44 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         return new ArrayList<>(uniqueMap.values());
     }
 
-    private void flushChunk(List<ChunkCandidate> candidateList,
-                            String currentSectionPath,
-                            Integer sourceType,
-                            StringBuilder currentChunk) {
-        String text = currentChunk.toString().trim();
-        if (StrUtil.isNotBlank(text)) {
-
-            candidateList.add(new ChunkCandidate(
-                currentSectionPath,
-                null,
-                null,
-                "",
-                null,
-                text,
-                sourceType == null ? DocumentChunkSourceTypeEnum.ORIGINAL.getCode() : sourceType
-            ));
-        }
-        currentChunk.setLength(0);
-    }
-
     private ChunkCandidate cloneChunkCandidate(ChunkCandidate source, String text) {
         if (source == null) {
             return new ChunkCandidate("", text, DocumentChunkSourceTypeEnum.ORIGINAL.getCode());
         }
+        String normalizedText = StrUtil.blankToDefault(text, "").trim();
+        String keywords = StrUtil.isNotBlank(source.getKeywords())
+            ? source.getKeywords()
+            : buildKeywords(source.getTitle(), source.getSectionPath(), normalizedText);
+        String questions = StrUtil.isNotBlank(source.getQuestions())
+            ? source.getQuestions()
+            : buildQuestions(source.getTitle(), source.getChunkType(), keywords);
+        boolean sameText = StrUtil.equals(normalizedText, StrUtil.blankToDefault(source.getText(), "").trim());
+        String contentWithWeight = sameText && StrUtil.isNotBlank(source.getContentWithWeight())
+            ? source.getContentWithWeight().trim()
+            : buildContentWithWeight(normalizedText,
+            source.getSectionPath(),
+            source.getTitle(),
+            source.getChunkType(),
+            keywords,
+            questions,
+            null);
         return new ChunkCandidate(
             source.getSectionPath(),
             source.getStructureNodeId(),
             source.getStructureNodeType(),
             StrUtil.blankToDefault(source.getCanonicalPath(), ""),
             source.getItemIndex(),
-            text,
-            source.getSourceType()
+            normalizedText,
+            contentWithWeight,
+            source.getChunkType(),
+            source.getTitle(),
+            keywords,
+            questions,
+            source.getSourceType(),
+            source.getPageNo(),
+            source.getPageRange(),
+            source.getBboxJson(),
+            source.getSourceBlockIds()
         );
     }
 
@@ -987,20 +1379,10 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             source.getItemIndex(),
             text,
             source.getSourceType(),
-            childChunks
+            childChunks,
+            source.getPageRange(),
+            source.getSourceBlockIds()
         );
-    }
-
-    private String composeSectionPath(String baseSectionPath, String currentSectionPath) {
-        String normalizedBase = StrUtil.blankToDefault(baseSectionPath, "").trim();
-        String normalizedCurrent = StrUtil.blankToDefault(currentSectionPath, "").trim();
-        if (StrUtil.isBlank(normalizedBase)) {
-            return normalizedCurrent;
-        }
-        if (StrUtil.isBlank(normalizedCurrent)) {
-            return normalizedBase;
-        }
-        return normalizedBase + " > " + normalizedCurrent;
     }
 
     private Integer resolveRole(int index, Integer strategyType) {
@@ -1008,7 +1390,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             return DocumentStrategyRoleEnum.PRIMARY.getCode();
         }
         if (DocumentStrategyTypeEnum.RECURSIVE.getCode().equals(strategyType)) {
-            return DocumentStrategyRoleEnum.FALLBACK.getCode();
+            return DocumentStrategyRoleEnum.LENGTH_CONTROL.getCode();
         }
         if (DocumentStrategyTypeEnum.SEMANTIC.getCode().equals(strategyType)) {
             return DocumentStrategyRoleEnum.OPTIMIZE.getCode();

@@ -17,6 +17,7 @@ public enum ConversationTraceStageCode {
     EVIDENCE_BUDGET("EVIDENCE_BUDGET", "证据评估与预算控制", 60),
     ANSWER_GENERATE("ANSWER_GENERATE", "回答生成", 70),
     REACT_AGENT("REACT_AGENT", "ReAct Agent", 75),
+    CITATION_REPAIR("CITATION_REPAIR", "引用修复", 78),
     RECOMMENDATION("RECOMMENDATION", "推荐问题", 80),
     FINALIZE("FINALIZE", "收尾归档", 90);
 

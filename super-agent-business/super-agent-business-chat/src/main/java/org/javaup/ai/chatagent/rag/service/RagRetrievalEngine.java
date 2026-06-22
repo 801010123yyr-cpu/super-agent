@@ -17,8 +17,6 @@ import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.enums.RetrievalChannelEnum;
 import org.springframework.ai.document.Document;
-import org.springframework.ai.rag.Query;
-import org.springframework.ai.rag.postretrieval.document.DocumentPostProcessor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
@@ -28,6 +26,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -51,18 +50,18 @@ public class RagRetrievalEngine {
 
     private final List<RetrievalChannel> retrievalChannels;
     private final ChatRagProperties properties;
-    private final DocumentPostProcessor rerankPostProcessor;
+    private final RagRerankService ragRerankService;
     private final DocumentKnowledgeService documentKnowledgeService;
     private final ExecutorService executorService;
 
     public RagRetrievalEngine(List<RetrievalChannel> retrievalChannels,
                               ChatRagProperties properties,
-                              HttpDocumentRerankPostProcessor rerankPostProcessor,
+                              RagRerankService ragRerankService,
                               DocumentKnowledgeService documentKnowledgeService,
                               @Qualifier("chatRagExecutorService") ExecutorService executorService) {
         this.retrievalChannels = retrievalChannels;
         this.properties = properties;
-        this.rerankPostProcessor = rerankPostProcessor;
+        this.ragRerankService = ragRerankService;
         this.documentKnowledgeService = documentKnowledgeService;
         this.executorService = executorService;
     }
@@ -136,7 +135,7 @@ public class RagRetrievalEngine {
                         rootCause == null ? "" : rootCause.getClass().getName(),
                         rootCause == null ? "" : rootCause.getMessage(),
                         throwable);
-                    notes.add("子问题" + subQuestionIndex + "通道[" + channel.channelName() + "]检索失败或超时，已自动降级。");
+                    notes.add("子问题" + subQuestionIndex + "通道[" + channel.channelName() + "]检索失败或超时，已跳过该通道。");
                     return new RetrievalChannelResult(channel.channelName(), List.of());
                 }))
             .toList();
@@ -158,7 +157,7 @@ public class RagRetrievalEngine {
             .filter(result -> !result.getDocuments().isEmpty())
             .forEach(result -> markUsedChannel(usedChannels, result.getChannelName()));
 
-        List<Document> mergedCandidates = fuseByRrf(channelResults);
+        List<Document> mergedCandidates = fuseByWeightedHybrid(channelResults, subQuestion, plan);
         List<Document> parentCandidates = documentKnowledgeService.elevateToParentBlocks(
             mergedCandidates,
             properties.getParentEvidenceMaxChars()
@@ -238,20 +237,33 @@ public class RagRetrievalEngine {
             .toList();
     }
 
-    private List<Document> fuseByRrf(List<RetrievalChannelResult> channelResults) {
+    private List<Document> fuseByWeightedHybrid(List<RetrievalChannelResult> channelResults,
+                                                String subQuestion,
+                                                ConversationExecutionPlan plan) {
         Map<String, CandidateHolder> holders = new LinkedHashMap<>();
+        Map<String, Double> channelMaxScoreMap = resolveChannelMaxScoreMap(channelResults);
+        List<String> metadataBoostTerms = buildMetadataBoostTerms(subQuestion, plan);
 
         for (RetrievalChannelResult retrievalChannelResult : channelResults) {
-            accumulateRrf(retrievalChannelResult, holders);
+            accumulateWeightedHybrid(retrievalChannelResult, holders, channelMaxScoreMap, metadataBoostTerms);
         }
 
         return holders.values().stream()
+            .peek(this::finishHybridScore)
             .sorted((left, right) -> Double.compare(right.score, left.score))
             .limit(properties.getCandidateTopK())
             .map(holder -> {
 
                 holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.SCORE, holder.score);
-                holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.RRF_SCORE, holder.score);
+                holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.RRF_SCORE, holder.rrfScore);
+                holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.HYBRID_SCORE, holder.score);
+                holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.METADATA_BOOST, holder.metadataBoost);
+                if (holder.vectorScore != null) {
+                    holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.VECTOR_SCORE, holder.vectorScore);
+                }
+                if (holder.keywordScore != null) {
+                    holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE, holder.keywordScore);
+                }
                 holder.document.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL,
                     holder.channels.size() > 1 ? "hybrid" : holder.channels.iterator().next());
                 return holder.document;
@@ -259,17 +271,202 @@ public class RagRetrievalEngine {
             .toList();
     }
 
-    private void accumulateRrf(RetrievalChannelResult channelResult, Map<String, CandidateHolder> holders) {
+    private Map<String, Double> resolveChannelMaxScoreMap(List<RetrievalChannelResult> channelResults) {
+        Map<String, Double> maxScoreMap = new LinkedHashMap<>();
+        for (RetrievalChannelResult channelResult : channelResults == null ? List.<RetrievalChannelResult>of() : channelResults) {
+            if (channelResult == null || channelResult.getDocuments() == null) {
+                continue;
+            }
+            double maxScore = channelResult.getDocuments().stream()
+                .map(this::resolveScore)
+                .filter(Objects::nonNull)
+                .mapToDouble(Double::doubleValue)
+                .max()
+                .orElse(0D);
+            maxScoreMap.put(channelResult.getChannelName(), Math.max(maxScore, 0D));
+        }
+        return maxScoreMap;
+    }
+
+    private void accumulateWeightedHybrid(RetrievalChannelResult channelResult,
+                                          Map<String, CandidateHolder> holders,
+                                          Map<String, Double> channelMaxScoreMap,
+                                          List<String> metadataBoostTerms) {
+        if (channelResult == null || channelResult.getDocuments() == null) {
+            return;
+        }
         List<Document> documents = channelResult.getDocuments();
         for (int rank = 0; rank < documents.size(); rank++) {
             Document document = documents.get(rank);
             String documentId = document.getId();
 
             double rrfScore = 1D / (RRF_K + rank + 1);
+            double normalizedRankScore = (RRF_K + 1D) * rrfScore;
+            Double originalScore = resolveScore(document);
+            double normalizedOriginalScore = normalizeOriginalScore(
+                originalScore,
+                channelMaxScoreMap.getOrDefault(channelResult.getChannelName(), 0D)
+            );
+            double channelWeight = resolveChannelWeight(channelResult.getChannelName());
+            if (RetrievalChannelEnum.VECTOR.getName().equals(channelResult.getChannelName()) && originalScore != null) {
+                document.getMetadata().put(DocumentKnowledgeMetadataKeys.VECTOR_SCORE, originalScore);
+            }
+            if (RetrievalChannelEnum.KEYWORD.getName().equals(channelResult.getChannelName()) && originalScore != null) {
+                document.getMetadata().put(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE, originalScore);
+            }
             CandidateHolder holder = holders.computeIfAbsent(documentId, ignored -> new CandidateHolder(document));
-            holder.score += rrfScore;
+            holder.rrfScore += rrfScore;
+            holder.rankScore += channelWeight * hybridRankWeight() * normalizedRankScore;
+            holder.originalScore += channelWeight * hybridOriginalScoreWeight() * normalizedOriginalScore;
+            holder.metadataBoost = Math.max(holder.metadataBoost, calculateMetadataBoost(document, metadataBoostTerms));
             holder.channels.add(channelResult.getChannelName());
+            if (RetrievalChannelEnum.VECTOR.getName().equals(channelResult.getChannelName()) && originalScore != null) {
+                holder.vectorScore = originalScore;
+            }
+            if (RetrievalChannelEnum.KEYWORD.getName().equals(channelResult.getChannelName()) && originalScore != null) {
+                holder.keywordScore = originalScore;
+            }
         }
+    }
+
+    private void finishHybridScore(CandidateHolder holder) {
+        holder.score = holder.rankScore
+            + holder.originalScore
+            + hybridMetadataBoostWeight() * Math.min(holder.metadataBoost, hybridMaxMetadataBoost());
+    }
+
+    private double normalizeOriginalScore(Double originalScore, double channelMaxScore) {
+        if (originalScore == null || originalScore <= 0D || channelMaxScore <= 0D) {
+            return 0D;
+        }
+        return Math.min(1D, originalScore / channelMaxScore);
+    }
+
+    private double resolveChannelWeight(String channelName) {
+        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
+            return hybrid == null ? 1D : Math.max(0D, hybrid.getVectorWeight());
+        }
+        if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+            return hybrid == null ? 1D : Math.max(0D, hybrid.getKeywordWeight());
+        }
+        return 1D;
+    }
+
+    private double hybridRankWeight() {
+        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        return hybrid == null ? 1D : Math.max(0D, hybrid.getRankWeight());
+    }
+
+    private double hybridOriginalScoreWeight() {
+        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        return hybrid == null ? 0.08D : Math.max(0D, hybrid.getOriginalScoreWeight());
+    }
+
+    private double hybridMetadataBoostWeight() {
+        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        return hybrid == null ? 0.04D : Math.max(0D, hybrid.getMetadataBoostWeight());
+    }
+
+    private double hybridMaxMetadataBoost() {
+        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        return hybrid == null ? 1D : Math.max(0D, hybrid.getMaxMetadataBoost());
+    }
+
+    private List<String> buildMetadataBoostTerms(String subQuestion, ConversationExecutionPlan plan) {
+        LinkedHashSet<String> terms = new LinkedHashSet<>();
+        appendBoostTerms(terms, subQuestion);
+        if (plan != null) {
+            appendBoostTerms(terms, plan.getRetrievalQuestion());
+            appendBoostTerms(terms, plan.getRewriteQuestion());
+            if (plan.getNavigationDecision() != null) {
+                appendBoostTerms(terms, plan.getNavigationDecision().getQueryContextHints());
+                appendBoostTerms(terms, plan.getNavigationDecision().getSoftSectionHints());
+            }
+            if (plan.getHistoryPlanningContext() != null) {
+                appendBoostTerms(terms, plan.getHistoryPlanningContext().getQueryContextHints());
+            }
+        }
+        return terms.stream()
+            .map(this::normalizeBoostText)
+            .filter(term -> term.length() >= 2)
+            .distinct()
+            .limit(30)
+            .toList();
+    }
+
+    private void appendBoostTerms(LinkedHashSet<String> terms, List<String> values) {
+        if (values == null) {
+            return;
+        }
+        values.forEach(value -> appendBoostTerms(terms, value));
+    }
+
+    private void appendBoostTerms(LinkedHashSet<String> terms, String text) {
+        String normalized = safeText(text);
+        if (normalized.isBlank()) {
+            return;
+        }
+        if (normalized.length() <= 24) {
+            terms.add(normalized);
+        }
+        for (String segment : normalized.split("[\\s、，,；;：:（）()\\-的和及与或]+")) {
+            String trimmed = segment.trim();
+            if (trimmed.length() >= 2) {
+                terms.add(trimmed);
+            }
+        }
+    }
+
+    private double calculateMetadataBoost(Document document, List<String> terms) {
+        if (document == null || document.getMetadata() == null || terms == null || terms.isEmpty()) {
+            return 0D;
+        }
+        double boost = 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.TITLE) ? 0.30D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.SECTION_PATH) ? 0.22D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.KEYWORDS) ? 0.18D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.QUESTIONS) ? 0.14D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_NAME) ? 0.10D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME) ? 0.08D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY) ? 0.06D : 0D;
+        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS) ? 0.06D : 0D;
+        boost += chunkTypeBoost(document, terms);
+        return Math.min(boost, hybridMaxMetadataBoost());
+    }
+
+    private boolean containsAnyMetadataTerm(Document document, List<String> terms, String metadataKey) {
+        String metadataText = normalizeBoostText(safeText(document.getMetadata().get(metadataKey)));
+        if (metadataText.isBlank()) {
+            return false;
+        }
+        return terms.stream().anyMatch(term -> term.length() >= 2 && metadataText.contains(term));
+    }
+
+    private double chunkTypeBoost(Document document, List<String> terms) {
+        String chunkType = normalizeBoostText(safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE)));
+        if (chunkType.isBlank()) {
+            return 0D;
+        }
+        String queryText = String.join(" ", terms);
+        if ("table".equals(chunkType) && (queryText.contains("表") || queryText.contains("字段") || queryText.contains("数据"))) {
+            return 0.08D;
+        }
+        if (("image".equals(chunkType) || "figure".equals(chunkType))
+            && (queryText.contains("图") || queryText.contains("图片") || queryText.contains("截图"))) {
+            return 0.08D;
+        }
+        return 0D;
+    }
+
+    private String normalizeBoostText(String value) {
+        return safeText(value)
+            .replaceAll("[\\s>`*#_\\-，,。；;：:（）()“”\"'\\[\\]{}]+", "")
+            .toLowerCase(Locale.ROOT);
+    }
+
+    private String safeText(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 
     private List<Document> applyRerank(String subQuestion,
@@ -280,7 +477,7 @@ public class RagRetrievalEngine {
         }
 
         markUsedChannel(usedChannels, RetrievalChannelEnum.RERANK.getName());
-        return rerankPostProcessor.process(new Query(subQuestion), candidates);
+        return ragRerankService.rerank(subQuestion, candidates);
     }
 
     private void assignReferenceIds(List<SubQuestionEvidence> evidenceList) {
@@ -431,11 +628,19 @@ public class RagRetrievalEngine {
                                                    List<Document> finalDocuments) {
         List<RetrievalResultView> results = new ArrayList<>();
         Map<String, Integer> finalRankMap = new LinkedHashMap<>();
+        Map<String, Document> mergedCandidateMap = new LinkedHashMap<>();
         if (finalDocuments != null) {
             for (int i = 0; i < finalDocuments.size(); i++) {
                 String docId = finalDocuments.get(i).getId();
                 if (docId != null) {
                     finalRankMap.put(docId, i + 1);
+                }
+            }
+        }
+        if (mergedCandidates != null) {
+            for (Document document : mergedCandidates) {
+                if (document.getId() != null) {
+                    mergedCandidateMap.put(document.getId(), document);
                 }
             }
         }
@@ -450,6 +655,8 @@ public class RagRetrievalEngine {
 
                 for (int i = 0; i < rawDocs.size(); i++) {
                     Document doc = rawDocs.get(i);
+                    Document mergedDoc = doc.getId() == null ? null : mergedCandidateMap.get(doc.getId());
+                    Map<String, Object> scoreMetadata = mergedDoc == null ? doc.getMetadata() : mergedDoc.getMetadata();
                     RetrievalResultView view = new RetrievalResultView();
                     view.setId(traceRecorder.exchangeId());
                     view.setTraceId(traceRecorder.traceId());
@@ -458,14 +665,34 @@ public class RagRetrievalEngine {
                     view.setChannelType(channelName);
                     view.setChannelRank(i + 1);
 
-                    Object scoreObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.SCORE);
-                    if (scoreObj instanceof Number) {
-                        view.setOriginalScore(BigDecimal.valueOf(((Number) scoreObj).doubleValue()));
+                    Double originalScore = resolveTraceOriginalScore(doc, channelName);
+                    if (originalScore != null) {
+                        view.setOriginalScore(BigDecimal.valueOf(originalScore));
                     }
 
-                    Object rrfScoreObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.RRF_SCORE);
+                    Object rrfScoreObj = scoreMetadata.get(DocumentKnowledgeMetadataKeys.RRF_SCORE);
                     if (rrfScoreObj instanceof Number) {
                         view.setRrfScore(BigDecimal.valueOf(((Number) rrfScoreObj).doubleValue()));
+                    }
+
+                    Object hybridScoreObj = scoreMetadata.get(DocumentKnowledgeMetadataKeys.HYBRID_SCORE);
+                    if (hybridScoreObj instanceof Number) {
+                        view.setHybridScore(BigDecimal.valueOf(((Number) hybridScoreObj).doubleValue()));
+                    }
+
+                    Object metadataBoostObj = scoreMetadata.get(DocumentKnowledgeMetadataKeys.METADATA_BOOST);
+                    if (metadataBoostObj instanceof Number) {
+                        view.setMetadataBoost(BigDecimal.valueOf(((Number) metadataBoostObj).doubleValue()));
+                    }
+
+                    Object vectorScoreObj = scoreMetadata.get(DocumentKnowledgeMetadataKeys.VECTOR_SCORE);
+                    if (vectorScoreObj instanceof Number) {
+                        view.setVectorScore(BigDecimal.valueOf(((Number) vectorScoreObj).doubleValue()));
+                    }
+
+                    Object keywordScoreObj = scoreMetadata.get(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE);
+                    if (keywordScoreObj instanceof Number) {
+                        view.setKeywordScore(BigDecimal.valueOf(((Number) keywordScoreObj).doubleValue()));
                     }
 
                     Object rerankScoreObj = doc.getMetadata().get("rerankScore");
@@ -518,8 +745,7 @@ public class RagRetrievalEngine {
                         view.setSelectionReason("已选入最终 Prompt");
                     } else if (!passedGate) {
 
-                        Object scoreObj2 = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.SCORE);
-                        double score = scoreObj2 instanceof Number ? ((Number) scoreObj2).doubleValue() : 0.0;
+                        double score = originalScore == null ? 0D : originalScore;
                         if ("vector".equals(channelName)) {
                             view.setSelectionReason(String.format(
                                 "向量闸门过滤：分数 %.4f < 阈值 %.4f",
@@ -545,11 +771,34 @@ public class RagRetrievalEngine {
         traceRecorder.recordRetrievalResults(results);
     }
 
+    private Double resolveTraceOriginalScore(Document document, String channelName) {
+        if (document == null || document.getMetadata() == null) {
+            return null;
+        }
+        Object scoreObj = null;
+        if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
+            scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.VECTOR_SCORE);
+        }
+        if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+            scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE);
+        }
+        if (!(scoreObj instanceof Number)) {
+            scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.SCORE);
+        }
+        return scoreObj instanceof Number number ? number.doubleValue() : null;
+    }
+
     private static class CandidateHolder {
 
         private final Document document;
         private final LinkedHashSet<String> channels = new LinkedHashSet<>();
+        private double rrfScore;
+        private double rankScore;
+        private double originalScore;
+        private double metadataBoost;
         private double score;
+        private Double vectorScore;
+        private Double keywordScore;
 
         private CandidateHolder(Document document) {
             this.document = document;

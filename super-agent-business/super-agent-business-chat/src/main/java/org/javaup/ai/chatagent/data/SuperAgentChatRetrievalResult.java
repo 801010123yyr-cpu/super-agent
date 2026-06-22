@@ -61,6 +61,18 @@ public class SuperAgentChatRetrievalResult extends BaseTableData {
     @TableField("rrf_score")
     private BigDecimal rrfScore;
 
+    @TableField("hybrid_score")
+    private BigDecimal hybridScore;
+
+    @TableField("metadata_boost")
+    private BigDecimal metadataBoost;
+
+    @TableField("vector_score")
+    private BigDecimal vectorScore;
+
+    @TableField("keyword_score")
+    private BigDecimal keywordScore;
+
     @TableField("rerank_score")
     private BigDecimal rerankScore;
 

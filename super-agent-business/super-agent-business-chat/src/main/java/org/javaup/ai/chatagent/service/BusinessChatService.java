@@ -24,6 +24,7 @@ import org.javaup.ai.chatagent.model.debug.ChatDebugTrace;
 import org.javaup.ai.chatagent.rag.executor.ConversationExecutor;
 import org.javaup.ai.chatagent.rag.executor.ConversationExecutorRegistry;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.service.RagCitationRepairService;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.chatagent.rag.service.ChatPreparationOrchestrator;
@@ -97,6 +98,7 @@ public class BusinessChatService {
     private final RetrievalObserveStore retrievalObserveStore;
     private final StageBenchmarkService stageBenchmarkService;
     private final PromptTemplateService promptTemplateService;
+    private final RagCitationRepairService ragCitationRepairService;
 
     public Flux<String> openConversationStream(ChatRequestDto request) {
 
@@ -569,6 +571,21 @@ public class BusinessChatService {
                 "正在收尾已完成会话。",
                 null
             );
+        try {
+            uniqueReferences = deduplicateReferences(ragCitationRepairService.repair(
+                answer,
+                uniqueReferences,
+                taskInfo.traceRecorder(),
+                taskInfo.executionPlan() == null || taskInfo.executionPlan().getMode() == null ? "" : taskInfo.executionPlan().getMode().name()
+            ));
+            if (uniqueReferences.stream().anyMatch(SearchReference::isCitationRepaired)) {
+                taskInfo.usedTools().add("citation-repair");
+            }
+        }
+        catch (RuntimeException exception) {
+            finishPostProcessFailure(taskInfo, finalizeStage, "引用修复失败。", exception, answer);
+            return;
+        }
         ConversationTraceRecorder.StageHandle recommendationStage = taskInfo.traceRecorder() == null
             ? null
             : taskInfo.traceRecorder().startStage(
@@ -646,6 +663,66 @@ public class BusinessChatService {
                 log.error("成功会话收尾落库失败, conversationId={}, exchangeId={}", taskInfo.conversationId(), taskInfo.exchangeId(), exception);
                 if (taskInfo.traceRecorder() != null) {
                     taskInfo.traceRecorder().failStage(finalizeStage, "完成态收尾失败。", exception.getMessage(), null);
+                }
+            }
+            finally {
+                safeRefreshConversationSummary(taskInfo.conversationId());
+                cleanup(taskInfo);
+            }
+        }
+    }
+
+    private void finishPostProcessFailure(TaskInfo taskInfo,
+                                          ConversationTraceRecorder.StageHandle finalizeStage,
+                                          String stageMessage,
+                                          RuntimeException error,
+                                          String answer) {
+        String errorMessage = buildErrorMessage(error);
+        log.error("会话后处理失败, conversationId={}, exchangeId={}, error={}",
+            taskInfo.conversationId(),
+            taskInfo.exchangeId(),
+            errorMessage,
+            error);
+        try {
+            safeEmit(taskInfo.sink(), streamEventWriter.error(errorMessage, taskInfo.eventMetadata()));
+        }
+        catch (RuntimeException emitException) {
+            log.warn("发送后处理失败事件失败, conversationId={}, exchangeId={}", taskInfo.conversationId(), taskInfo.exchangeId(), emitException);
+        }
+        finally {
+            try {
+                safeComplete(taskInfo.sink());
+            }
+            catch (RuntimeException completeException) {
+                log.warn("关闭后处理失败的 SSE 流失败, conversationId={}, exchangeId={}", taskInfo.conversationId(), taskInfo.exchangeId(), completeException);
+            }
+            try {
+                refreshDebugTraceRuntimeStats(taskInfo);
+                conversationArchiveStore.completeExchange(
+                    taskInfo.conversationId(),
+                    taskInfo.exchangeId(),
+                    answer,
+                    snapshotStringList(taskInfo.thinkingSteps()),
+                    List.of(),
+                    List.of(),
+                    snapshotUsedTools(taskInfo.usedTools()),
+                    taskInfo.debugTrace(),
+                    ChatTurnStatus.FAILED,
+                    errorMessage,
+                    toNullable(taskInfo.firstResponseTimeMs().get()),
+                    System.currentTimeMillis() - taskInfo.startTime()
+                );
+                if (taskInfo.traceRecorder() != null) {
+                    taskInfo.traceRecorder().failStage(finalizeStage, stageMessage, errorMessage, Map.of(
+                        "finalStatus", ChatTurnStatus.FAILED.name(),
+                        "answerLength", answer == null ? 0 : answer.length()
+                    ));
+                }
+            }
+            catch (RuntimeException archiveException) {
+                log.error("后处理失败会话落库失败, conversationId={}, exchangeId={}", taskInfo.conversationId(), taskInfo.exchangeId(), archiveException);
+                if (taskInfo.traceRecorder() != null) {
+                    taskInfo.traceRecorder().failStage(finalizeStage, "后处理失败态收尾失败。", archiveException.getMessage(), null);
                 }
             }
             finally {

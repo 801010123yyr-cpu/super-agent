@@ -53,6 +53,10 @@ public final class SearchReferenceMapper {
         reference.setItemIndex(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.ITEM_INDEX)));
         reference.setKnowledgeScopeCode(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE), ""));
         reference.setKnowledgeScopeName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME), ""));
+        reference.setPageNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_NO)));
+        reference.setPageRange(asText(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_RANGE), ""));
+        reference.setBboxJson(asText(metadata.get(DocumentKnowledgeMetadataKeys.BBOX_JSON), ""));
+        reference.setSourceBlockIds(asText(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS), ""));
         return reference;
     }
 

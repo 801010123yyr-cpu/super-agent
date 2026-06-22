@@ -60,6 +60,10 @@ public class MybatisRetrievalObserveStore implements RetrievalObserveStore {
             entity.setFinalRank(view.getFinalRank());
             entity.setOriginalScore(view.getOriginalScore());
             entity.setRrfScore(view.getRrfScore());
+            entity.setHybridScore(view.getHybridScore());
+            entity.setMetadataBoost(view.getMetadataBoost());
+            entity.setVectorScore(view.getVectorScore());
+            entity.setKeywordScore(view.getKeywordScore());
             entity.setRerankScore(view.getRerankScore());
             entity.setGatePassed(view.isGatePassed() ? 1 : 0);
             entity.setIsElevated(view.isElevated() ? 1 : 0);
@@ -165,6 +169,10 @@ public class MybatisRetrievalObserveStore implements RetrievalObserveStore {
             entity.getFinalRank(),
             entity.getOriginalScore(),
             entity.getRrfScore(),
+            entity.getHybridScore(),
+            entity.getMetadataBoost(),
+            entity.getVectorScore(),
+            entity.getKeywordScore(),
             entity.getRerankScore(),
             entity.getGatePassed() != null && entity.getGatePassed() == 1,
             entity.getIsElevated() != null && entity.getIsElevated() == 1,

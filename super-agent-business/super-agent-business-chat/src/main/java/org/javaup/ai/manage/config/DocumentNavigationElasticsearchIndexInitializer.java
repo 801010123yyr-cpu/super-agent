@@ -47,12 +47,7 @@ public class DocumentNavigationElasticsearchIndexInitializer {
                 indexName, analyzer, searchAnalyzer);
         }
         catch (IOException exception) {
-            if (isIkAnalyzer(analyzer) || isIkAnalyzer(searchAnalyzer)) {
-                log.warn("使用 IK 分词器创建导航索引失败，准备回退到 standard。原因: {}", exception.getMessage());
-                fallbackToStandard(indexName);
-                return;
-            }
-            log.error("初始化导航索引失败: {}", exception.getMessage(), exception);
+            throw new IllegalStateException("初始化 Elasticsearch 导航索引失败: " + exception.getMessage(), exception);
         }
     }
 
@@ -90,20 +85,4 @@ public class DocumentNavigationElasticsearchIndexInitializer {
         );
     }
 
-    private boolean isIkAnalyzer(String analyzer) {
-        return analyzer != null && analyzer.startsWith("ik_");
-    }
-
-    private void fallbackToStandard(String indexName) {
-        try {
-            if (indexExists(indexName)) {
-                return;
-            }
-            createIndex(indexName, "standard", "standard");
-            log.info("Elasticsearch 导航索引 [{}] 已回退到 standard 分词器。", indexName);
-        }
-        catch (IOException exception) {
-            log.error("回退创建导航索引失败: {}", exception.getMessage(), exception);
-        }
-    }
 }

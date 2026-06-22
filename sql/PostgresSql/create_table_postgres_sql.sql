@@ -18,8 +18,17 @@ CREATE TABLE IF NOT EXISTS public.super_agent_document_embedding (
     canonical_path VARCHAR(1000),
     item_index INTEGER,
     chunk_text TEXT NOT NULL,
+    content_with_weight TEXT,
+    chunk_type VARCHAR(32),
+    title VARCHAR(1000),
+    keywords TEXT,
+    questions TEXT,
     char_count INTEGER DEFAULT 0,
     token_count INTEGER DEFAULT 0,
+    page_no INTEGER,
+    page_range VARCHAR(64),
+    bbox_json TEXT,
+    source_block_ids TEXT,
     embedding_model VARCHAR(128),
     metadata_json JSONB DEFAULT '{}'::jsonb,
     embedding VECTOR NOT NULL,
@@ -43,8 +52,17 @@ COMMENT ON COLUMN public.super_agent_document_embedding.structure_node_type IS '
 COMMENT ON COLUMN public.super_agent_document_embedding.canonical_path IS '结构节点稳定路径';
 COMMENT ON COLUMN public.super_agent_document_embedding.item_index IS '列表项/步骤项序号';
 COMMENT ON COLUMN public.super_agent_document_embedding.chunk_text IS '切块文本内容';
+COMMENT ON COLUMN public.super_agent_document_embedding.content_with_weight IS '带标题/章节/关键词/问题等权重信息的检索文本';
+COMMENT ON COLUMN public.super_agent_document_embedding.chunk_type IS 'chunk类型 TEXT/TITLE/TABLE/IMAGE/FIGURE/CODE/FORMULA/MIXED';
+COMMENT ON COLUMN public.super_agent_document_embedding.title IS 'chunk所属标题或章节标题';
+COMMENT ON COLUMN public.super_agent_document_embedding.keywords IS 'chunk关键词 JSON 数组';
+COMMENT ON COLUMN public.super_agent_document_embedding.questions IS 'chunk典型问题 JSON 数组';
 COMMENT ON COLUMN public.super_agent_document_embedding.char_count IS '字符数';
 COMMENT ON COLUMN public.super_agent_document_embedding.token_count IS 'token数';
+COMMENT ON COLUMN public.super_agent_document_embedding.page_no IS '命中块所在页码';
+COMMENT ON COLUMN public.super_agent_document_embedding.page_range IS '命中块覆盖页码范围';
+COMMENT ON COLUMN public.super_agent_document_embedding.bbox_json IS '命中块版面坐标JSON';
+COMMENT ON COLUMN public.super_agent_document_embedding.source_block_ids IS 'chunk来源document_block id列表JSON';
 COMMENT ON COLUMN public.super_agent_document_embedding.embedding_model IS 'embedding 模型名称';
 COMMENT ON COLUMN public.super_agent_document_embedding.metadata_json IS '向量检索附带元数据';
 COMMENT ON COLUMN public.super_agent_document_embedding.embedding IS '向量值';
@@ -63,6 +81,9 @@ CREATE INDEX IF NOT EXISTS idx_super_agent_document_embedding_plan_id
 
 CREATE INDEX IF NOT EXISTS idx_super_agent_document_embedding_parent_block_id
     ON public.super_agent_document_embedding (parent_block_id);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_document_embedding_chunk_type
+    ON public.super_agent_document_embedding (chunk_type);
 
 CREATE INDEX IF NOT EXISTS idx_super_agent_document_embedding_status
     ON public.super_agent_document_embedding (status);

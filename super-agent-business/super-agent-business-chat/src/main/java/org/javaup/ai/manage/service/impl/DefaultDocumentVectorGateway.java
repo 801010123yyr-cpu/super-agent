@@ -45,9 +45,10 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
     private static final String UPSERT_SQL_TEMPLATE = """
         INSERT INTO %s
         (id, document_id, task_id, plan_id, parent_block_id, chunk_no, source_type, section_path, structure_node_id,
-         structure_node_type, canonical_path, item_index, chunk_text, char_count, token_count, embedding_model,
+         structure_node_type, canonical_path, item_index, chunk_text, content_with_weight, chunk_type, title, keywords,
+         questions, char_count, token_count, page_no, page_range, bbox_json, source_block_ids, embedding_model,
          metadata_json, embedding, create_time, edit_time, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS vector), NOW(), NOW(), ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS vector), NOW(), NOW(), ?)
         ON CONFLICT (id) DO UPDATE SET
             document_id = EXCLUDED.document_id,
             task_id = EXCLUDED.task_id,
@@ -61,8 +62,17 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
             canonical_path = EXCLUDED.canonical_path,
             item_index = EXCLUDED.item_index,
             chunk_text = EXCLUDED.chunk_text,
+            content_with_weight = EXCLUDED.content_with_weight,
+            chunk_type = EXCLUDED.chunk_type,
+            title = EXCLUDED.title,
+            keywords = EXCLUDED.keywords,
+            questions = EXCLUDED.questions,
             char_count = EXCLUDED.char_count,
             token_count = EXCLUDED.token_count,
+            page_no = EXCLUDED.page_no,
+            page_range = EXCLUDED.page_range,
+            bbox_json = EXCLUDED.bbox_json,
+            source_block_ids = EXCLUDED.source_block_ids,
             embedding_model = EXCLUDED.embedding_model,
             metadata_json = EXCLUDED.metadata_json,
             embedding = EXCLUDED.embedding,
@@ -92,7 +102,7 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
         EmbeddingModel embeddingModel = requireEmbeddingModel();
 
         List<SuperAgentDocumentChunk> validChunkList = chunkList.stream()
-            .filter(chunk -> chunk != null && StrUtil.isNotBlank(chunk.getChunkText()))
+            .filter(chunk -> chunk != null && StrUtil.isNotBlank(embeddingInput(chunk)))
             .toList();
         if (validChunkList.isEmpty()) {
             return;
@@ -115,7 +125,7 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
                 currentBatchIndex, totalBatchCount, startIndex + 1, endIndex, currentBatch.size());
 
             List<float[]> embeddingList = embeddingModel.embed(currentBatch.stream()
-                .map(SuperAgentDocumentChunk::getChunkText)
+                .map(this::embeddingInput)
                 .toList());
             if (embeddingList.size() != currentBatch.size()) {
                 throw new IllegalStateException("EmbeddingModel 返回的向量数量与 chunk 数量不一致。");
@@ -189,13 +199,27 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
                 ps.setString(11, chunk.getCanonicalPath());
                 ps.setInt(12, defaultInteger(chunk.getItemIndex()));
                 ps.setString(13, chunk.getChunkText());
-                ps.setInt(14, defaultInteger(chunk.getCharCount()));
-                ps.setInt(15, defaultInteger(chunk.getTokenCount()));
-                ps.setString(16, embeddingModelName);
-                ps.setString(17, metadataJson);
+                ps.setString(14, embeddingInput(chunk));
+                ps.setString(15, chunk.getChunkType());
+                ps.setString(16, chunk.getTitle());
+                ps.setString(17, chunk.getKeywords());
+                ps.setString(18, chunk.getQuestions());
+                ps.setInt(19, defaultInteger(chunk.getCharCount()));
+                ps.setInt(20, defaultInteger(chunk.getTokenCount()));
+                if (chunk.getPageNo() == null) {
+                    ps.setNull(21, Types.INTEGER);
+                }
+                else {
+                    ps.setInt(21, chunk.getPageNo());
+                }
+                ps.setString(22, chunk.getPageRange());
+                ps.setString(23, chunk.getBboxJson());
+                ps.setString(24, chunk.getSourceBlockIds());
+                ps.setString(25, embeddingModelName);
+                ps.setString(26, metadataJson);
 
-                ps.setString(18, toVectorLiteral(embedding));
-                ps.setInt(19, 1);
+                ps.setString(27, toVectorLiteral(embedding));
+                ps.setInt(28, 1);
             }
 
             @Override
@@ -228,8 +252,17 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
         metadata.put("structureNodeType", chunk.getStructureNodeType());
         metadata.put("canonicalPath", chunk.getCanonicalPath());
         metadata.put("itemIndex", chunk.getItemIndex());
+        metadata.put("contentWithWeight", embeddingInput(chunk));
+        metadata.put("chunkType", chunk.getChunkType());
+        metadata.put("title", chunk.getTitle());
+        metadata.put("keywords", chunk.getKeywords());
+        metadata.put("questions", chunk.getQuestions());
         metadata.put("charCount", chunk.getCharCount());
         metadata.put("tokenCount", chunk.getTokenCount());
+        metadata.put("pageNo", chunk.getPageNo());
+        metadata.put("pageRange", chunk.getPageRange());
+        metadata.put("bboxJson", chunk.getBboxJson());
+        metadata.put("sourceBlockIds", chunk.getSourceBlockIds());
         metadata.put("embeddingModel", embeddingModelName);
         try {
             return objectMapper.writeValueAsString(metadata);
@@ -269,6 +302,13 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
         return StrUtil.isNotBlank(embeddingModelName)
             ? embeddingModelName
             : "default";
+    }
+
+    private String embeddingInput(SuperAgentDocumentChunk chunk) {
+        if (chunk == null) {
+            return "";
+        }
+        return StrUtil.blankToDefault(chunk.getContentWithWeight(), chunk.getChunkText()).trim();
     }
 
     private int defaultInteger(Integer value) {

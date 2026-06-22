@@ -1,6 +1,7 @@
 package org.javaup.ai.manage.service;
 
 import org.javaup.ai.manage.data.SuperAgentDocument;
+import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
@@ -28,5 +29,5 @@ public interface DocumentStrategyService {
     List<ParentBlockCandidate> buildParentBlocks(SuperAgentDocument document,
                                                  SuperAgentDocumentStrategyPlan plan,
                                                  List<SuperAgentDocumentStrategyStep> steps,
-                                                 String parsedText);
+                                                 List<SuperAgentDocumentBlock> documentBlocks);
 }

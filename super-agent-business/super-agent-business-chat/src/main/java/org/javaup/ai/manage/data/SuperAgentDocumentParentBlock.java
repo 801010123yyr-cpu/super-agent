@@ -56,4 +56,8 @@ public class SuperAgentDocumentParentBlock extends BaseTableData {
     private Integer startChunkNo;
 
     private Integer endChunkNo;
+
+    private String pageRange;
+
+    private String sourceBlockIds;
 }

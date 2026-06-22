@@ -30,7 +30,7 @@ public enum ExecutionMode {
      * 普通知识库检索问答模式。
      *
      * <p>适用于大多数需要基于知识文档内容回答的问题。该模式由 {@code RagChatExecutor} 执行，会根据规划阶段
-     * 得到的检索问题、子问题、文档范围，走向量检索、关键词检索、RRF 融合、父块提升、可选 rerank、Prompt
+     * 得到的检索问题、子问题、文档范围，走向量检索、关键词检索、weighted hybrid 融合、父块提升、可选 rerank、Prompt
      * 预算组装，然后调用模型基于证据流式生成答案。</p>
      */
     RETRIEVAL,
@@ -51,14 +51,5 @@ public enum ExecutionMode {
      * 该模式由 {@code ClarificationExecutor} 执行，不进行检索或模型生成，而是直接返回澄清问题，
      * 引导用户补充更明确的文档名、主题或关键词。</p>
      */
-    CLARIFICATION,
-
-    /**
-     * 旧版 RAG 对话模式。
-     *
-     * <p>该枚举值已废弃，保留它主要是为了兼容历史数据、历史配置或旧路由结果。新的普通知识库问答应使用
-     * {@link #RETRIEVAL}，不要再为新逻辑依赖该模式。</p>
-     */
-    @Deprecated
-    RAG_CHAT
+    CLARIFICATION
 }

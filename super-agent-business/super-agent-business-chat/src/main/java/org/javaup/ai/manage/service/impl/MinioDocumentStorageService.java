@@ -52,6 +52,20 @@ public class MinioDocumentStorageService implements DocumentStorageService {
     }
 
     @Override
+    public String uploadParseArtifact(Long documentId, Long taskId, String fileName, byte[] bytes, String contentType) {
+        String safeFileName = StrUtil.blankToDefault(fileName, "artifact.bin")
+            .replace("/", "-")
+            .replace("\\", "-");
+        String objectName = properties.getMinio().getParseArtifactPrefix()
+            + "/" + documentId
+            + "/" + taskId
+            + "/" + System.currentTimeMillis()
+            + "-" + safeFileName;
+        upload(objectName, bytes == null ? new byte[0] : bytes, contentType);
+        return objectName;
+    }
+
+    @Override
     public byte[] downloadObject(String objectName) {
         try (InputStream inputStream = minioClient.getObject(
             GetObjectArgs.builder()

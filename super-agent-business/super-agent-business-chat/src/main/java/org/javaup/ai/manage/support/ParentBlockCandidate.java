@@ -34,10 +34,25 @@ public class ParentBlockCandidate {
 
     private List<ChunkCandidate> childChunks = new ArrayList<>();
 
+    private String pageRange;
+
+    private String sourceBlockIds;
+
+    public ParentBlockCandidate(String sectionPath,
+                                Long structureNodeId,
+                                Integer structureNodeType,
+                                String canonicalPath,
+                                Integer itemIndex,
+                                String text,
+                                Integer sourceType,
+                                List<ChunkCandidate> childChunks) {
+        this(sectionPath, structureNodeId, structureNodeType, canonicalPath, itemIndex, text, sourceType, childChunks, null, null);
+    }
+
     public ParentBlockCandidate(String sectionPath,
                                 String text,
                                 Integer sourceType,
                                 List<ChunkCandidate> childChunks) {
-        this(sectionPath, null, null, "", null, text, sourceType, childChunks);
+        this(sectionPath, null, null, "", null, text, sourceType, childChunks, null, null);
     }
 }
