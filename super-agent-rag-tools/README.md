@@ -13,60 +13,17 @@
 
 Java 仍然负责 RAG 主链路编排、检索融合、Parent/Child 切块、证据组织、回答生成和引用事件发送；Python 只作为工具服务承接 Java 不适合直接实现的解析、OCR、layout、table/image、rerank、citation repair、GraphRAG 抽取、RAPTOR 摘要树构建等能力。当前 `/rerank` 是唯一 rerank 通道，`/document/parse` 是唯一文档解析通道；旧 HTTP rerank 和 Tika 主解析链路都已删除，不保留旧逻辑兜底。
 
-## 启动
+## 启动和验证入口
 
-推荐通过根目录 Docker Compose 启动：
+本文档只说明 Python 工具服务定位、接口和能力边界。项目启动、Python 本地开发模式、接口 curl 验证、Java/Vue 启动、完整 RAG 验证流程统一看：
 
-```bash
-docker compose up -d rag-tools
+```text
+document/项目启动与完整验证手册-P.md
 ```
 
-本地 Python 开发模式：
+不要在本 README 里维护第二套启动命令，避免后续 AI 工具看到多个入口后产生不一致改造。
 
-```bash
-cd super-agent-rag-tools
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn rag_tools.main:app --host 0.0.0.0 --port 18080
-```
-
-## 验证
-
-```bash
-curl http://127.0.0.1:18080/health
-```
-
-```bash
-curl -X POST http://127.0.0.1:18080/rerank \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"报销时限","topK":2,"candidates":[{"id":"1","text":"出差结束后 10 个工作日内提交报销。"},{"id":"2","text":"生产发布需要准备回滚方案。"}]}'
-```
-
-```bash
-CONTENT_BASE64=$(printf '# 报销制度\n\n出差结束后 10 个工作日内提交报销。' | base64)
-curl -X POST http://127.0.0.1:18080/document/parse \
-  -H 'Content-Type: application/json' \
-  -d '{"fileName":"demo.md","fileType":"MD","mimeType":"text/markdown","contentBase64":"'"$CONTENT_BASE64"'"}'
-```
-
-```bash
-curl -X POST http://127.0.0.1:18080/citation/repair \
-  -H 'Content-Type: application/json' \
-  -d '{"answer":"报销时限是出差结束后 10 个工作日内提交。","evidences":[{"id":"1","text":"出差结束后 10 个工作日内提交报销。","documentId":1,"chunkId":10,"pageNo":3,"bboxJson":"[0,0,10,10]"}]}'
-```
-
-```bash
-curl -X POST http://127.0.0.1:18080/graph/extract \
-  -H 'Content-Type: application/json' \
-  -d '{"documentId":1,"taskId":1,"chunks":[{"chunkId":10,"chunkNo":1,"text":"报销制度规定，员工出差结束后 10 个工作日内提交报销。","sectionPath":"报销制度"}]}'
-```
-
-```bash
-curl -X POST http://127.0.0.1:18080/raptor/build \
-  -H 'Content-Type: application/json' \
-  -d '{"documentId":1,"taskId":1,"chunks":[{"chunkId":10,"chunkNo":1,"text":"报销制度规定，员工出差结束后 10 个工作日内提交报销。","sectionPath":"报销制度"},{"chunkId":11,"chunkNo":2,"text":"生产发布需要准备回滚方案。","sectionPath":"发布流程"}],"maxClusterSize":6,"maxLevels":3}'
-```
+## 当前能力边界
 
 `/rerank` 当前使用无外部模型依赖的轻量词法排序，便于本地验证 Java -> Python rerank 闭环。后续可以在 Python 内部替换为 BGE/cross-encoder 等真实模型，但 Java 主链路仍保持 `RagRetrievalEngine -> RagRerankService -> RagToolsClient`。
 

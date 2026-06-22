@@ -72,11 +72,11 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, SOURCE_TYPE);
         metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, channelName());
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, result.getScore());
-        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, result.getDocumentId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID, result.getDocumentId());
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, documentName);
-        metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());
-        metadata.put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
-        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_ID, result.getChunkId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.CHUNK_ID, result.getChunkId());
         metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, StrUtil.blankToDefault(result.getSectionPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, result.getPageNo());
         metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, StrUtil.blankToDefault(result.getPageRange(), ""));
@@ -84,18 +84,18 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "GRAPH_RAG");
         metadata.put(DocumentKnowledgeMetadataKeys.TITLE, StrUtil.blankToDefault(result.getGraphPath(), "GraphRAG 图谱证据"));
         metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, StrUtil.blankToDefault(result.getQuoteText(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, result.getEntityId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, result.getEntityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, StrUtil.blankToDefault(result.getEntityName(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, result.getRelatedEntityId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, result.getRelatedEntityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME, StrUtil.blankToDefault(result.getRelatedEntityName(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, result.getRelationId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_ID, result.getRelationId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, StrUtil.blankToDefault(result.getRelationType(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, StrUtil.blankToDefault(result.getGraphPath(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
 
         return Document.builder()
-            .id("graphrag-" + result.getEvidenceId())
+            .id(documentId(result))
             .text(text)
             .metadata(metadata)
             .score(result.getScore())
@@ -145,5 +145,18 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         if (value != null) {
             metadata.put(key, value);
         }
+    }
+
+    private String documentId(GraphRagSearchResult result) {
+        if (result.getEvidenceId() != null) {
+            return "graphrag-" + result.getEvidenceId();
+        }
+        if (result.getRelationId() != null) {
+            return "graphrag-relation-" + result.getRelationId();
+        }
+        if (result.getEntityId() != null) {
+            return "graphrag-entity-" + result.getEntityId();
+        }
+        return "graphrag-" + Integer.toHexString(System.identityHashCode(result));
     }
 }
