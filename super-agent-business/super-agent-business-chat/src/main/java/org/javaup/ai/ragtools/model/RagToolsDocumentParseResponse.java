@@ -72,6 +72,8 @@ public class RagToolsDocumentParseResponse {
 
         private String tableHtml;
 
+        private List<List<String>> tableRows;
+
         private String imageFileName;
 
         private String imageContentBase64;

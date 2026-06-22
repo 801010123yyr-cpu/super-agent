@@ -102,7 +102,7 @@ public class CompositeDocumentStructureGraphService implements DocumentStructure
             log.info("结构图服务选择 Neo4j: documentId={}", documentId);
             return neo4jGraphService;
         }
-        log.info("结构图服务选择 MySQL fallback: documentId={}, neo4jBeanAvailable={}", documentId, neo4jGraphService != null);
+        log.info("结构图服务选择 MySQL 权威结构节点表: documentId={}, neo4jBeanAvailable={}", documentId, neo4jGraphService != null);
         return mysqlGraphService;
     }
 }

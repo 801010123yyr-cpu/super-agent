@@ -67,6 +67,46 @@ public class SearchReference {
 
     private String sourceBlockIds;
 
+    private Long tableId;
+
+    private Integer tableNo;
+
+    private String tableTitle;
+
+    private String tableOperation;
+
+    private String tableMetricColumn;
+
+    private String tableGroupByColumn;
+
+    private Integer tableMatchedRowCount;
+
+    private Long kgEntityId;
+
+    private String kgEntityName;
+
+    private Long kgRelatedEntityId;
+
+    private String kgRelatedEntityName;
+
+    private Long kgRelationId;
+
+    private String kgRelationType;
+
+    private Long kgEvidenceId;
+
+    private String kgGraphPath;
+
+    private Integer kgHopCount;
+
+    private Long raptorNodeId;
+
+    private String raptorNodeTitle;
+
+    private Integer raptorNodeLevel;
+
+    private String raptorSummary;
+
     private String answerSegment;
 
     private String quoteText;
@@ -89,6 +129,19 @@ public class SearchReference {
     }
 
     public String uniqueKey() {
+        if (raptorNodeId != null && chunkId != null) {
+            return "RAPTOR:" + raptorNodeId + ":" + chunkId;
+        }
+        if (kgEvidenceId != null) {
+            return "GRAPH_RAG:" + kgEvidenceId;
+        }
+        if (tableId != null) {
+            return "TABLE:" + tableId
+                + ":" + (tableOperation == null ? "" : tableOperation)
+                + ":" + (tableMetricColumn == null ? "" : tableMetricColumn)
+                + ":" + (tableGroupByColumn == null ? "" : tableGroupByColumn)
+                + ":" + (snippet == null ? 0 : snippet.hashCode());
+        }
         if (parentBlockId != null) {
             return "PARENT:" + parentBlockId;
         }

@@ -169,7 +169,7 @@ def _parse_docx(content: bytes) -> list[DocumentBlock]:
             continue
         table_html = _table_html(rows)
         text = "\n".join(" | ".join(cell for cell in row if cell) for row in rows)
-        blocks.append(_block(block_no, "TABLE", text, table_html=table_html))
+        blocks.append(_block(block_no, "TABLE", text, table_html=table_html, table_rows=rows))
         block_no += 1
     return blocks
 
@@ -269,6 +269,7 @@ def _block(
     page_no: int | None = None,
     bbox_json: str = "",
     table_html: str = "",
+    table_rows: list[list[str]] | None = None,
 ) -> DocumentBlock:
     return DocumentBlock(
         blockNo=block_no,
@@ -278,6 +279,7 @@ def _block(
         bboxJson=bbox_json,
         text=text,
         tableHtml=table_html,
+        tableRows=table_rows or [],
         metadataJson=json_metadata({"parser": PARSER_NAME}),
     )
 

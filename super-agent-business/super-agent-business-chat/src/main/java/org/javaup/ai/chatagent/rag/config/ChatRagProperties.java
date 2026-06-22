@@ -29,6 +29,18 @@ public class ChatRagProperties {
 
     private int keywordTopK = 8;
 
+    private int graphRagTopK = 5;
+
+    private int graphRagMaxHops = 2;
+
+    private int raptorTopK = 5;
+
+    private int raptorSourceChunkTopK = 3;
+
+    private int raptorMaxClusterSize = 6;
+
+    private int raptorMaxLevels = 3;
+
     private int candidateTopK = 10;
 
     private int finalTopK = 5;
@@ -52,6 +64,12 @@ public class ChatRagProperties {
     private long subQuestionTimeoutMs = 12000L;
 
     private boolean keywordChannelEnabled = true;
+
+    private boolean tableChannelEnabled = true;
+
+    private boolean graphRagChannelEnabled = true;
+
+    private boolean raptorChannelEnabled = true;
 
     private HybridProperties hybrid = new HybridProperties();
 
@@ -95,6 +113,12 @@ public class ChatRagProperties {
         private double vectorWeight = 1.0D;
 
         private double keywordWeight = 1.0D;
+
+        private double tableWeight = 1.2D;
+
+        private double graphRagWeight = 1.1D;
+
+        private double raptorWeight = 1.05D;
 
         private double rankWeight = 1.0D;
 

@@ -514,6 +514,15 @@ export const manageApi = {
     })
   },
 
+  queryDocumentRagSnapshot(documentId) {
+    return requestApiEnvelope('/manage/document/rag/snapshot/query', {
+      method: 'POST',
+      body: stringifyManageValue({
+        documentId
+      })
+    })
+  },
+
   queryTaskLogs(payload) {
     return requestApiEnvelope('/manage/document/task/log/query', {
       method: 'POST',

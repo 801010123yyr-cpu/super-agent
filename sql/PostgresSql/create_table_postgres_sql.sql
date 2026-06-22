@@ -91,3 +91,64 @@ CREATE INDEX IF NOT EXISTS idx_super_agent_document_embedding_status
 -- 当前第一期为了兼容不同 embedding 模型的维度变化，embedding 字段使用未固定维度的 VECTOR 类型。
 -- 如果后续固定模型与维度，例如 1024 或 1536，
 -- 可以把字段改成 VECTOR(1024/1536) 并补充 HNSW 或 IVF_FLAT 向量索引。
+
+CREATE TABLE IF NOT EXISTS public.super_agent_raptor_embedding (
+    id BIGINT NOT NULL,
+    document_id BIGINT NOT NULL,
+    task_id BIGINT NOT NULL,
+    node_level INTEGER NOT NULL,
+    node_no INTEGER NOT NULL,
+    parent_node_id BIGINT,
+    title VARCHAR(500),
+    summary TEXT NOT NULL,
+    summary_with_weight TEXT,
+    source_chunk_ids_json TEXT,
+    source_parent_block_ids_json TEXT,
+    section_path VARCHAR(1000),
+    page_range VARCHAR(64),
+    keywords TEXT,
+    questions TEXT,
+    embedding_model VARCHAR(128),
+    metadata_json JSONB DEFAULT '{}'::jsonb,
+    embedding VECTOR NOT NULL,
+    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    edit_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status SMALLINT DEFAULT 1,
+    PRIMARY KEY (id)
+);
+
+COMMENT ON TABLE public.super_agent_raptor_embedding IS 'RAPTOR层级摘要向量表';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.id IS '主键id，复用 MySQL raptor_node 主键';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.document_id IS '文档id';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.task_id IS '索引任务id';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.node_level IS '摘要树层级，1为最贴近原文的摘要';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.node_no IS '同层节点序号';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.parent_node_id IS '父摘要节点id';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.title IS '摘要节点标题';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.summary IS '摘要文本';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.summary_with_weight IS '带标题/章节/关键词/问题的加权检索文本';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.source_chunk_ids_json IS '可下钻的原文chunk id JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.source_parent_block_ids_json IS '可下钻的父块id JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.section_path IS '摘要覆盖章节路径';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.page_range IS '摘要覆盖页码范围';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.keywords IS '摘要关键词 JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.questions IS '摘要典型问题 JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.embedding_model IS 'embedding 模型名称';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.metadata_json IS '摘要向量检索附带元数据';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.embedding IS '向量值';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.status IS '1:正常 0:删除';
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_document_id
+    ON public.super_agent_raptor_embedding (document_id);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_task_id
+    ON public.super_agent_raptor_embedding (task_id);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_level
+    ON public.super_agent_raptor_embedding (document_id, node_level);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_parent
+    ON public.super_agent_raptor_embedding (parent_node_id);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_status
+    ON public.super_agent_raptor_embedding (status);

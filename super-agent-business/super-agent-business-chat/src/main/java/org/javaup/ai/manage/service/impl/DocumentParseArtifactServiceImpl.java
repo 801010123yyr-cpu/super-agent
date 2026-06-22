@@ -11,6 +11,7 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentBlockMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentParseArtifactMapper;
 import org.javaup.ai.manage.service.DocumentParseArtifactService;
 import org.javaup.ai.manage.service.DocumentStorageService;
+import org.javaup.ai.manage.service.DocumentTableStructureService;
 import org.javaup.enums.BusinessStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +34,8 @@ public class DocumentParseArtifactServiceImpl implements DocumentParseArtifactSe
 
     private final DocumentStorageService storageService;
 
+    private final DocumentTableStructureService tableStructureService;
+
     private final UidGenerator uidGenerator;
 
     @Override
@@ -45,6 +48,7 @@ public class DocumentParseArtifactServiceImpl implements DocumentParseArtifactSe
         deleteByTask(documentId, taskId);
         saveArtifacts(documentId, taskId, artifactList);
         saveBlocks(documentId, taskId, blockList);
+        tableStructureService.replaceTaskTables(documentId, taskId, blockList);
     }
 
     @Override
@@ -135,6 +139,7 @@ public class DocumentParseArtifactServiceImpl implements DocumentParseArtifactSe
         if (documentId == null || taskId == null) {
             return;
         }
+        tableStructureService.deleteByTask(documentId, taskId);
         blockMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentBlock>()
             .eq(SuperAgentDocumentBlock::getDocumentId, documentId)
             .eq(SuperAgentDocumentBlock::getTaskId, taskId));
@@ -148,6 +153,7 @@ public class DocumentParseArtifactServiceImpl implements DocumentParseArtifactSe
         if (documentId == null) {
             return;
         }
+        tableStructureService.deleteByDocumentId(documentId);
         blockMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentBlock>()
             .eq(SuperAgentDocumentBlock::getDocumentId, documentId));
         artifactMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentParseArtifact>()

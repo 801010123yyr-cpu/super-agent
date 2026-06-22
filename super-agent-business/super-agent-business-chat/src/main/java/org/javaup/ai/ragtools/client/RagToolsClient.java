@@ -7,7 +7,11 @@ import org.javaup.ai.ragtools.model.RagToolsCitationRepairResponse;
 import org.javaup.ai.ragtools.config.RagToolsProperties;
 import org.javaup.ai.ragtools.model.RagToolsDocumentParseRequest;
 import org.javaup.ai.ragtools.model.RagToolsDocumentParseResponse;
+import org.javaup.ai.ragtools.model.RagToolsGraphExtractRequest;
+import org.javaup.ai.ragtools.model.RagToolsGraphExtractResponse;
 import org.javaup.ai.ragtools.model.RagToolsHealthResponse;
+import org.javaup.ai.ragtools.model.RagToolsRaptorBuildRequest;
+import org.javaup.ai.ragtools.model.RagToolsRaptorBuildResponse;
 import org.javaup.ai.ragtools.model.RagToolsRerankRequest;
 import org.javaup.ai.ragtools.model.RagToolsRerankResponse;
 import org.springframework.http.MediaType;
@@ -60,5 +64,23 @@ public class RagToolsClient {
             .body(request)
             .retrieve()
             .body(RagToolsCitationRepairResponse.class);
+    }
+
+    public RagToolsGraphExtractResponse extractGraph(RagToolsGraphExtractRequest request) {
+        return restClient.post()
+            .uri("/graph/extract")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(request)
+            .retrieve()
+            .body(RagToolsGraphExtractResponse.class);
+    }
+
+    public RagToolsRaptorBuildResponse buildRaptor(RagToolsRaptorBuildRequest request) {
+        return restClient.post()
+            .uri("/raptor/build")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(request)
+            .retrieve()
+            .body(RagToolsRaptorBuildResponse.class);
     }
 }

@@ -14,7 +14,13 @@ public enum RetrievalChannelEnum {
 
     VECTOR(2, "vector","向量检索"),
 
-    RERANK(3,"rerank","重排序");
+    RERANK(3,"rerank","重排序"),
+
+    TABLE(4, "table", "结构化表格检索"),
+
+    GRAPH_RAG(5, "graph-rag", "GraphRAG 图谱检索"),
+
+    RAPTOR(6, "raptor", "RAPTOR 层级摘要检索");
 
     @Getter
     private final int code;

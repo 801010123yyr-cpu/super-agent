@@ -6,8 +6,12 @@ from fastapi import FastAPI
 
 from rag_tools.citation_repair import repair_citations
 from rag_tools.document_parser import parse_document
+from rag_tools.graph_extract import extract_graph
+from rag_tools.raptor_build import build_raptor
 from rag_tools.schemas.citation_repair import CitationRepairRequest, CitationRepairResponse
 from rag_tools.schemas.document_parse import DocumentParseRequest, DocumentParseResponse
+from rag_tools.schemas.graph_extract import GraphExtractRequest, GraphExtractResponse
+from rag_tools.schemas.raptor_build import RaptorBuildRequest, RaptorBuildResponse
 from rag_tools.schemas.rerank import RerankRequest, RerankResponse, RerankResult
 
 SERVICE_NAME = "super-agent-rag-tools"
@@ -54,6 +58,16 @@ def document_parse(request: DocumentParseRequest) -> DocumentParseResponse:
 @app.post("/citation/repair", response_model=CitationRepairResponse)
 def citation_repair(request: CitationRepairRequest) -> CitationRepairResponse:
     return repair_citations(request)
+
+
+@app.post("/graph/extract", response_model=GraphExtractResponse)
+def graph_extract(request: GraphExtractRequest) -> GraphExtractResponse:
+    return extract_graph(request)
+
+
+@app.post("/raptor/build", response_model=RaptorBuildResponse)
+def raptor_build(request: RaptorBuildRequest) -> RaptorBuildResponse:
+    return build_raptor(request)
 
 
 def _score_candidate(query_terms: list[str], query_bigrams: set[str], text: str) -> float:

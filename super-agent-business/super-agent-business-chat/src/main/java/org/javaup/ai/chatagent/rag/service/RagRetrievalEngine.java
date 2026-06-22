@@ -350,6 +350,15 @@ public class RagRetrievalEngine {
         if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
             return hybrid == null ? 1D : Math.max(0D, hybrid.getKeywordWeight());
         }
+        if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
+            return hybrid == null ? 1.2D : Math.max(0D, hybrid.getTableWeight());
+        }
+        if (RetrievalChannelEnum.GRAPH_RAG.getName().equals(channelName)) {
+            return hybrid == null ? 1.1D : Math.max(0D, hybrid.getGraphRagWeight());
+        }
+        if (RetrievalChannelEnum.RAPTOR.getName().equals(channelName)) {
+            return hybrid == null ? 1.05D : Math.max(0D, hybrid.getRaptorWeight());
+        }
         return 1D;
     }
 
@@ -781,6 +790,9 @@ public class RagRetrievalEngine {
         }
         if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
             scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE);
+        }
+        if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
+            scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.SCORE);
         }
         if (!(scoreObj instanceof Number)) {
             scoreObj = document.getMetadata().get(DocumentKnowledgeMetadataKeys.SCORE);

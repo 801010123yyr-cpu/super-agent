@@ -5,7 +5,6 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
@@ -36,8 +35,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -81,48 +78,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
           AND task_id IN (%s)
         """;
 
-    private static final String KEYWORD_RETRIEVE_SQL_TEMPLATE = """
-        SELECT
-            id,
-            document_id,
-            task_id,
-            parent_block_id,
-            chunk_no,
-            section_path,
-            structure_node_id,
-            structure_node_type,
-            canonical_path,
-            item_index,
-            chunk_text,
-            content_with_weight,
-            chunk_type,
-            title,
-            keywords,
-            questions,
-            page_no,
-            page_range,
-            bbox_json,
-            source_block_ids,
-            (%s) AS keyword_score
-        FROM %s
-        WHERE status = 1
-          AND document_id IN (%s)
-          AND task_id IN (%s)
-          AND (%s)
-        """;
-
-    private static final Pattern ALNUM_TOKEN_PATTERN = Pattern.compile("[a-z0-9._-]{2,}");
-
-    private static final Pattern CHINESE_TOKEN_PATTERN = Pattern.compile("[\\p{IsHan}]{2,}");
-
-    private static final List<String> CHINESE_NOISE_PHRASES = List.of(
-        "请问", "帮我", "一下子", "一下", "如何", "怎么", "什么", "哪个", "这个", "那个", "是否", "关于", "可以", "需要", "想问", "看看"
-    );
-
-    private static final Pattern CHINESE_SEGMENT_SPLIT_PATTERN = Pattern.compile("[的和及与或]");
-
-    private static final int MAX_KEYWORD_TERMS = 8;
-
     private final SuperAgentDocumentMapper documentMapper;
     
     private final SuperAgentDocumentParentBlockMapper parentBlockMapper;
@@ -134,8 +89,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     
     private final ObjectProvider<DocumentKeywordSearchGateway> keywordSearchGatewayProvider;
     
-    private final DocumentManageProperties properties;
-
     @Override
     public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
 
@@ -241,9 +194,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return List.of();
         }
 
-        List<Long> documentIds = request.resolvedDocumentIds();
-        List<Long> taskIds = request.resolvedTaskIds();
-        Map<Long, KnowledgeDocumentDescriptor> descriptorMap = listDescriptorMap(documentIds);
         ResolvedMetadataScope resolvedScope = resolveMetadataScope(request);
         if (resolvedScope.documentIds().isEmpty() || resolvedScope.taskIds().isEmpty()) {
             return List.of();
@@ -262,84 +212,10 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         filteredRequest.setTaskIds(resolvedScope.taskIds());
 
         DocumentKeywordSearchGateway keywordSearchGateway = keywordSearchGatewayProvider.getIfAvailable();
-        if (Boolean.TRUE.equals(properties.getElasticsearch().getEnabled()) && keywordSearchGateway != null) {
-            return keywordSearchGateway.search(filteredRequest);
+        if (keywordSearchGateway == null) {
+            throw new IllegalStateException("当前未找到可用的 Elasticsearch/BM25 关键词检索服务，无法执行关键词检索。");
         }
-
-        List<String> terms = new ArrayList<>(extractKeywordTerms(request.getRetrievalQuery()));
-        terms.addAll(extractAuxiliaryKeywordTerms(request.getQueryContextHints()));
-        terms = new ArrayList<>(new LinkedHashSet<>(terms));
-        if (terms.isEmpty()) {
-            return List.of();
-        }
-
-        String scoreExpression = buildKeywordScoreExpression(terms.size());
-        String whereExpression = buildKeywordWhereExpression(terms.size());
-        StringBuilder sqlBuilder = new StringBuilder(KEYWORD_RETRIEVE_SQL_TEMPLATE.formatted(
-            scoreExpression,
-            DocumentPgVectorConstants.EMBEDDING_TABLE_NAME,
-            buildPlaceholders(resolvedScope.documentIds().size()),
-            buildPlaceholders(resolvedScope.taskIds().size()),
-            whereExpression
-        ));
-        appendSectionFilters(sqlBuilder, resolvedScope.filters());
-        sqlBuilder.append("""
-
-            ORDER BY keyword_score DESC, chunk_no ASC, id ASC
-            LIMIT ?
-            """);
-
-        List<Object> params = new ArrayList<>();
-
-        for (int index = 0; index < terms.size(); index++) {
-            String pattern = likePattern(terms.get(index));
-
-            params.add(pattern);
-            params.add(keywordWeight(index));
-            params.add(pattern);
-            params.add(sectionKeywordWeight(index));
-        }
-
-        params.addAll(resolvedScope.documentIds());
-        params.addAll(resolvedScope.taskIds());
-
-        for (String term : terms) {
-            params.add(likePattern(term));
-            params.add(likePattern(term));
-        }
-        appendSectionFilterParams(params, resolvedScope.filters());
-        params.add(resolveTopK(request.getTopK()));
-
-        return pgVectorJdbcTemplate.query(sqlBuilder.toString(), params.toArray(), (resultSet, rowNum) -> {
-            long chunkId = resultSet.getLong("id");
-            long documentId = resultSet.getLong("document_id");
-            double score = resultSet.getDouble("keyword_score");
-            KnowledgeDocumentDescriptor descriptor = descriptorMap.get(documentId);
-            return buildRetrievedDocument(
-                chunkId,
-                resultSet.getString("chunk_text"),
-                resultSet.getString("content_with_weight"),
-                resultSet.getString("chunk_type"),
-                resultSet.getString("title"),
-                resultSet.getString("keywords"),
-                resultSet.getString("questions"),
-                resultSet.getLong("task_id"),
-                resultSet.getLong("parent_block_id"),
-                resultSet.getInt("chunk_no"),
-                resultSet.getString("section_path"),
-                getNullableLong(resultSet, "structure_node_id"),
-                getNullableInteger(resultSet, "structure_node_type"),
-                resultSet.getString("canonical_path"),
-                getNullableInteger(resultSet, "item_index"),
-                getNullableInteger(resultSet, "page_no"),
-                resultSet.getString("page_range"),
-                resultSet.getString("bbox_json"),
-                resultSet.getString("source_block_ids"),
-                descriptor,
-                "keyword",
-                score
-            );
-        });
+        return keywordSearchGateway.search(filteredRequest);
     }
 
     @Override
@@ -722,160 +598,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return StrUtil.blankToDefault(text, "");
         }
         return text.substring(0, Math.max(0, maxChars - 1)) + "…";
-    }
-
-    private List<String> extractKeywordTerms(String question) {
-        String normalized = normalizeQuestion(question);
-        if (StrUtil.isBlank(normalized)) {
-            return List.of();
-        }
-
-        LinkedHashSet<String> terms = new LinkedHashSet<>();
-
-        Matcher alnumMatcher = ALNUM_TOKEN_PATTERN.matcher(normalized);
-        while (alnumMatcher.find()) {
-            terms.add(alnumMatcher.group());
-        }
-
-        Matcher chineseMatcher = CHINESE_TOKEN_PATTERN.matcher(normalized);
-        while (chineseMatcher.find()) {
-            for (String segment : splitChineseSegments(chineseMatcher.group())) {
-                addChineseSegmentTerms(segment, terms);
-                if (terms.size() >= MAX_KEYWORD_TERMS * 2) {
-                    break;
-                }
-            }
-            if (terms.size() >= MAX_KEYWORD_TERMS * 2) {
-                break;
-            }
-        }
-
-        return terms.stream()
-            .filter(term -> term.length() >= 2)
-
-            .limit(MAX_KEYWORD_TERMS)
-            .toList();
-    }
-
-    private List<String> splitChineseSegments(String chineseToken) {
-        String cleanedToken = removeChineseNoisePhrases(chineseToken);
-        if (cleanedToken.length() < 2) {
-            return List.of();
-        }
-        LinkedHashSet<String> segments = new LinkedHashSet<>();
-        segments.add(cleanedToken);
-        for (String segment : CHINESE_SEGMENT_SPLIT_PATTERN.split(cleanedToken)) {
-            String normalizedSegment = segment == null ? "" : segment.trim();
-            if (normalizedSegment.length() >= 2) {
-                segments.add(normalizedSegment);
-            }
-        }
-        return new ArrayList<>(segments);
-    }
-
-    private List<String> extractAuxiliaryKeywordTerms(List<String> hints) {
-        if (CollUtil.isEmpty(hints)) {
-            return List.of();
-        }
-        LinkedHashSet<String> terms = new LinkedHashSet<>();
-        for (String hint : hints) {
-            if (StrUtil.isBlank(hint)) {
-                continue;
-            }
-            terms.addAll(extractKeywordTerms(hint));
-            if (terms.size() >= MAX_KEYWORD_TERMS) {
-                break;
-            }
-        }
-        return new ArrayList<>(terms);
-    }
-
-    private void addChineseSegmentTerms(String segment, LinkedHashSet<String> terms) {
-        if (StrUtil.isBlank(segment) || segment.length() < 2) {
-            return;
-        }
-
-        if (segment.length() <= 12) {
-            terms.add(segment);
-        }
-        addTailNgrams(segment, terms);
-        addHeadNgrams(segment, terms);
-        addSlidingNgrams(segment, terms);
-    }
-
-    private String buildKeywordScoreExpression(int termCount) {
-        return IntStream.range(0, termCount)
-
-            .mapToObj(index -> "("
-                + "CASE WHEN LOWER(chunk_text) LIKE ? THEN ? ELSE 0 END + "
-                + "CASE WHEN LOWER(COALESCE(section_path, '')) LIKE ? THEN ? ELSE 0 END"
-                + ")")
-            .collect(Collectors.joining(" + "));
-    }
-
-    private String buildKeywordWhereExpression(int termCount) {
-        return IntStream.range(0, termCount)
-            .mapToObj(index -> "(LOWER(chunk_text) LIKE ? OR LOWER(COALESCE(section_path, '')) LIKE ?)")
-            .collect(Collectors.joining(" OR "));
-    }
-
-    private int keywordWeight(int index) {
-
-        return Math.max(1, 6 - index);
-    }
-
-    private int sectionKeywordWeight(int index) {
-        return keywordWeight(index) + 2;
-    }
-
-    private String likePattern(String term) {
-        return "%" + term.toLowerCase(Locale.ROOT) + "%";
-    }
-
-    private String normalizeQuestion(String question) {
-        if (StrUtil.isBlank(question)) {
-            return "";
-        }
-
-        return question.trim()
-            .toLowerCase(Locale.ROOT)
-            .replaceAll("[\\r\\n\\t]+", " ")
-            .replaceAll("\\s+", " ");
-    }
-
-    private String removeChineseNoisePhrases(String text) {
-        if (StrUtil.isBlank(text)) {
-            return "";
-        }
-
-        String normalized = text.trim();
-        for (String phrase : CHINESE_NOISE_PHRASES) {
-            normalized = normalized.replace(phrase, "");
-        }
-        return normalized.trim();
-    }
-
-    private void addTailNgrams(String segment, LinkedHashSet<String> terms) {
-        int maxGram = Math.min(4, segment.length());
-        for (int size = maxGram; size >= 2 && terms.size() < MAX_KEYWORD_TERMS * 2; size--) {
-            terms.add(segment.substring(segment.length() - size));
-        }
-    }
-
-    private void addHeadNgrams(String segment, LinkedHashSet<String> terms) {
-        int maxGram = Math.min(4, segment.length());
-        for (int size = maxGram; size >= 2 && terms.size() < MAX_KEYWORD_TERMS * 2; size--) {
-            terms.add(segment.substring(0, size));
-        }
-    }
-
-    private void addSlidingNgrams(String segment, LinkedHashSet<String> terms) {
-        int maxGram = Math.min(4, segment.length());
-        for (int size = maxGram; size >= 2 && terms.size() < MAX_KEYWORD_TERMS * 2; size--) {
-            for (int index = 0; index <= segment.length() - size && terms.size() < MAX_KEYWORD_TERMS * 2; index++) {
-                terms.add(segment.substring(index, index + size));
-            }
-        }
     }
 
     private String safeText(String text) {

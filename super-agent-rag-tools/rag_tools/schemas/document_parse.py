@@ -38,6 +38,7 @@ class DocumentBlock(BaseModel):
     text: str = ""
     content_with_weight: Annotated[str, Field(alias="contentWithWeight")] = ""
     table_html: Annotated[str, Field(alias="tableHtml")] = ""
+    table_rows: Annotated[list[list[str]], Field(alias="tableRows")] = Field(default_factory=list)
     image_file_name: Annotated[str, Field(alias="imageFileName")] = ""
     image_content_base64: Annotated[str, Field(alias="imageContentBase64")] = ""
     image_caption: Annotated[str, Field(alias="imageCaption")] = ""

@@ -1,6 +1,8 @@
 package org.javaup.ai.manage.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import org.javaup.ai.manage.service.DocumentParserService;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
@@ -27,6 +29,8 @@ import java.util.List;
 public class RagToolsDocumentParserService implements DocumentParserService {
 
     private final RagToolsClient ragToolsClient;
+
+    private final ObjectMapper objectMapper;
 
     @Override
     public DocumentAnalysisResult parse(byte[] bytes,
@@ -115,11 +119,24 @@ public class RagToolsDocumentParserService implements DocumentParserService {
                 block.getText(),
                 block.getContentWithWeight(),
                 block.getTableHtml(),
+                writeTableRows(block.getTableRows()),
                 block.getImageFileName(),
                 block.getImageContentBase64(),
                 block.getImageCaption(),
                 block.getMetadataJson()
             ))
             .toList();
+    }
+
+    private String writeTableRows(List<List<String>> tableRows) {
+        if (tableRows == null || tableRows.isEmpty()) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(tableRows);
+        }
+        catch (JsonProcessingException exception) {
+            throw new IllegalStateException("序列化 rag-tools tableRows 失败", exception);
+        }
     }
 }

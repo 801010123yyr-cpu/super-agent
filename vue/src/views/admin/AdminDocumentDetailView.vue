@@ -366,6 +366,87 @@
           </div>
         </section>
 
+        <section v-show="activeWorkbenchSection === 'rag'" ref="ragSectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="rag">
+          <div class="mb-4 flex items-start justify-between gap-3 max-md:flex-col">
+            <div>
+              <h2 class="mt-1 text-lg font-semibold text-foreground">RAG 学习视图</h2>
+              <p class="mt-0.5 text-[13px] text-muted-foreground">把文档侧索引产物按 RAG 阶段摊开看：解析块、结构图、父子切块、表格、GraphRAG、RAPTOR 都在这里分开展示。</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ ragSectionStatusText }}</span>
+              <span class="text-xs text-muted-foreground">解析任务 {{ ragSnapshot?.parseTaskId || '-' }} · 索引任务 {{ ragSnapshot?.indexTaskId || '-' }}</span>
+              <button class="rounded-full border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="ragSnapshotLoading" @click="loadDocumentRagSnapshot">{{ ragSnapshotLoading ? '读取中...' : '刷新快照' }}</button>
+            </div>
+          </div>
+
+          <div v-if="ragSnapshotLoading" class="py-6 text-center text-sm text-muted-foreground">正在读取 RAG 学习快照...</div>
+          <div v-else-if="!ragSnapshot" class="rounded-md border border-dashed border-border py-6 text-center text-sm text-muted-foreground">当前还没有可展示的 RAG 快照。请先完成文档解析和索引构建。</div>
+          <div v-else class="grid gap-4">
+            <div class="rounded-lg border border-primary/20 bg-primary/[0.04] p-4">
+              <div class="mb-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+                <span>文档 {{ ragSnapshot.documentName || documentDetail.documentName }}</span>
+                <span>方案 {{ ragSnapshot.planId || '-' }}</span>
+                <span>样例 {{ formatCount(ragArtifactSampleCount) }} 条</span>
+              </div>
+              <p class="text-[13px] text-[var(--color-muted-strong)]">{{ ragSnapshot.runtimeObservationNote }}</p>
+            </div>
+
+            <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+              <article v-for="metric in ragSnapshotMetrics" :key="`rag-metric-${metric.label}`" class="grid gap-1 rounded-lg border p-3.5" :class="ragMetricClass(metric.tone)">
+                <span class="text-xs text-muted-foreground">{{ metric.label }}</span>
+                <strong class="text-base text-foreground">{{ metric.value }}</strong>
+                <p class="text-xs text-muted-foreground">{{ metric.hint }}</p>
+              </article>
+            </div>
+
+            <div class="rounded-lg border border-border bg-secondary p-4">
+              <div class="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">索引产物流转</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">这里展示的是文档侧静态产物，问答运行时链路仍然去对话观测页查看。</p>
+                </div>
+              </div>
+              <div class="grid gap-2" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr))">
+                <article v-for="stage in ragPipelineStages" :key="`rag-stage-${stage.code}`" class="rounded-lg border p-3" :class="ragStageClass(stage.statusText)">
+                  <div class="mb-1 flex items-center justify-between gap-2">
+                    <strong class="text-[13px] text-foreground">{{ stage.title }}</strong>
+                    <span class="rounded-full bg-card px-2 py-0.5 text-[11px] text-muted-foreground">{{ stage.statusText }}</span>
+                  </div>
+                  <p class="text-xs text-muted-foreground">{{ stage.description }}</p>
+                  <span class="mt-2 inline-flex rounded bg-foreground/[0.06] px-2 py-0.5 text-[11px] text-foreground">数量 {{ formatCount(stage.count) }}</span>
+                </article>
+              </div>
+            </div>
+
+            <article v-for="section in ragArtifactSections" :key="`rag-artifact-${section.key}`" class="rounded-lg border border-border bg-card p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">{{ section.title }}</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">{{ section.caption }}</p>
+                </div>
+                <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ section.records.length }} 条样例</span>
+              </div>
+              <div v-if="!section.records.length" class="rounded-md border border-dashed border-border bg-secondary py-5 text-center text-sm text-muted-foreground">{{ section.emptyText }}</div>
+              <div v-else class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+                <article v-for="(record, index) in section.records" :key="`${section.key}-${index}`" class="grid gap-2 rounded-lg border border-border bg-secondary p-3">
+                  <div>
+                    <strong class="block text-[13px] text-foreground">{{ record.title }}</strong>
+                    <p class="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{{ record.subtitle }}</p>
+                  </div>
+                  <div v-if="record.chips?.length" class="flex flex-wrap gap-1.5">
+                    <span v-for="chip in record.chips.filter(Boolean).slice(0,4)" :key="`${section.key}-${index}-chip-${chip}`" class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
+                  </div>
+                  <p v-if="record.meta?.length" class="line-clamp-2 text-[11px] text-muted-foreground">{{ record.meta.join(' · ') }}</p>
+                  <p class="line-clamp-4 whitespace-pre-wrap break-words text-[13px] text-foreground">{{ record.body }}</p>
+                  <div v-if="record.lines?.length" class="grid gap-1 border-t border-border pt-2">
+                    <p v-for="line in record.lines.slice(0,3)" :key="`${section.key}-${index}-line-${line}`" class="line-clamp-1 text-xs text-muted-foreground">{{ line }}</p>
+                  </div>
+                </article>
+              </div>
+            </article>
+          </div>
+        </section>
+
         <section v-show="activeWorkbenchSection === 'tasks'" ref="taskSectionRef" class="border-t border-border pt-5 mt-5" data-workbench-section="tasks">
           <div class="mb-4 flex items-start justify-between gap-3">
             <div><h2 class="mt-1 text-lg font-semibold text-foreground">查看任务记录</h2><p class="mt-0.5 text-[13px] text-muted-foreground">通过最近任务摘要和完整时间线快速复盘当前文档的执行过程与异常信息。</p></div>
@@ -412,7 +493,7 @@ const router = useRouter()
 const OPERATOR_ID = '10001'
 const DEFAULT_CHUNK_PAGE_SIZE = 20
 const CHUNK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
-const WORKBENCH_SECTION_KEYS = ['overview', 'strategy', 'execution', 'chunk', 'tasks']
+const WORKBENCH_SECTION_KEYS = ['overview', 'strategy', 'execution', 'chunk', 'rag', 'tasks']
 
 const strategyLibrary = STRATEGY_LIBRARY
 const strategyPipelineLibrary = STRATEGY_PIPELINE_LIBRARY
@@ -434,6 +515,7 @@ const adjustNote = ref('')
 const taskLogs = ref([])
 const taskLogSnapshot = ref(null)
 const buildTaskSnapshot = ref(null)
+const ragSnapshot = ref(null)
 const chunkQuery = ref(null)
 const chunkDetail = ref(null)
 const chunkDisplayMode = ref('grouped')
@@ -447,6 +529,7 @@ const buildLoading = ref(false)
 const logLoading = ref(false)
 const chunkLoading = ref(false)
 const chunkDetailLoading = ref(false)
+const ragSnapshotLoading = ref(false)
 const logDrawerOpen = ref(false)
 const chunkDetailDrawerOpen = ref(false)
 const planPollTimer = ref(null)
@@ -457,6 +540,7 @@ const overviewSectionRef = ref(null)
 const strategySectionRef = ref(null)
 const executionSectionRef = ref(null)
 const chunkSectionRef = ref(null)
+const ragSectionRef = ref(null)
 const taskSectionRef = ref(null)
 const chunkDetailFocusMode = ref('chunk')
 const activeWorkbenchSection = ref('overview')
@@ -534,6 +618,158 @@ const chunkGroupedRecords = computed(() => {
       items: [...group.items].sort((left, right) => Number(left.chunkNo || 0) - Number(right.chunkNo || 0))
     }))
     .sort((left, right) => Number(left.parentBlockNo || 0) - Number(right.parentBlockNo || 0))
+})
+const ragSnapshotMetrics = computed(() => asArray(ragSnapshot.value?.metrics))
+const ragPipelineStages = computed(() => asArray(ragSnapshot.value?.pipelineStages))
+const ragArtifactSampleCount = computed(() => {
+  return [
+    'parseBlocks',
+    'structureNodes',
+    'parentBlocks',
+    'chunks',
+    'tables',
+    'kgEntities',
+    'kgRelations',
+    'kgCommunities',
+    'raptorNodes',
+    'buildLogs'
+  ].reduce((sum, key) => sum + asArray(ragSnapshot.value?.[key]).length, 0)
+})
+const ragArtifactSections = computed(() => {
+  const snapshot = ragSnapshot.value || {}
+  return [
+    {
+      key: 'parse',
+      title: '解析块样例',
+      caption: 'Python rag-tools 解析后交给 Java 入库的原始结构块。',
+      emptyText: '当前没有解析块样例。',
+      records: asArray(snapshot.parseBlocks).map((item) => ({
+        title: `Block #${item.blockNo || '-'}`,
+        subtitle: item.sectionPath || '未识别章节',
+        chips: [item.blockType || 'block', item.pageRange || (item.pageNo ? `第 ${item.pageNo} 页` : '')],
+        meta: compactList([item.bboxJson ? '有 bbox' : '', item.blockId ? `ID ${item.blockId}` : '']),
+        body: item.textPreview || '暂无文本预览'
+      }))
+    },
+    {
+      key: 'structure',
+      title: '文档结构图',
+      caption: 'Document -> Section -> Item 层级，只负责目录、章节、条目导航。',
+      emptyText: '当前没有文档结构节点样例。',
+      records: asArray(snapshot.structureNodes).map((item) => ({
+        title: item.title || `节点 #${item.nodeNo || '-'}`,
+        subtitle: item.sectionPath || item.nodeCode || '未识别路径',
+        chips: [`深度 ${valueOrDash(item.depth)}`, item.nodeCode || ''],
+        meta: compactList([item.nodeType ? `类型 ${item.nodeType}` : '', item.nodeId ? `ID ${item.nodeId}` : '']),
+        body: item.anchorText || '暂无锚点文本'
+      }))
+    },
+    {
+      key: 'parent',
+      title: 'ParentBlock',
+      caption: '父块用于回答上下文，相当于 RAGFlow mother chunk 思想。',
+      emptyText: '当前没有父块样例。',
+      records: asArray(snapshot.parentBlocks).map((item) => ({
+        title: `父块 P#${item.parentNo || '-'}`,
+        subtitle: item.sectionPath || '未识别章节',
+        chips: [`子块 ${formatCount(item.childCount)}`, `C#${valueOrDash(item.startChunkNo)} - C#${valueOrDash(item.endChunkNo)}`],
+        meta: compactList([item.pageRange, item.parentBlockId ? `ID ${item.parentBlockId}` : '']),
+        body: item.textPreview || '暂无父块预览'
+      }))
+    },
+    {
+      key: 'chunk',
+      title: 'ChildChunk',
+      caption: '子块用于召回和向量/BM25 检索，命中后再提升到父块组织证据。',
+      emptyText: '当前没有子块样例。',
+      records: asArray(snapshot.chunks).map((item) => ({
+        title: `子块 C#${item.chunkNo || '-'}`,
+        subtitle: item.title || item.sectionPath || '未识别章节',
+        chips: [item.vectorStatusName || '向量状态未知', item.chunkType || 'chunk', `${formatCount(item.tokenCount)} Token`],
+        meta: compactList([item.pageRange, item.keywords ? `关键词：${item.keywords}` : '', item.sourceBlockIds ? '有源 block' : '']),
+        body: item.textPreview || '暂无子块预览'
+      }))
+    },
+    {
+      key: 'table',
+      title: '表格结构',
+      caption: '表格拆成表、列、行、单元格，用于结构化问答和字段过滤。',
+      emptyText: '当前没有表格结构样例。',
+      records: asArray(snapshot.tables).map((item) => ({
+        title: `表格 T#${item.tableNo || '-'}`,
+        subtitle: item.title || item.sectionPath || '未命名表格',
+        chips: [`${formatCount(item.rowCount)} 行`, `${formatCount(item.columnCount)} 列`, item.pageRange || ''],
+        meta: compactList([item.tableId ? `ID ${item.tableId}` : '', item.pageNo ? `第 ${item.pageNo} 页` : '']),
+        body: asArray(item.columns).map((column) => column.columnName || column.normalizedName).filter(Boolean).join(' / ') || '暂无列信息',
+        lines: asArray(item.rows).map((row) => `R#${row.rowNo || '-'} ${asArray(row.cells).filter(Boolean).join(' | ') || row.rowText || ''}`)
+      }))
+    },
+    {
+      key: 'kg-entity',
+      title: 'GraphRAG 实体',
+      caption: '实体属于独立 KG，不和文档结构图混用。',
+      emptyText: '当前没有 GraphRAG 实体样例。',
+      records: asArray(snapshot.kgEntities).map((item) => ({
+        title: item.name || `实体 ${item.entityId || '-'}`,
+        subtitle: item.entityType || '未分类实体',
+        chips: compactList([item.entityType]),
+        meta: compactList([item.entityId ? `ID ${item.entityId}` : '']),
+        body: item.description || '暂无实体说明'
+      }))
+    },
+    {
+      key: 'kg-relation',
+      title: 'GraphRAG 关系',
+      caption: '关系连接实体，并通过 evidence 回到原文 chunk。',
+      emptyText: '当前没有 GraphRAG 关系样例。',
+      records: asArray(snapshot.kgRelations).map((item) => ({
+        title: `${item.sourceName || item.sourceEntityId || '-'} -> ${item.targetName || item.targetEntityId || '-'}`,
+        subtitle: item.relationType || '未分类关系',
+        chips: compactList([item.relationType, item.weight ? `权重 ${item.weight}` : '']),
+        meta: compactList([item.relationId ? `ID ${item.relationId}` : '']),
+        body: item.description || '暂无关系说明'
+      }))
+    },
+    {
+      key: 'kg-community',
+      title: 'GraphRAG 社区',
+      caption: '社区摘要用于跨实体导航和全局问题召回。',
+      emptyText: '当前没有 GraphRAG 社区样例。',
+      records: asArray(snapshot.kgCommunities).map((item) => ({
+        title: item.title || `社区 #${item.communityNo || '-'}`,
+        subtitle: item.entityIdsJson || '暂无实体列表',
+        chips: [`社区 ${valueOrDash(item.communityNo)}`],
+        meta: compactList([item.communityId ? `ID ${item.communityId}` : '']),
+        body: item.summary || '暂无社区摘要'
+      }))
+    },
+    {
+      key: 'raptor',
+      title: 'RAPTOR 摘要树',
+      caption: '摘要节点只用于导航召回，最终证据必须回到原始 chunk。',
+      emptyText: '当前没有 RAPTOR 摘要节点样例。',
+      records: asArray(snapshot.raptorNodes).map((item) => ({
+        title: item.title || `RAPTOR N#${item.nodeNo || '-'}`,
+        subtitle: item.sectionPath || `Level ${valueOrDash(item.nodeLevel)}`,
+        chips: [`L${valueOrDash(item.nodeLevel)}`, item.pageRange || '', item.keywords || ''],
+        meta: compactList([item.sourceChunkIdsJson ? `源 chunk ${item.sourceChunkIdsJson}` : '', item.nodeId ? `ID ${item.nodeId}` : '']),
+        body: item.summary || '暂无摘要'
+      }))
+    },
+    {
+      key: 'build-log',
+      title: '构建日志样例',
+      caption: '这里展示索引构建任务的关键日志，完整日志仍在任务记录里查看。',
+      emptyText: '当前没有构建日志样例。',
+      records: asArray(snapshot.buildLogs).map((item) => ({
+        title: `${item.stageTypeName || '阶段'} · ${item.eventTypeName || '事件'}`,
+        subtitle: formatDateTime(item.createTime),
+        chips: compactList([item.logLevelName]),
+        meta: compactList([item.id ? `ID ${item.id}` : '']),
+        body: item.content || item.detailJson || '暂无日志内容'
+      }))
+    }
+  ]
 })
 const hasBuildTaskSnapshot = computed(() => hasCode(buildTaskSnapshot.value?.taskType, 2))
 const activeBuildTaskId = computed(() => {
@@ -918,6 +1154,19 @@ const chunkSectionStatusText = computed(() => {
   return '暂无数据'
 })
 
+const ragSectionStatusText = computed(() => {
+  if (ragSnapshotLoading.value) {
+    return '读取中'
+  }
+  if (ragArtifactSampleCount.value > 0) {
+    return `${ragArtifactSampleCount.value} 条样例`
+  }
+  if (ragSnapshot.value) {
+    return '已读取'
+  }
+  return '暂无快照'
+})
+
 const taskSectionStatusText = computed(() => {
   if (logLoading.value) {
     return '读取中'
@@ -962,8 +1211,15 @@ const workbenchSections = computed(() => {
       status: chunkSectionStatusText.value
     },
     {
-      key: 'tasks',
+      key: 'rag',
       step: '04',
+      label: 'RAG 学习视图',
+      caption: '看解析、图谱、摘要产物',
+      status: ragSectionStatusText.value
+    },
+    {
+      key: 'tasks',
+      step: '05',
       label: '查看任务记录',
       caption: '复盘日志与时间线',
       status: taskSectionStatusText.value
@@ -1070,6 +1326,34 @@ function showNotice(message, type = 'info') {
 
 function clearNotice() {
   pageNotice.message = ''
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function compactList(values) {
+  return asArray(values)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+}
+
+function valueOrDash(value) {
+  const text = String(value ?? '').trim()
+  return text || '-'
+}
+
+function ragMetricClass(tone) {
+  if (tone === 'success') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (tone === 'warning') return 'border-amber-500/20 bg-amber-500/[0.04]'
+  if (tone === 'danger') return 'border-destructive/20 bg-destructive/[0.04]'
+  return 'border-border bg-secondary'
+}
+
+function ragStageClass(statusText) {
+  if (String(statusText || '').includes('已生成')) return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (String(statusText || '').includes('观测')) return 'border-primary/20 bg-primary/[0.04]'
+  return 'border-border bg-card'
 }
 
 function buildChunkRelationText(chunk) {
@@ -1305,6 +1589,18 @@ async function loadDocumentChunks(page = chunkCurrentPage.value, options = {}) {
   }
 }
 
+async function loadDocumentRagSnapshot() {
+  ragSnapshotLoading.value = true
+  try {
+    ragSnapshot.value = await manageApi.queryDocumentRagSnapshot(documentId.value)
+  } catch (error) {
+    console.error('读取 RAG 学习快照失败', error)
+    ragSnapshot.value = null
+  } finally {
+    ragSnapshotLoading.value = false
+  }
+}
+
 function changeChunkPage(page) {
   if (page < 1 || page > chunkTotalPages.value || page === chunkCurrentPage.value || chunkLoading.value) {
     return
@@ -1337,7 +1633,8 @@ async function loadAll() {
       loadStrategyPlan(),
       loadTaskLogs(),
       loadBuildTaskLogs(),
-      loadDocumentChunks()
+      loadDocumentChunks(),
+      loadDocumentRagSnapshot()
     ])
   } catch (error) {
     console.error('读取文档详情失败', error)

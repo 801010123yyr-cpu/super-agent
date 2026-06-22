@@ -281,6 +281,89 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_block` (
    KEY `idx_page_no` (`page_no`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档解析block表';
 
+CREATE TABLE IF NOT EXISTS `super_agent_document_table` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `block_id` bigint NOT NULL COMMENT '来源document block id',
+   `table_no` int NOT NULL COMMENT '解析任务内的表格序号',
+   `section_path` varchar(1000) DEFAULT NULL COMMENT '章节路径',
+   `page_no` int DEFAULT NULL COMMENT '所在页码',
+   `page_range` varchar(64) DEFAULT NULL COMMENT '跨页范围',
+   `bbox_json` text COMMENT '版面坐标JSON',
+   `title` varchar(1000) DEFAULT NULL COMMENT '表格标题',
+   `row_count` int NOT NULL DEFAULT '0' COMMENT '数据行数，不含表头',
+   `column_count` int NOT NULL DEFAULT '0' COMMENT '列数',
+   `table_html` longtext COMMENT '表格HTML',
+   `metadata_json` text COMMENT '扩展元数据JSON',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `uk_task_table_no` (`task_id`, `table_no`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_task_table_no` (`task_id`, `table_no`),
+   KEY `idx_block_id` (`block_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档结构化表格主表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_document_table_column` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `table_id` bigint NOT NULL COMMENT '表格id',
+   `column_no` int NOT NULL COMMENT '列序号，从1开始',
+   `column_name` varchar(500) NOT NULL COMMENT '列名',
+   `normalized_name` varchar(500) NOT NULL COMMENT '归一化列名',
+   `value_type` varchar(32) NOT NULL COMMENT '值类型 TEXT/NUMBER',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `uk_table_column_no` (`table_id`, `column_no`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_table_normalized_name` (`table_id`, `normalized_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档结构化表格列';
+
+CREATE TABLE IF NOT EXISTS `super_agent_document_table_row` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `table_id` bigint NOT NULL COMMENT '表格id',
+   `row_no` int NOT NULL COMMENT '数据行序号，从1开始',
+   `row_text` longtext COMMENT '行文本快照',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `uk_table_row_no` (`table_id`, `row_no`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_table_id` (`table_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档结构化表格行';
+
+CREATE TABLE IF NOT EXISTS `super_agent_document_table_cell` (
+   `id` bigint NOT NULL COMMENT '主键id',
+   `document_id` bigint NOT NULL COMMENT '文档id',
+   `task_id` bigint NOT NULL COMMENT '解析任务id',
+   `table_id` bigint NOT NULL COMMENT '表格id',
+   `row_id` bigint NOT NULL COMMENT '行id',
+   `column_id` bigint NOT NULL COMMENT '列id',
+   `row_no` int NOT NULL COMMENT '数据行序号，从1开始',
+   `column_no` int NOT NULL COMMENT '列序号，从1开始',
+   `cell_text` longtext COMMENT '单元格文本',
+   `numeric_value` decimal(30,10) DEFAULT NULL COMMENT '可解析的数值',
+   `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+   `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+   `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+   PRIMARY KEY (`id`),
+   UNIQUE KEY `uk_table_row_column` (`table_id`, `row_no`, `column_no`),
+   KEY `idx_document_task` (`document_id`, `task_id`),
+   KEY `idx_table_id` (`table_id`),
+   KEY `idx_table_row_no` (`table_id`, `row_no`),
+   KEY `idx_table_column_no` (`table_id`, `column_no`),
+   KEY `idx_row_id` (`row_id`),
+   KEY `idx_column_id` (`column_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档结构化表格单元格';
+
 CREATE TABLE IF NOT EXISTS `super_agent_document_structure_node` (
    `id` bigint NOT NULL COMMENT '主键id',
    `document_id` bigint NOT NULL COMMENT '文档id',
@@ -377,6 +460,120 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_chunk` (
     KEY `idx_chunk_type` (`chunk_type`),
     KEY `idx_vector_status` (`vector_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档切块表';
+
+
+CREATE TABLE IF NOT EXISTS `super_agent_kg_entity` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `document_id` bigint NOT NULL COMMENT '文档id',
+    `task_id` bigint NOT NULL COMMENT '索引任务id',
+    `entity_key` varchar(255) NOT NULL COMMENT '实体稳定键，来自抽取工具的实体id',
+    `name` varchar(500) NOT NULL COMMENT '实体名称',
+    `normalized_name` varchar(500) DEFAULT NULL COMMENT '实体归一化名称',
+    `entity_type` varchar(64) NOT NULL DEFAULT 'CONCEPT' COMMENT '实体类型 CONCEPT/SECTION/SYSTEM/ORG/PROCESS/METRIC 等',
+    `description` varchar(1000) DEFAULT NULL COMMENT '实体描述',
+    `metadata_json` text COMMENT '实体扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_kg_entity_task_key` (`task_id`, `entity_key`),
+    KEY `idx_kg_entity_document_task` (`document_id`, `task_id`),
+    KEY `idx_kg_entity_normalized` (`document_id`, `normalized_name`),
+    KEY `idx_kg_entity_type` (`document_id`, `entity_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG实体表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_kg_relation` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `document_id` bigint NOT NULL COMMENT '文档id',
+    `task_id` bigint NOT NULL COMMENT '索引任务id',
+    `source_entity_id` bigint NOT NULL COMMENT '起点实体id',
+    `target_entity_id` bigint NOT NULL COMMENT '终点实体id',
+    `relation_type` varchar(64) NOT NULL DEFAULT 'ASSOCIATED_WITH' COMMENT '关系类型',
+    `description` varchar(1000) DEFAULT NULL COMMENT '关系描述',
+    `weight` decimal(10,4) NOT NULL DEFAULT '1.0000' COMMENT '关系权重',
+    `metadata_json` text COMMENT '关系扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    KEY `idx_kg_relation_document_task` (`document_id`, `task_id`),
+    KEY `idx_kg_relation_source` (`source_entity_id`),
+    KEY `idx_kg_relation_target` (`target_entity_id`),
+    KEY `idx_kg_relation_type` (`document_id`, `relation_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG实体关系表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_kg_evidence` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `document_id` bigint NOT NULL COMMENT '文档id',
+    `task_id` bigint NOT NULL COMMENT '索引任务id',
+    `entity_id` bigint DEFAULT NULL COMMENT '被支撑的实体id',
+    `relation_id` bigint DEFAULT NULL COMMENT '被支撑的关系id',
+    `chunk_id` bigint DEFAULT NULL COMMENT '来源chunk id',
+    `parent_block_id` bigint DEFAULT NULL COMMENT '来源父块id',
+    `quote_text` longtext COMMENT '证据原文片段',
+    `page_no` int DEFAULT NULL COMMENT '证据所在页码',
+    `page_range` varchar(64) DEFAULT NULL COMMENT '证据跨页范围',
+    `bbox_json` text COMMENT '证据版面坐标JSON',
+    `section_path` varchar(1000) DEFAULT NULL COMMENT '证据章节路径',
+    `metadata_json` text COMMENT '证据扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    KEY `idx_kg_evidence_document_task` (`document_id`, `task_id`),
+    KEY `idx_kg_evidence_entity` (`entity_id`),
+    KEY `idx_kg_evidence_relation` (`relation_id`),
+    KEY `idx_kg_evidence_chunk` (`chunk_id`),
+    KEY `idx_kg_evidence_parent_block` (`parent_block_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG证据表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_kg_community` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `document_id` bigint NOT NULL COMMENT '文档id',
+    `task_id` bigint NOT NULL COMMENT '索引任务id',
+    `community_no` int NOT NULL COMMENT '图谱社区序号',
+    `title` varchar(500) NOT NULL COMMENT '图谱社区标题',
+    `summary` longtext COMMENT '图谱社区摘要',
+    `entity_ids_json` text COMMENT '社区实体id JSON数组',
+    `relation_ids_json` text COMMENT '社区关系id JSON数组',
+    `evidence_ids_json` text COMMENT '社区证据id JSON数组',
+    `metadata_json` text COMMENT '社区扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_kg_community_task_no` (`task_id`, `community_no`),
+    KEY `idx_kg_community_document_task` (`document_id`, `task_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG社区摘要表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_raptor_node` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `document_id` bigint NOT NULL COMMENT '文档id',
+    `task_id` bigint NOT NULL COMMENT '索引任务id',
+    `node_key` varchar(255) NOT NULL COMMENT 'RAPTOR工具返回的节点稳定键',
+    `parent_node_id` bigint DEFAULT NULL COMMENT '父摘要节点id',
+    `node_level` int NOT NULL COMMENT '摘要树层级，1为最贴近原文的摘要',
+    `node_no` int NOT NULL COMMENT '同层节点序号',
+    `title` varchar(500) DEFAULT NULL COMMENT '摘要节点标题',
+    `summary` longtext COMMENT '摘要文本',
+    `summary_with_weight` longtext COMMENT '带标题、章节、关键词、问题的加权检索文本',
+    `child_node_ids_json` text COMMENT '子摘要节点id JSON数组',
+    `source_chunk_ids_json` text COMMENT '可下钻的原文chunk id JSON数组',
+    `source_parent_block_ids_json` text COMMENT '可下钻的父块id JSON数组',
+    `section_path` varchar(1000) DEFAULT NULL COMMENT '摘要覆盖章节路径',
+    `page_range` varchar(64) DEFAULT NULL COMMENT '摘要覆盖页码范围',
+    `keywords` text COMMENT '摘要关键词 JSON数组',
+    `questions` text COMMENT '摘要典型问题 JSON数组',
+    `metadata_json` text COMMENT '摘要节点扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_raptor_node_task_key` (`task_id`, `node_key`),
+    KEY `idx_raptor_node_document_task` (`document_id`, `task_id`),
+    KEY `idx_raptor_node_parent` (`parent_node_id`),
+    KEY `idx_raptor_node_level` (`document_id`, `node_level`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='RAPTOR层级摘要节点表';
 
 
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (

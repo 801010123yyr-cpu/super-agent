@@ -48,7 +48,9 @@ import org.javaup.ai.manage.service.DocumentStructureNodeService;
 import org.javaup.ai.manage.service.DocumentStrategyService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
 import org.javaup.ai.manage.service.DocumentVectorGateway;
+import org.javaup.ai.manage.service.GraphRagBuildService;
 import org.javaup.ai.manage.service.KnowledgeRouteIndexService;
+import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.StoredObjectInfo;
 import org.javaup.ai.manage.vo.DocumentChunkItemVo;
@@ -158,6 +160,10 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     private final ObjectProvider<DocumentStructureGraphProjectionService> graphProjectionServiceProvider;
 
     private final ObjectProvider<KnowledgeRouteIndexService> knowledgeRouteIndexServiceProvider;
+
+    private final GraphRagBuildService graphRagBuildService;
+
+    private final RaptorBuildService raptorBuildService;
 
     private final DocumentKafkaProducer kafkaProducer;
 
@@ -305,6 +311,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         objectNames.addAll(parseArtifactService.listObjectNamesByDocumentId(documentId));
         storageService.deleteObjects(objectNames);
         vectorGateway.deleteByDocumentId(documentId);
+        graphRagBuildService.deleteByDocumentId(documentId);
+        raptorBuildService.deleteByDocumentId(documentId);
 
         DocumentKeywordSearchGateway keywordSearchGateway = keywordSearchGatewayProvider.getIfAvailable();
         if (keywordSearchGateway != null) {

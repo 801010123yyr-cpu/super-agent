@@ -57,6 +57,26 @@ public final class SearchReferenceMapper {
         reference.setPageRange(asText(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_RANGE), ""));
         reference.setBboxJson(asText(metadata.get(DocumentKnowledgeMetadataKeys.BBOX_JSON), ""));
         reference.setSourceBlockIds(asText(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS), ""));
+        reference.setTableId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_ID)));
+        reference.setTableNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_NO)));
+        reference.setTableTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_TITLE), ""));
+        reference.setTableOperation(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_OPERATION), ""));
+        reference.setTableMetricColumn(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_METRIC_COLUMN), ""));
+        reference.setTableGroupByColumn(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_GROUP_BY_COLUMN), ""));
+        reference.setTableMatchedRowCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_MATCHED_ROW_COUNT)));
+        reference.setKgEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID)));
+        reference.setKgEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME), ""));
+        reference.setKgRelatedEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID)));
+        reference.setKgRelatedEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME), ""));
+        reference.setKgRelationId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID)));
+        reference.setKgRelationType(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE), ""));
+        reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
+        reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
+        reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
+        reference.setRaptorNodeId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_ID)));
+        reference.setRaptorNodeTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_TITLE), ""));
+        reference.setRaptorNodeLevel(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL)));
+        reference.setRaptorSummary(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SUMMARY), ""));
         return reference;
     }
 

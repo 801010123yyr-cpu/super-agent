@@ -37,6 +37,8 @@ public class DocumentBlockCandidate {
 
     private String tableHtml;
 
+    private String tableRowsJson;
+
     private String imageFileName;
 
     private String imageContentBase64;

@@ -159,6 +159,21 @@ app:
       vector-top-k: 8
       # 关键词通道每个子问题默认召回数量。
       keyword-top-k: 8
+      # GraphRAG 通道每个子问题默认召回数量。
+      # 该通道基于 super_agent_kg_entity / relation / evidence / community，
+      # 与 Document/Section/Item 文档结构图是两套概念。
+      graph-rag-top-k: 5
+      # GraphRAG 关系扩展最大跳数。当前第一版支持 1 跳和 2 跳。
+      graph-rag-max-hops: 2
+      # RAPTOR 通道每个子问题默认返回的原文证据数量。
+      # RAPTOR 先召回层级摘要，再下钻到 sourceChunkIds 对应的原文 chunk。
+      raptor-top-k: 5
+      # 每个命中摘要节点最多下钻多少个原文 chunk。
+      raptor-source-chunk-top-k: 3
+      # Python 构建 RAPTOR 摘要树时，每个摘要簇最多包含多少个下层节点。
+      raptor-max-cluster-size: 6
+      # Python 构建 RAPTOR 摘要树时最多生成多少层摘要。
+      raptor-max-levels: 3
       # 多通道合并后进入精排前，最多保留多少个候选片段。
       candidate-top-k: 10
       # 最终注入 Prompt 的证据片段数量。
@@ -172,12 +187,27 @@ app:
       keyword-relative-score-floor: 0.35
       # 是否启用关键词检索通道。
       keyword-channel-enabled: true
+      # 是否启用结构化表格检索通道。
+      # Phase J 后，表格统计类问题会先尝试受控的 Java 表格查询计划，不允许任意 SQL。
+      table-channel-enabled: true
+      # 是否启用 GraphRAG 图谱检索通道。
+      # Phase K 后，实体关系类问题会走独立 KgEntity/KgRelation 图谱，不复用文档结构图。
+      graph-rag-channel-enabled: true
+      # 是否启用 RAPTOR 层级摘要检索通道。
+      # Phase L 后，长文档全局问题会先命中摘要树，再回到原文 chunk 作为证据。
+      raptor-channel-enabled: true
       hybrid:
         # 向量通道权重。
         # Phase H 后，融合不再是固定等权 RRF，而是 rank + 原始分 + 元数据 boost 的加权融合。
         vector-weight: 1.0
         # 关键词/BM25 通道权重。
         keyword-weight: 1.0
+        # 结构化表格通道权重。
+        table-weight: 1.2
+        # GraphRAG 图谱通道权重。
+        graph-rag-weight: 1.1
+        # RAPTOR 层级摘要通道权重。
+        raptor-weight: 1.05
         # 排名贡献权重。排名分来自每个通道内部名次，稳定抵消不同分数尺度。
         rank-weight: 1.0
         # 原始通道分贡献权重。向量分和关键词分会先在各自通道内归一化。
@@ -359,7 +389,7 @@ app:
       # 读超时，毫秒。
       socket-timeout-millis: 5000
     neo4j:
-      # 是否启用 Neo4j 结构图。默认关闭，关闭时结构图服务自动回退到 MySQL 结构节点表。
+      # 是否启用 Neo4j 结构图投影查询。MySQL 结构节点表始终是权威结构数据源；Neo4j 用于结构导航加速和图查询展示。
       enabled: true
       uri: bolt://127.0.0.1:7687
       username: neo4j

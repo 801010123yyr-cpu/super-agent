@@ -8,17 +8,20 @@ import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentRagSnapshotQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
 import org.javaup.ai.manage.dto.DocumentTaskLogQueryDto;
 import org.javaup.ai.manage.dto.DocumentUploadDto;
 import org.javaup.ai.manage.service.DocumentManageService;
+import org.javaup.ai.manage.service.DocumentRagSnapshotService;
 import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
 import org.javaup.ai.manage.vo.DocumentChunkQueryVo;
 import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentDeleteVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogQueryVo;
@@ -44,8 +47,12 @@ public class DocumentManageController {
 
     private final DocumentManageService documentManageService;
 
-    public DocumentManageController(DocumentManageService documentManageService) {
+    private final DocumentRagSnapshotService documentRagSnapshotService;
+
+    public DocumentManageController(DocumentManageService documentManageService,
+                                    DocumentRagSnapshotService documentRagSnapshotService) {
         this.documentManageService = documentManageService;
+        this.documentRagSnapshotService = documentRagSnapshotService;
     }
 
     @Operation(summary = "上传文档并投递解析任务")
@@ -102,6 +109,12 @@ public class DocumentManageController {
     @PostMapping("/chunk/detail/query")
     public ApiResponse<DocumentChunkDetailVo> queryDocumentChunkDetail(@Valid @RequestBody DocumentChunkDetailQueryDto dto) {
         return ApiResponse.ok(documentManageService.queryDocumentChunkDetail(dto));
+    }
+
+    @Operation(summary = "查询文档 RAG 学习快照")
+    @PostMapping("/rag/snapshot/query")
+    public ApiResponse<DocumentRagSnapshotVo> queryDocumentRagSnapshot(@Valid @RequestBody DocumentRagSnapshotQueryDto dto) {
+        return ApiResponse.ok(documentRagSnapshotService.querySnapshot(dto));
     }
 
     @Operation(summary = "查询任务执行日志")

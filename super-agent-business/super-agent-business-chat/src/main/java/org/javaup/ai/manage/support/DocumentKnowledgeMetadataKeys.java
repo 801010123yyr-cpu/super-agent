@@ -44,6 +44,26 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String METADATA_BOOST = "metadataBoost";
     public static final String VECTOR_SCORE = "vectorScore";
     public static final String KEYWORD_SCORE = "keywordScore";
+    public static final String TABLE_ID = "tableId";
+    public static final String TABLE_NO = "tableNo";
+    public static final String TABLE_TITLE = "tableTitle";
+    public static final String TABLE_OPERATION = "tableOperation";
+    public static final String TABLE_METRIC_COLUMN = "tableMetricColumn";
+    public static final String TABLE_GROUP_BY_COLUMN = "tableGroupByColumn";
+    public static final String TABLE_MATCHED_ROW_COUNT = "tableMatchedRowCount";
+    public static final String KG_ENTITY_ID = "kgEntityId";
+    public static final String KG_ENTITY_NAME = "kgEntityName";
+    public static final String KG_RELATED_ENTITY_ID = "kgRelatedEntityId";
+    public static final String KG_RELATED_ENTITY_NAME = "kgRelatedEntityName";
+    public static final String KG_RELATION_ID = "kgRelationId";
+    public static final String KG_RELATION_TYPE = "kgRelationType";
+    public static final String KG_EVIDENCE_ID = "kgEvidenceId";
+    public static final String KG_GRAPH_PATH = "kgGraphPath";
+    public static final String KG_HOP_COUNT = "kgHopCount";
+    public static final String RAPTOR_NODE_ID = "raptorNodeId";
+    public static final String RAPTOR_NODE_TITLE = "raptorNodeTitle";
+    public static final String RAPTOR_NODE_LEVEL = "raptorNodeLevel";
+    public static final String RAPTOR_SUMMARY = "raptorSummary";
 
     private DocumentKnowledgeMetadataKeys() {
     }

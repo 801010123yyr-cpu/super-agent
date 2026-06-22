@@ -22,6 +22,8 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentParentBlockMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentStrategyPlanMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentStrategyStepMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
+import org.javaup.ai.manage.model.graph.GraphRagBuildResult;
+import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
 import org.javaup.ai.manage.service.DocumentAsyncProcessService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentParseArtifactService;
@@ -33,6 +35,8 @@ import org.javaup.ai.manage.service.DocumentStructureGraphProjectionService;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
 import org.javaup.ai.manage.service.DocumentVectorGateway;
+import org.javaup.ai.manage.service.GraphRagBuildService;
+import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.ChunkCandidate;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
@@ -114,6 +118,10 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     private final ObjectProvider<DocumentStructureGraphProjectionService> graphProjectionServiceProvider;
 
     private final DocumentProfileService documentProfileService;
+
+    private final GraphRagBuildService graphRagBuildService;
+
+    private final RaptorBuildService raptorBuildService;
 
     @Resource
     private UidGenerator uidGenerator;
@@ -414,6 +422,51 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                     "vectorStoreType", DocumentVectorStoreTypeEnum.PG_VECTOR.getMsg(),
                     "parentCount", parentBlockEntityList.size()));
 
+            taskLogService.saveLog(taskId, documentId,
+                DocumentTaskStageEnum.VECTORIZE.getCode(),
+                DocumentTaskEventTypeEnum.START.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "开始构建 GraphRAG 实体关系图谱。",
+                detail("chunkCount", chunkEntityList.size(), "parentCount", parentBlockEntityList.size()));
+
+            GraphRagBuildResult graphRagBuildResult = graphRagBuildService.rebuildDocumentGraph(documentId, taskId, chunkEntityList);
+
+            taskLogService.saveLog(taskId, documentId,
+                DocumentTaskStageEnum.VECTORIZE.getCode(),
+                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "GraphRAG 实体关系图谱构建完成。",
+                detail("entityCount", graphRagBuildResult.getEntityCount(),
+                    "relationCount", graphRagBuildResult.getRelationCount(),
+                    "evidenceCount", graphRagBuildResult.getEvidenceCount(),
+                    "communityCount", graphRagBuildResult.getCommunityCount()));
+
+            taskLogService.saveLog(taskId, documentId,
+                DocumentTaskStageEnum.VECTORIZE.getCode(),
+                DocumentTaskEventTypeEnum.START.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "开始构建 RAPTOR 层级摘要树。",
+                detail("chunkCount", chunkEntityList.size(), "parentCount", parentBlockEntityList.size()));
+
+            RaptorBuildResult raptorBuildResult = raptorBuildService.rebuildDocumentTree(documentId, taskId, chunkEntityList);
+
+            taskLogService.saveLog(taskId, documentId,
+                DocumentTaskStageEnum.VECTORIZE.getCode(),
+                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "RAPTOR 层级摘要树构建完成。",
+                detail("nodeCount", raptorBuildResult.getNodeCount(),
+                    "levelCount", raptorBuildResult.getLevelCount(),
+                    "sourceChunkCount", raptorBuildResult.getSourceChunkCount()));
+
             task.setCurrentStage(DocumentTaskStageEnum.STORE_COMPLETE.getCode());
             taskMapper.updateById(task);
 
@@ -626,11 +679,39 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             block.setTableHtml(candidate.getTableHtml());
             block.setImageObjectName(uploadBlockImage(documentId, taskId, candidate));
             block.setImageCaption(candidate.getImageCaption());
-            block.setMetadataJson(candidate.getMetadataJson());
+            block.setMetadataJson(mergeBlockMetadata(candidate));
             block.setStatus(BusinessStatus.YES.getCode());
             blocks.add(block);
         }
         return blocks;
+    }
+
+    private String mergeBlockMetadata(DocumentBlockCandidate candidate) {
+        String metadataJson = StrUtil.blankToDefault(candidate.getMetadataJson(), "");
+        if (StrUtil.isBlank(candidate.getTableRowsJson())) {
+            return metadataJson;
+        }
+        String tableRowsJson = candidate.getTableRowsJson().trim();
+        if (StrUtil.isBlank(metadataJson) || "{}".equals(metadataJson.trim())) {
+            return "{\"tableRows\":" + tableRowsJson + "}";
+        }
+        String trimmedMetadata = metadataJson.trim();
+        if (trimmedMetadata.endsWith("}")) {
+            return trimmedMetadata.substring(0, trimmedMetadata.length() - 1) + ",\"tableRows\":" + tableRowsJson + "}";
+        }
+        return "{\"parserMetadata\":" + quoteJsonString(metadataJson) + ",\"tableRows\":" + tableRowsJson + "}";
+    }
+
+    private String quoteJsonString(String value) {
+        if (value == null) {
+            return "\"\"";
+        }
+        return "\"" + value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            + "\"";
     }
 
     private String uploadBlockImage(Long documentId, Long taskId, DocumentBlockCandidate candidate) {

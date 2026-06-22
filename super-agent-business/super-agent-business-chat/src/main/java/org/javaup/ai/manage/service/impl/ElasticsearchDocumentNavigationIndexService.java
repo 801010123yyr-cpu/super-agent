@@ -176,7 +176,7 @@ public class ElasticsearchDocumentNavigationIndexService implements DocumentNavi
             return hits;
         }
         catch (IOException exception) {
-            log.warn("导航索引章节搜索失败，自动回退到结构图兜底匹配: documentId={}, question='{}', error={}",
+            log.warn("导航索引章节搜索失败，本次导航索引候选置空: documentId={}, question='{}', error={}",
                 documentId, safeText(question), exception.getMessage());
             return List.of();
         }
