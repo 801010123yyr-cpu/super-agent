@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -6,28 +6,28 @@ from pydantic import BaseModel, ConfigDict, Field
 class RaptorChunk(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    chunk_id: Annotated[int | None, Field(alias="chunkId")] = None
-    parent_block_id: Annotated[int | None, Field(alias="parentBlockId")] = None
-    chunk_no: Annotated[int | None, Field(alias="chunkNo")] = None
-    chunk_type: Annotated[str, Field(alias="chunkType")] = ""
+    chunk_id: int | None = Field(default=None, alias="chunkId")
+    parent_block_id: int | None = Field(default=None, alias="parentBlockId")
+    chunk_no: int | None = Field(default=None, alias="chunkNo")
+    chunk_type: str = Field(default="", alias="chunkType")
     title: str = ""
-    section_path: Annotated[str, Field(alias="sectionPath")] = ""
-    page_no: Annotated[int | None, Field(alias="pageNo")] = None
-    page_range: Annotated[str, Field(alias="pageRange")] = ""
-    bbox_json: Annotated[str, Field(alias="bboxJson")] = ""
+    section_path: str = Field(default="", alias="sectionPath")
+    page_no: int | None = Field(default=None, alias="pageNo")
+    page_range: str = Field(default="", alias="pageRange")
+    bbox_json: str = Field(default="", alias="bboxJson")
     text: str = ""
-    content_with_weight: Annotated[str, Field(alias="contentWithWeight")] = ""
-    source_block_ids: Annotated[str, Field(alias="sourceBlockIds")] = ""
+    content_with_weight: str = Field(default="", alias="contentWithWeight")
+    source_block_ids: str = Field(default="", alias="sourceBlockIds")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RaptorBuildRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    document_id: Annotated[int | None, Field(alias="documentId")] = None
-    task_id: Annotated[int | None, Field(alias="taskId")] = None
-    max_cluster_size: Annotated[int, Field(alias="maxClusterSize")] = 6
-    max_levels: Annotated[int, Field(alias="maxLevels")] = 3
+    document_id: int | None = Field(default=None, alias="documentId")
+    task_id: int | None = Field(default=None, alias="taskId")
+    max_cluster_size: int = Field(default=6, alias="maxClusterSize")
+    max_levels: int = Field(default=3, alias="maxLevels")
     chunks: list[RaptorChunk] = Field(default_factory=list)
 
 
@@ -35,17 +35,17 @@ class RaptorNode(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
-    parent_id: Annotated[str, Field(alias="parentId")] = ""
+    parent_id: str = Field(default="", alias="parentId")
     level: int
-    node_no: Annotated[int, Field(alias="nodeNo")]
+    node_no: int = Field(alias="nodeNo")
     title: str = ""
     summary: str = ""
-    summary_with_weight: Annotated[str, Field(alias="summaryWithWeight")] = ""
-    child_node_ids: Annotated[list[str], Field(alias="childNodeIds")] = Field(default_factory=list)
-    source_chunk_ids: Annotated[list[int], Field(alias="sourceChunkIds")] = Field(default_factory=list)
-    source_parent_block_ids: Annotated[list[int], Field(alias="sourceParentBlockIds")] = Field(default_factory=list)
-    section_path: Annotated[str, Field(alias="sectionPath")] = ""
-    page_range: Annotated[str, Field(alias="pageRange")] = ""
+    summary_with_weight: str = Field(default="", alias="summaryWithWeight")
+    child_node_ids: list[str] = Field(default_factory=list, alias="childNodeIds")
+    source_chunk_ids: list[int] = Field(default_factory=list, alias="sourceChunkIds")
+    source_parent_block_ids: list[int] = Field(default_factory=list, alias="sourceParentBlockIds")
+    section_path: str = Field(default="", alias="sectionPath")
+    page_range: str = Field(default="", alias="pageRange")
     keywords: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)

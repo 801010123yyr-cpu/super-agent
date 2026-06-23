@@ -30,6 +30,9 @@ public class DocumentNavigationDecision {
 
     private RetrievalQuestionPlan retrievalPlan;
 
+    @Builder.Default
+    private RetrievalIntent retrievalIntent = RetrievalIntent.GENERAL;
+
     private String summaryText;
 
     @Builder.Default

@@ -92,6 +92,28 @@ app:
     base-url: ${SUPER_AGENT_RAG_TOOLS_BASE_URL:http://127.0.0.1:18080}
     connect-timeout-ms: 3000
     read-timeout-ms: 10000
+    graph-extract-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_GRAPH_EXTRACT_READ_TIMEOUT_MS:30000}
+  graph-rag:
+    build:
+      lease-enabled: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_ENABLED:true}
+      lease-ttl-seconds: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_TTL_SECONDS:120}
+      max-attempts: ${SUPER_AGENT_GRAPH_RAG_BUILD_MAX_ATTEMPTS:2}
+      retry-backoff-millis: ${SUPER_AGENT_GRAPH_RAG_BUILD_RETRY_BACKOFF_MILLIS:500}
+    extraction:
+      # 是否启用 GraphRAG LLM 受控抽取增强。
+      # 开启后，LLM 只能基于 Java 提供的 chunk 原文返回实体/关系/evidence JSON；
+      # Java 会校验 chunkId、sourceChunkIds、quoteText 原文片段、端点实体和置信度后才合并到 KG 候选。
+      enabled: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_ENABLED:false}
+    community-report:
+      # 是否启用 GraphRAG LLM 受控社区报告增强。
+      # 开启后，LLM 只能基于 Java 提供的实体/关系/evidence 上下文返回 JSON 报告建议；
+      # Java 会校验 evidenceIds 白名单、置信度和必填字段，通过后才写入 KgCommunity。
+      enabled: ${SUPER_AGENT_GRAPH_RAG_COMMUNITY_REPORT_ENABLED:false}
+    entity-resolution:
+      # 是否启用 GraphRAG LLM 受控实体消歧增强。
+      # 开启后，LLM 只能基于 Java 提供的候选实体返回 mergeGroups 建议；
+      # Java 会校验 sourceEntityId、entityType、置信度和名称来源，通过后才影响 canonical 合并。
+      enabled: ${SUPER_AGENT_GRAPH_RAG_ENTITY_RESOLUTION_ENABLED:false}
   chat:
     # 是否开启“推荐追问问题”能力。
     # 开启后，主回答生成完成后会额外调用一次模型，产出最多 3 个可继续追问的问题。
@@ -165,6 +187,10 @@ app:
       graph-rag-top-k: 5
       # GraphRAG 关系扩展最大跳数。当前第一版支持 1 跳和 2 跳。
       graph-rag-max-hops: 2
+      graph-rag-query-plan:
+        # 是否启用 GraphRAG LLM 受控查询计划。
+        # 开启后，LLM 只返回实体/关系/community/hop 建议 JSON；Java 仍负责 KG 白名单校验和最终检索。
+        enabled: ${SUPER_AGENT_GRAPH_RAG_QUERY_PLAN_ENABLED:false}
       # RAPTOR 通道每个子问题默认返回的原文证据数量。
       # RAPTOR 先召回层级摘要，再下钻到 sourceChunkIds 对应的原文 chunk。
       raptor-top-k: 5

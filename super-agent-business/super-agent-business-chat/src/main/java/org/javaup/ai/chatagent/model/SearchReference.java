@@ -3,6 +3,8 @@ package org.javaup.ai.chatagent.model;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
  * @description: 统一引用来源模型
@@ -80,6 +82,22 @@ public class SearchReference {
     private String tableGroupByColumn;
 
     private Integer tableMatchedRowCount;
+
+    private List<Long> tableEvidenceRowIds = List.of();
+
+    private List<Integer> tableEvidenceRowNos = List.of();
+
+    private List<Long> tableEvidenceColumnIds = List.of();
+
+    private List<Integer> tableEvidenceColumnNos = List.of();
+
+    private List<String> tableEvidenceColumnNames = List.of();
+
+    private List<Long> tableEvidenceCellIds = List.of();
+
+    private List<String> tableEvidenceCellCoordinates = List.of();
+
+    private List<String> tableEvidenceCellBboxJsons = List.of();
 
     private Long kgEntityId;
 

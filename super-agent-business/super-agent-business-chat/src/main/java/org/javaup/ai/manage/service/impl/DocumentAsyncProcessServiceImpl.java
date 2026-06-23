@@ -36,6 +36,7 @@ import org.javaup.ai.manage.service.DocumentStructureNodeService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
 import org.javaup.ai.manage.service.DocumentVectorGateway;
 import org.javaup.ai.manage.service.GraphRagBuildService;
+import org.javaup.ai.manage.service.GraphRagTypedChunkService;
 import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.ChunkCandidate;
@@ -73,6 +74,7 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -120,6 +122,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     private final DocumentProfileService documentProfileService;
 
     private final GraphRagBuildService graphRagBuildService;
+
+    private final GraphRagTypedChunkService graphRagTypedChunkService;
 
     private final RaptorBuildService raptorBuildService;
 
@@ -445,6 +449,45 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                     "evidenceCount", graphRagBuildResult.getEvidenceCount(),
                     "communityCount", graphRagBuildResult.getCommunityCount()));
 
+            List<SuperAgentDocumentChunk> graphTypedChunkList = graphRagTypedChunkService.buildTypedChunks(
+                documentId,
+                taskId,
+                planId,
+                chunkEntityList,
+                nextChunkNo(chunkEntityList)
+            );
+            if (!graphTypedChunkList.isEmpty()) {
+                taskLogService.saveLog(taskId, documentId,
+                    DocumentTaskStageEnum.VECTORIZE.getCode(),
+                    DocumentTaskEventTypeEnum.START.getCode(),
+                    DocumentLogLevelEnum.INFO.getCode(),
+                    DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                    null,
+                    "开始索引 GraphRAG typed chunks。",
+                    detail("graphTypedChunkCount", graphTypedChunkList.size()));
+
+                for (SuperAgentDocumentChunk graphTypedChunk : graphTypedChunkList) {
+                    chunkMapper.insert(graphTypedChunk);
+                }
+                vectorGateway.vectorize(graphTypedChunkList);
+                if (keywordSearchGateway != null) {
+                    keywordSearchGateway.indexChunks(graphTypedChunkList);
+                }
+                for (SuperAgentDocumentChunk graphTypedChunk : graphTypedChunkList) {
+                    chunkMapper.updateById(graphTypedChunk);
+                }
+
+                taskLogService.saveLog(taskId, documentId,
+                    DocumentTaskStageEnum.VECTORIZE.getCode(),
+                    DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                    DocumentLogLevelEnum.INFO.getCode(),
+                    DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                    null,
+                    "GraphRAG typed chunks 索引完成。",
+                    detail("graphTypedChunkCount", graphTypedChunkList.size(),
+                        "chunkTypes", List.of("GRAPH_ENTITY", "GRAPH_RELATION", "GRAPH_COMMUNITY")));
+            }
+
             taskLogService.saveLog(taskId, documentId,
                 DocumentTaskStageEnum.VECTORIZE.getCode(),
                 DocumentTaskEventTypeEnum.START.getCode(),
@@ -485,7 +528,10 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                 DocumentOperatorTypeEnum.SYSTEM.getCode(),
                 null,
                 "索引构建完成。",
-                Map.of("taskId", taskId, "chunkCount", chunkEntityList.size(), "parentCount", parentBlockEntityList.size()));
+                Map.of("taskId", taskId,
+                    "chunkCount", chunkEntityList.size(),
+                    "graphTypedChunkCount", graphTypedChunkList.size(),
+                    "parentCount", parentBlockEntityList.size()));
         }
         catch (Exception exception) {
             log.error("异步构建索引失败，documentId={}, taskId={}, planId={}", documentId, taskId, planId, exception);
@@ -593,6 +639,17 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
         }
 
         return new ParentChildEntityBundle(parentBlockEntityList, chunkEntityList);
+    }
+
+    private int nextChunkNo(List<SuperAgentDocumentChunk> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return 1;
+        }
+        return chunks.stream()
+            .map(SuperAgentDocumentChunk::getChunkNo)
+            .filter(Objects::nonNull)
+            .max(Integer::compareTo)
+            .orElse(0) + 1;
     }
 
     private void saveParseArtifactsAndBlocks(Long documentId, Long taskId, DocumentAnalysisResult analysisResult) {

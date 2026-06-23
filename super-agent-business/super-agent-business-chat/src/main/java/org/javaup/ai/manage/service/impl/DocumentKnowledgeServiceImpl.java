@@ -16,6 +16,7 @@ import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
+import org.javaup.ai.manage.support.GraphRagTypedChunkMetadataSupport;
 import org.javaup.enums.BusinessStatus;
 import org.javaup.enums.DocumentIndexStatusEnum;
 import org.springframework.ai.document.Document;
@@ -88,6 +89,8 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
     
     private final ObjectProvider<DocumentKeywordSearchGateway> keywordSearchGatewayProvider;
+
+    private final GraphRagTypedChunkMetadataSupport graphRagTypedChunkMetadataSupport;
     
     @Override
     public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
@@ -325,6 +328,7 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             metadata.put(DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY, safeText(descriptor.getBusinessCategory()));
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS, safeText(descriptor.getDocumentTags()));
         }
+        graphRagTypedChunkMetadataSupport.enrichMetadata(metadata, chunkType, sourceBlockIds);
 
         return Document.builder()
             .id(String.valueOf(chunkId))

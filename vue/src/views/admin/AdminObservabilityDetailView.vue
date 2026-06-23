@@ -97,6 +97,50 @@
         </div>
       </section>
 
+      <section v-if="tableEvidenceItems.length > 0">
+        <div class="flex items-start justify-between gap-3 max-[768px]:flex-col">
+          <div>
+            <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">最终表格证据定位</h3>
+            <p class="m-0 text-[13px] leading-relaxed text-[var(--color-muted-strong)]">表格问答最终引用到的表、行、列、单元格和 bbox 都在这里，方便核对结构化查询有没有真正落到原表位置。</p>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="inline-flex rounded bg-primary/[0.08] px-2.5 py-1 text-xs font-semibold text-primary">{{ tableEvidenceItems.length }} 条表格证据</span>
+            <span v-if="tableEvidenceBboxCount" class="inline-flex rounded bg-[var(--color-success)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--color-success)]">{{ tableEvidenceBboxCount }} 个 cell bbox</span>
+          </div>
+        </div>
+        <div class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+          <article v-for="item in tableEvidenceItems" :key="item.key" class="rounded-lg border border-border bg-card p-4">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="inline-flex rounded bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-muted-strong)]">引用 {{ item.referenceId }}</span>
+                  <span class="inline-flex rounded bg-primary/[0.08] px-2 py-0.5 text-[11px] font-semibold text-primary">{{ item.channel }}</span>
+                </div>
+                <h4 class="m-0 mt-2 text-sm font-semibold text-foreground">{{ item.tableTitle }}</h4>
+                <p class="m-0 mt-0.5 truncate text-xs text-muted-foreground">{{ item.documentName }}<span v-if="item.sectionPath"> / {{ item.sectionPath }}</span></p>
+              </div>
+              <span v-if="item.citationRepaired" class="shrink-0 rounded bg-[var(--color-success)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-success)]">已语义修复</span>
+            </div>
+            <dl class="mt-3 grid grid-cols-2 gap-3 text-[13px] max-[540px]:grid-cols-1">
+              <div v-for="pair in tableEvidencePairs(item)" :key="`${item.key}-${pair.label}`" class="grid gap-1">
+                <dt class="text-xs text-muted-foreground">{{ pair.label }}</dt>
+                <dd class="m-0 break-words text-foreground">{{ pair.value }}</dd>
+              </div>
+            </dl>
+            <p v-if="item.snippet" class="mt-3 rounded-md bg-secondary px-3 py-2 text-xs leading-relaxed text-[var(--color-muted-strong)]">{{ truncate(item.snippet, 160) }}</p>
+            <details v-if="item.tableBboxJson || item.cellBboxJsons.length" class="mt-3 border-t border-border pt-2">
+              <summary class="cursor-pointer text-[13px] font-semibold text-primary">查看 bbox 原文</summary>
+              <pre v-if="item.tableBboxJson" class="mt-2 overflow-auto rounded-md bg-[#0f172a] p-3 text-xs text-[#e2e8f0] whitespace-pre-wrap">{{ item.tableBboxJson }}</pre>
+              <pre v-if="item.cellBboxJsons.length" class="mt-2 max-h-44 overflow-auto rounded-md bg-[#0f172a] p-3 text-xs text-[#e2e8f0] whitespace-pre-wrap">{{ item.cellBboxJsons.join('\n') }}</pre>
+            </details>
+            <RouterLink v-if="item.documentId" :to="tableEvidenceDocumentRoute(item)"
+              class="mt-3 inline-flex rounded-md border border-primary/20 bg-primary/[0.06] px-3 py-2 text-[13px] font-semibold text-primary transition-colors hover:bg-primary/[0.10]">
+              在文档表格中高亮
+            </RouterLink>
+          </article>
+        </div>
+      </section>
+
       <section v-if="channelExecutions.length > 0">
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">通道执行对比</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">对比各检索通道的性能和效果。</p>
@@ -290,6 +334,7 @@ import { ArrowLeftIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
 import { chatApi } from '../../api/api'
 import {
   buildExchangeStages, buildExchangeStatusNarrative, buildTraceStageInspector, buildUsageStageInspector,
+  buildTableEvidenceItems,
   formatChatMode, formatDateTime, formatExecutionMode, formatStatusLabel, formatChannelType,
   formatExecutionState, formatScore, groupResultsBySubQuestion, normalizeError, statusTone, truncate
 } from './observabilityHelpers'
@@ -325,6 +370,8 @@ const totalCostText = computed(() => { const total = (activeExchange.value?.debu
 const maxTraceDuration = computed(() => stageTraces.value.reduce((max, item) => Math.max(max, Number(item?.durationMs || 0)), 0))
 const groupedRetrievalResults = computed(() => groupResultsBySubQuestion(retrievalResults.value))
 const evidenceBudgetSnapshot = computed(() => stageTraces.value.find((item) => item.stageCode === 'EVIDENCE_BUDGET')?.snapshot || null)
+const tableEvidenceItems = computed(() => buildTableEvidenceItems(activeExchange.value?.references || []))
+const tableEvidenceBboxCount = computed(() => tableEvidenceItems.value.reduce((sum, item) => sum + item.cellBboxJsons.length, 0))
 const ragSystemPrompt = computed(() => activeExchange.value?.debugTrace?.ragSystemPrompt || '')
 const ragUserPrompt = computed(() => activeExchange.value?.debugTrace?.ragUserPrompt || '')
 const hasPromptData = computed(() => Boolean(ragSystemPrompt.value || ragUserPrompt.value))
@@ -379,6 +426,32 @@ function channelMetrics(exec) {
     { label: '平均分', value: formatScore(exec.avgScore) },
     { label: '分数区间', value: `${formatScore(exec.minScore)}~${formatScore(exec.maxScore)}` }
   ]
+}
+function tableEvidencePairs(item) {
+  return [
+    { label: '表格 ID / 编号', value: [item.tableId ? `ID ${item.tableId}` : '', item.tableNo ? `T#${item.tableNo}` : ''].filter(Boolean).join(' / ') || '无' },
+    { label: '查询操作', value: item.operationText },
+    { label: '命中行数', value: item.matchedRowCount === '' ? '无' : `${item.matchedRowCount} 行` },
+    { label: '证据行号', value: item.rowsText },
+    { label: '证据列', value: item.columnsText },
+    { label: '单元格坐标', value: item.cellsText },
+    { label: '页码/位置', value: item.locationText },
+    { label: 'bbox 状态', value: item.bboxText }
+  ]
+}
+function tableEvidenceDocumentRoute(item) {
+  return {
+    name: 'AdminDocumentDetail',
+    params: { documentId: item.documentId },
+    query: {
+      section: 'rag',
+      highlightTableId: item.tableId || undefined,
+      highlightTableNo: item.tableNo || undefined,
+      highlightRows: item.rowNos.length ? item.rowNos.join(',') : undefined,
+      highlightColumns: item.columnNames.length ? item.columnNames.join(',') : undefined,
+      highlightCells: item.cellCoordinates.length ? item.cellCoordinates.join(',') : undefined
+    }
+  }
 }
 function benchmarkCols(trace) {
   const bm = findBenchmark(trace.stageCode, trace.executionMode)

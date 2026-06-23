@@ -8,7 +8,8 @@ package org.javaup.enums;
 
 public enum DocumentChunkSourceTypeEnum {
     ORIGINAL(1, "原文切块"),
-    ENRICHED(2, "后处理补全文本");
+    ENRICHED(2, "后处理补全文本"),
+    GRAPH_RAG(3, "GraphRAG 派生证据");
 
     private final Integer code;
 

@@ -204,6 +204,8 @@ public class DocumentRagSnapshotVo {
 
         private Integer columnCount;
 
+        private String bboxJson;
+
         private List<TableColumnItem> columns;
 
         private List<TableRowItem> rows;
@@ -237,6 +239,32 @@ public class DocumentRagSnapshotVo {
         private String rowText;
 
         private List<String> cells;
+
+        private List<TableCellItem> cellItems;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TableCellItem {
+
+        private Long cellId;
+
+        private Long columnId;
+
+        private Integer rowNo;
+
+        private Integer columnNo;
+
+        private String cellText;
+
+        private Integer sourceRowNo;
+
+        private Integer sourceColumnNo;
+
+        private String sourceCellRef;
+
+        private String bboxJson;
     }
 
     @Data

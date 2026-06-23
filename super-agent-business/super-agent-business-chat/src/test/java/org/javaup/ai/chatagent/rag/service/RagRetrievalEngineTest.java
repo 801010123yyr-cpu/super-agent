@@ -4,6 +4,7 @@ import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
+import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
@@ -77,6 +78,54 @@ class RagRetrievalEngineTest {
                 .isInstanceOf(Number.class);
             assertThat(((Number) documents.get(0).getMetadata().get(DocumentKnowledgeMetadataKeys.METADATA_BOOST)).doubleValue())
                 .isGreaterThan(0D);
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void tableIntentRaisesTableChannelWeight() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+        properties.getHybrid().setOriginalScoreWeight(0D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document tableDoc = document("table-doc", "报销金额合计为 1200 元。", 1D);
+        Document vectorDoc = document("vector-doc", "报销流程说明。", 1D);
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(
+                    new StaticRetrievalChannel(RetrievalChannelEnum.TABLE.getName(), List.of(tableDoc)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorDoc))
+                ),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.TABLE)
+                .retrievalQuestion("报销金额合计是多少")
+                .retrievalSubQuestions(List.of("报销金额合计是多少"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).containsExactly("table-doc");
+            assertThat(documents.get(0).getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.RETRIEVAL_INTENT, RetrievalIntent.TABLE.name());
+            assertThat(((Number) documents.get(0).getMetadata().get(DocumentKnowledgeMetadataKeys.CHANNEL_WEIGHT)).doubleValue())
+                .isCloseTo(1.74D, org.assertj.core.data.Offset.offset(0.0001D));
         }
         finally {
             executorService.shutdownNow();

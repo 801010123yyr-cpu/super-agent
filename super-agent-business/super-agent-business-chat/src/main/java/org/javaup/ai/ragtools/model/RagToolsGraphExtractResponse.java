@@ -32,9 +32,13 @@ public class RagToolsGraphExtractResponse {
 
         private String normalizedName;
 
+        private List<String> aliases = new ArrayList<>();
+
         private String type;
 
         private String description;
+
+        private Double confidence;
 
         private List<Long> sourceChunkIds = new ArrayList<>();
 
@@ -59,6 +63,8 @@ public class RagToolsGraphExtractResponse {
         private String description;
 
         private Double weight;
+
+        private Double confidence;
 
         private List<String> evidenceIds = new ArrayList<>();
 

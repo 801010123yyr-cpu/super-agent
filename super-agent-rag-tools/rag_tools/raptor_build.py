@@ -1,6 +1,9 @@
 import re
 from collections import Counter, defaultdict
 
+from fastapi import HTTPException
+
+from rag_tools.semantic_model import SemanticModelUnavailable, embed_texts
 from rag_tools.schemas.raptor_build import RaptorBuildRequest, RaptorBuildResponse, RaptorChunk, RaptorNode
 
 MAX_SUMMARY_CHARS = 900
@@ -116,15 +119,31 @@ class _TreeItem:
 
 
 def _cluster_items(items: list[_TreeItem], max_cluster_size: int) -> list[list[_TreeItem]]:
-    grouped: dict[str, list[_TreeItem]] = defaultdict(list)
-    for item in items:
-        grouped[_cluster_key(item)].append(item)
-
+    try:
+        vectors = embed_texts([_embedding_text(item) for item in items])
+    except SemanticModelUnavailable as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+    remaining = set(range(len(items)))
     clusters: list[list[_TreeItem]] = []
-    for group_items in grouped.values():
-        group_items.sort(key=lambda item: _first_chunk_id(item))
-        for start in range(0, len(group_items), max_cluster_size):
-            clusters.append(group_items[start:start + max_cluster_size])
+    while remaining:
+        seed_index = min(remaining, key=lambda index: _first_chunk_id(items[index]))
+        remaining.remove(seed_index)
+        ranked_neighbors = sorted(
+            remaining,
+            key=lambda index: _dot(vectors[seed_index], vectors[index]),
+            reverse=True,
+        )
+        cluster_indices = [seed_index]
+        for neighbor_index in ranked_neighbors:
+            if len(cluster_indices) >= max_cluster_size:
+                break
+            if _dot(vectors[seed_index], vectors[neighbor_index]) < 0.45 and len(cluster_indices) >= 2:
+                continue
+            cluster_indices.append(neighbor_index)
+        for index in cluster_indices[1:]:
+            remaining.remove(index)
+        cluster_indices.sort(key=lambda index: _first_chunk_id(items[index]))
+        clusters.append([items[index] for index in cluster_indices])
     return clusters
 
 
@@ -168,7 +187,8 @@ def _build_node(cluster: list[_TreeItem], level: int, node_no: int) -> RaptorNod
         questions=questions,
         metadata={
             "itemCount": len(cluster),
-            "summaryStrategy": "extractive_rule_v1",
+            "clusterMethod": "sentence_embedding_greedy_v1",
+            "summaryStrategy": "embedding_cluster_extractive_v2",
             "firstChunkId": source_chunk_ids[0] if source_chunk_ids else None,
             "lastChunkId": source_chunk_ids[-1] if source_chunk_ids else None,
         },
@@ -187,6 +207,19 @@ def _cluster_key(item: _TreeItem) -> str:
     if item.keywords:
         return item.keywords[0]
     return "default"
+
+
+def _embedding_text(item: _TreeItem) -> str:
+    return "\n".join(part for part in [
+        item.title,
+        item.section_path,
+        "、".join(item.keywords),
+        item.text,
+    ] if part)
+
+
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
 
 
 def _first_chunk_id(item: _TreeItem) -> int:

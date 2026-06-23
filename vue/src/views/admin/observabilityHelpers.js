@@ -54,6 +54,9 @@ const CHANNEL_LABELS = {
   vector: '向量检索',
   rerank: '重排精排',
   hybrid: '融合结果',
+  table: '结构化表格检索',
+  'graph-rag': 'GraphRAG 图谱检索',
+  raptor: 'RAPTOR 层级摘要检索',
   'web-search': '网页搜索'
 }
 
@@ -93,6 +96,102 @@ function uniqueStrings(values) {
     result.push(item)
   })
   return result
+}
+
+function formatList(values, fallback = '无') {
+  const list = asList(values).map((item) => String(item || '').trim()).filter(Boolean)
+  return list.length ? uniqueStrings(list).join('、') : fallback
+}
+
+function hasAnyListValue(values) {
+  return asList(values).some((item) => item != null && String(item).trim() !== '')
+}
+
+function isTableReference(reference) {
+  if (!reference || typeof reference !== 'object') {
+    return false
+  }
+  return Boolean(
+    reference.tableId
+    || reference.tableNo
+    || reference.tableTitle
+    || reference.tableOperation
+    || hasAnyListValue(reference.tableEvidenceRowNos)
+    || hasAnyListValue(reference.tableEvidenceColumnNames)
+    || hasAnyListValue(reference.tableEvidenceCellCoordinates)
+    || hasAnyListValue(reference.tableEvidenceCellBboxJsons)
+  )
+}
+
+function formatTableLocation(reference) {
+  const parts = []
+  if (reference?.pageNo) {
+    parts.push(`第 ${reference.pageNo} 页`)
+  }
+  if (reference?.pageRange) {
+    parts.push(reference.pageRange)
+  }
+  if (reference?.bboxJson) {
+    parts.push('表格 bbox')
+  }
+  return parts.join(' / ') || '无'
+}
+
+function formatTableOperation(reference) {
+  const parts = []
+  if (reference?.tableOperation) {
+    parts.push(reference.tableOperation)
+  }
+  if (reference?.tableMetricColumn) {
+    parts.push(`指标 ${reference.tableMetricColumn}`)
+  }
+  if (reference?.tableGroupByColumn) {
+    parts.push(`分组 ${reference.tableGroupByColumn}`)
+  }
+  return parts.join(' / ') || '无'
+}
+
+function formatBboxPresence(reference) {
+  const cellBboxes = asList(reference?.tableEvidenceCellBboxJsons).filter((item) => item && String(item).trim())
+  const parts = []
+  if (reference?.bboxJson) {
+    parts.push('表格 bbox')
+  }
+  if (cellBboxes.length) {
+    parts.push(`${cellBboxes.length} 个单元格 bbox`)
+  }
+  return parts.join('，') || '无'
+}
+
+export function buildTableEvidenceItems(references) {
+  return asList(references)
+    .filter(isTableReference)
+    .map((reference, index) => ({
+      key: `${reference.referenceId || index}-${reference.tableId || reference.tableNo || index}`,
+      referenceId: reference.referenceId || '-',
+      documentId: reference.documentId || '',
+      documentName: reference.documentName || reference.title || '未命名文档',
+      channel: formatChannelName(reference.channel || 'table'),
+      tableTitle: reference.tableTitle || (reference.tableNo ? `表格 T#${reference.tableNo}` : '未命名表格'),
+      tableId: reference.tableId || '',
+      tableNo: reference.tableNo || '',
+      operationText: formatTableOperation(reference),
+      matchedRowCount: reference.tableMatchedRowCount ?? '',
+      rowNos: asList(reference.tableEvidenceRowNos).filter((item) => item != null && String(item).trim() !== ''),
+      columnNames: asList(reference.tableEvidenceColumnNames).filter((item) => item != null && String(item).trim() !== ''),
+      cellCoordinates: asList(reference.tableEvidenceCellCoordinates).filter((item) => item != null && String(item).trim() !== ''),
+      rowsText: formatList(reference.tableEvidenceRowNos),
+      columnsText: formatList(reference.tableEvidenceColumnNames),
+      cellsText: formatList(reference.tableEvidenceCellCoordinates),
+      locationText: formatTableLocation(reference),
+      bboxText: formatBboxPresence(reference),
+      tableBboxJson: reference.bboxJson || '',
+      cellBboxJsons: asList(reference.tableEvidenceCellBboxJsons).filter((item) => item && String(item).trim()),
+      sectionPath: reference.sectionPath || '',
+      snippet: reference.quoteText || reference.snippet || '',
+      citationScore: reference.citationScore,
+      citationRepaired: Boolean(reference.citationRepaired)
+    }))
 }
 
 export function normalizeError(error, fallbackMessage) {
@@ -872,19 +971,24 @@ export function buildTraceStageInspector(stageTrace, exchange) {
       })
       tableSections.push({
         label: '子问题检索链路',
-        columns: ['子问题', '关键词 raw/accepted', '向量 raw/accepted', '融合', '父块', '重排', '最终引用'],
+        columns: ['子问题', '关键词', '向量', '表格', 'GraphRAG', 'RAPTOR', '融合', '父块', '重排', '最终引用'],
         rows: snapshotList(snapshot, 'subQuestions').map((item) => {
           if (!item || typeof item !== 'object') {
             return null
           }
           const channelTraces = Array.isArray(item.channelTraces) ? item.channelTraces : []
-          const keywordTrace = channelTraces.find((trace) => trace?.channelName === 'keyword')
-          const vectorTrace = channelTraces.find((trace) => trace?.channelName === 'vector')
+          const countTrace = (channelName) => {
+            const trace = channelTraces.find((entry) => entry?.channelName === channelName)
+            return `${trace?.recalledCount ?? 0} / ${trace?.acceptedCount ?? 0}`
+          }
           return {
             cells: [
               `${item.index}. ${item.question}`,
-              `${keywordTrace?.recalledCount ?? 0} / ${keywordTrace?.acceptedCount ?? 0}`,
-              `${vectorTrace?.recalledCount ?? 0} / ${vectorTrace?.acceptedCount ?? 0}`,
+              countTrace('keyword'),
+              countTrace('vector'),
+              countTrace('table'),
+              countTrace('graph-rag'),
+              countTrace('raptor'),
               String(item.fusedCandidateCount ?? 0),
               String(item.parentCandidateCount ?? 0),
               String(item.rerankedCandidateCount ?? 0),
@@ -895,7 +999,7 @@ export function buildTraceStageInspector(stageTrace, exchange) {
       })
       tableSections.push({
         label: '最终证据表',
-        columns: ['引用', '文档', '章节', '通道'],
+        columns: ['引用', '文档', '章节', '通道', '页码/位置'],
         rows: snapshotList(snapshot, 'references').map((item) => {
           if (!item || typeof item !== 'object') {
             return null
@@ -905,10 +1009,26 @@ export function buildTraceStageInspector(stageTrace, exchange) {
               item.referenceId || '-',
               item.documentName || '未命名引用',
               item.sectionPath || '未识别章节',
-              formatChannelName(item.channel)
+              formatChannelName(item.channel),
+              item.pageNo ? `第 ${item.pageNo} 页` : (item.pageRange || '-')
             ]
           }
         }).filter(Boolean)
+      })
+      tableSections.push({
+        label: '表格证据定位',
+        columns: ['引用', '表格', '操作', '命中行', '证据列', '单元格坐标', 'bbox'],
+        rows: buildTableEvidenceItems(snapshotList(snapshot, 'references')).map((item) => ({
+          cells: [
+            item.referenceId,
+            `${item.tableTitle}${item.tableId ? ` / ID ${item.tableId}` : ''}`,
+            item.operationText,
+            item.rowsText,
+            item.columnsText,
+            item.cellsText,
+            item.bboxText
+          ]
+        }))
       })
       break
     case 'EVIDENCE_BUDGET':

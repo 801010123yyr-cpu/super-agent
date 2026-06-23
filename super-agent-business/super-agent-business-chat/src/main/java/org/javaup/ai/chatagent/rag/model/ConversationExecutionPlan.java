@@ -55,6 +55,9 @@ public class ConversationExecutionPlan {
 
     private DocumentNavigationDecision navigationDecision;
 
+    @Builder.Default
+    private RetrievalIntent retrievalIntent = RetrievalIntent.GENERAL;
+
     private boolean historyCompressionApplied;
 
     private Long historyCoveredExchangeId;

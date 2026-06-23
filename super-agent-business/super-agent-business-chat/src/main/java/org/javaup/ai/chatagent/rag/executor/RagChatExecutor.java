@@ -1,6 +1,7 @@
 package org.javaup.ai.chatagent.rag.executor;
 
 import cn.hutool.core.util.StrUtil;
+import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.model.trace.ConversationTraceStageCode;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
@@ -19,6 +20,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -59,7 +61,7 @@ public class RagChatExecutor implements ConversationExecutor {
 
         ConversationTraceRecorder.StageHandle retrieveStage = taskInfo.traceRecorder() == null
             ? null
-            : taskInfo.traceRecorder().startStage(ConversationTraceStageCode.RAG_RETRIEVE, mode().name(), "正在执行双通道混合检索。", null);
+            : taskInfo.traceRecorder().startStage(ConversationTraceStageCode.RAG_RETRIEVE, mode().name(), "正在执行多通道混合检索。", null);
 
         return Mono.fromCallable(() -> ragRetrievalEngine.retrieve(plan, taskInfo.traceRecorder()))
             .subscribeOn(Schedulers.boundedElastic())
@@ -93,25 +95,49 @@ public class RagChatExecutor implements ConversationExecutor {
                                         "recalledCount", trace.getRecalledCount(),
                                         "acceptedCount", trace.getAcceptedCount()
                                     )).toList(),
-                                "references", item.getReferences() == null
-                                    ? List.of()
-                                    : item.getReferences().stream().map(reference -> Map.of(
-                                        "referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""),
-                                        "documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()),
-                                        "sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), ""),
-                                        "channel", StrUtil.blankToDefault(reference.getChannel(), "")
-                                    )).toList()
+                                "references", referenceTraceItems(item.getReferences())
                             )).toList(),
-                        "references", context.flattenReferences().stream().map(reference -> Map.of(
-                            "referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""),
-                            "documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()),
-                            "sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), ""),
-                            "channel", StrUtil.blankToDefault(reference.getChannel(), "")
-                        )).toList()
+                        "references", referenceTraceItems(context.flattenReferences())
                     ));
                 }
             })
             .flatMapMany(context -> streamFromRetrievalContext(taskInfo, plan, context));
+    }
+
+    private List<Map<String, Object>> referenceTraceItems(List<SearchReference> references) {
+        if (references == null || references.isEmpty()) {
+            return List.of();
+        }
+        return references.stream()
+            .filter(reference -> reference != null)
+            .map(this::referenceTraceItem)
+            .toList();
+    }
+
+    private Map<String, Object> referenceTraceItem(SearchReference reference) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""));
+        item.put("sourceType", StrUtil.blankToDefault(reference.getSourceType(), ""));
+        item.put("documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()));
+        item.put("sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), ""));
+        item.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
+        item.put("pageNo", reference.getPageNo());
+        item.put("pageRange", StrUtil.blankToDefault(reference.getPageRange(), ""));
+        item.put("bboxJson", StrUtil.blankToDefault(reference.getBboxJson(), ""));
+        item.put("tableId", reference.getTableId());
+        item.put("tableNo", reference.getTableNo());
+        item.put("tableTitle", StrUtil.blankToDefault(reference.getTableTitle(), ""));
+        item.put("tableOperation", StrUtil.blankToDefault(reference.getTableOperation(), ""));
+        item.put("tableMetricColumn", StrUtil.blankToDefault(reference.getTableMetricColumn(), ""));
+        item.put("tableGroupByColumn", StrUtil.blankToDefault(reference.getTableGroupByColumn(), ""));
+        item.put("tableMatchedRowCount", reference.getTableMatchedRowCount());
+        item.put("tableEvidenceRowNos", reference.getTableEvidenceRowNos() == null ? List.of() : reference.getTableEvidenceRowNos());
+        item.put("tableEvidenceColumnNames", reference.getTableEvidenceColumnNames() == null ? List.of() : reference.getTableEvidenceColumnNames());
+        item.put("tableEvidenceCellCoordinates", reference.getTableEvidenceCellCoordinates() == null ? List.of() : reference.getTableEvidenceCellCoordinates());
+        item.put("tableEvidenceCellBboxJsons", reference.getTableEvidenceCellBboxJsons() == null ? List.of() : reference.getTableEvidenceCellBboxJsons());
+        item.put("citationScore", reference.getCitationScore());
+        item.put("citationRepaired", reference.isCitationRepaired());
+        return item;
     }
 
     private Flux<String> streamFromRetrievalContext(TaskInfo taskInfo,

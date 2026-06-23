@@ -905,7 +905,11 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             || fileType == DocumentFileTypeEnum.DOC
             || fileType == DocumentFileTypeEnum.DOCX
             || fileType == DocumentFileTypeEnum.MD
-            || fileType == DocumentFileTypeEnum.HTML;
+            || fileType == DocumentFileTypeEnum.HTML
+            || fileType == DocumentFileTypeEnum.XLSX;
+        if (fileType == DocumentFileTypeEnum.XLSX) {
+            return true;
+        }
         return suitableType && (analysisResult.getStructureLevel() >= DocumentStructureLevelEnum.MEDIUM.getCode()
             || analysisResult.getHeadingCount() >= 2);
     }

@@ -3,21 +3,30 @@ package org.javaup.ai.manage.service.impl;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import lombok.AllArgsConstructor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.data.SuperAgentKgCommunity;
 import org.javaup.ai.manage.data.SuperAgentKgEntity;
 import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
+import org.javaup.ai.manage.mapper.SuperAgentKgCommunityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
+import org.javaup.ai.manage.model.graph.GraphRagQueryCatalog;
+import org.javaup.ai.manage.model.graph.GraphRagQueryPlanAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagSearchResult;
+import org.javaup.ai.manage.service.GraphRagQueryPlanAdvisor;
 import org.javaup.ai.manage.service.GraphRagSearchService;
 import org.javaup.enums.BusinessStatus;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -25,22 +34,72 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-@AllArgsConstructor
 @Service
+@Slf4j
 public class GraphRagSearchServiceImpl implements GraphRagSearchService {
 
     private static final Pattern ENGLISH_TERM_PATTERN = Pattern.compile("\\b[A-Za-z][A-Za-z0-9._/-]{1,40}\\b");
+    private static final double ADVISOR_CONFIDENCE_THRESHOLD = 0.58D;
+    private static final int CATALOG_ENTITY_LIMIT = 80;
+    private static final int CATALOG_RELATION_LIMIT = 120;
+    private static final int CATALOG_COMMUNITY_LIMIT = 40;
 
     private final SuperAgentKgEntityMapper entityMapper;
 
     private final SuperAgentKgRelationMapper relationMapper;
 
     private final SuperAgentKgEvidenceMapper evidenceMapper;
+
+    private final SuperAgentKgCommunityMapper communityMapper;
+
+    private final ObjectMapper objectMapper;
+
+    private final GraphRagQueryPlanAdvisor queryPlanAdvisor;
+
+    @Autowired
+    public GraphRagSearchServiceImpl(SuperAgentKgEntityMapper entityMapper,
+                                     SuperAgentKgRelationMapper relationMapper,
+                                     SuperAgentKgEvidenceMapper evidenceMapper,
+                                     SuperAgentKgCommunityMapper communityMapper,
+                                     ObjectMapper objectMapper,
+                                     ObjectProvider<GraphRagQueryPlanAdvisor> queryPlanAdvisorProvider) {
+        this(
+            entityMapper,
+            relationMapper,
+            evidenceMapper,
+            communityMapper,
+            objectMapper,
+            queryPlanAdvisorProvider == null ? null : queryPlanAdvisorProvider.getIfAvailable()
+        );
+    }
+
+    public GraphRagSearchServiceImpl(SuperAgentKgEntityMapper entityMapper,
+                                     SuperAgentKgRelationMapper relationMapper,
+                                     SuperAgentKgEvidenceMapper evidenceMapper,
+                                     SuperAgentKgCommunityMapper communityMapper,
+                                     ObjectMapper objectMapper) {
+        this(entityMapper, relationMapper, evidenceMapper, communityMapper, objectMapper, (GraphRagQueryPlanAdvisor) null);
+    }
+
+    GraphRagSearchServiceImpl(SuperAgentKgEntityMapper entityMapper,
+                              SuperAgentKgRelationMapper relationMapper,
+                              SuperAgentKgEvidenceMapper evidenceMapper,
+                              SuperAgentKgCommunityMapper communityMapper,
+                              ObjectMapper objectMapper,
+                              GraphRagQueryPlanAdvisor queryPlanAdvisor) {
+        this.entityMapper = entityMapper;
+        this.relationMapper = relationMapper;
+        this.evidenceMapper = evidenceMapper;
+        this.communityMapper = communityMapper;
+        this.objectMapper = objectMapper;
+        this.queryPlanAdvisor = queryPlanAdvisor;
+    }
 
     @Override
     @Transactional(readOnly = true)
@@ -55,34 +114,72 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
 
         List<String> terms = extractTerms(question);
         String normalizedQuestion = normalize(question);
+        QueryProfile queryProfile = analyzeQuery(question, terms, maxHops);
         List<SuperAgentKgEntity> allEntities = listEntities(documentIds, taskIds);
+        Map<Long, SuperAgentKgEntity> entityMap = allEntities.stream()
+            .collect(Collectors.toMap(SuperAgentKgEntity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
+        List<SuperAgentKgCommunity> allCommunities = listCommunities(documentIds, taskIds);
+        List<SuperAgentKgRelation> loadedRelations = List.of();
+        if (shouldAskAdvisor(question, queryProfile, allEntities, allCommunities)) {
+            loadedRelations = listAllRelations(documentIds, taskIds);
+            queryProfile = applyAdvisorProfile(
+                question,
+                queryProfile,
+                allEntities,
+                loadedRelations,
+                allCommunities,
+                topK,
+                maxHops
+            );
+        }
+        QueryProfile effectiveQueryProfile = queryProfile;
+        List<GraphRagSearchResult> communityResults = searchCommunityReports(allCommunities, topK, normalizedQuestion, terms, effectiveQueryProfile);
         List<ScoredEntity> seedEntities = allEntities.stream()
-            .map(entity -> new ScoredEntity(entity, scoreEntity(entity, normalizedQuestion, terms)))
+            .map(entity -> new ScoredEntity(entity, scoreEntity(entity, normalizedQuestion, terms, effectiveQueryProfile)))
             .filter(item -> item.score() > 0D)
             .sorted(Comparator.comparingDouble(ScoredEntity::score).reversed())
             .limit(Math.max(topK * 4L, 12L))
             .toList();
-        if (seedEntities.isEmpty()) {
-            return List.of();
+        List<SuperAgentKgRelation> allRelations = effectiveQueryProfile.relationQuestion()
+            ? loadedOrQueryRelations(documentIds, taskIds, loadedRelations)
+            : List.of();
+        List<ScoredRelation> seedRelations = allRelations.stream()
+            .map(relation -> new ScoredRelation(
+                relation,
+                scoreRelation(relation, entityMap, normalizedQuestion, terms, effectiveQueryProfile)
+            ))
+            .filter(item -> item.score() > 0D)
+            .sorted(Comparator.comparingDouble(ScoredRelation::score).reversed())
+            .limit(Math.max(topK * 4L, 12L))
+            .toList();
+        if (seedEntities.isEmpty() && seedRelations.isEmpty()) {
+            return limitResults(communityResults, topK);
         }
 
-        Map<Long, SuperAgentKgEntity> entityMap = allEntities.stream()
-            .collect(Collectors.toMap(SuperAgentKgEntity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
         Map<Long, Double> seedScoreMap = seedEntities.stream()
             .collect(Collectors.toMap(item -> item.entity().getId(), ScoredEntity::score, Math::max, LinkedHashMap::new));
+        Map<Long, Double> relationSeedScoreMap = seedRelations.stream()
+            .collect(Collectors.toMap(item -> item.relation().getId(), ScoredRelation::score, Math::max, LinkedHashMap::new));
         Set<Long> frontierEntityIds = seedEntities.stream()
             .map(item -> item.entity().getId())
             .collect(Collectors.toCollection(LinkedHashSet::new));
+        frontierEntityIds.addAll(seedRelations.stream()
+            .flatMap(item -> relatedEntityIds(List.of(item.relation())).stream())
+            .collect(Collectors.toCollection(LinkedHashSet::new)));
 
         Map<Long, SuperAgentKgRelation> relationMap = new LinkedHashMap<>();
         Map<Long, Integer> relationHopMap = new LinkedHashMap<>();
+        seedRelations.forEach(item -> {
+            relationMap.put(item.relation().getId(), item.relation());
+            relationHopMap.put(item.relation().getId(), 0);
+        });
         List<SuperAgentKgRelation> oneHopRelations = listRelations(documentIds, taskIds, frontierEntityIds);
         oneHopRelations.forEach(relation -> {
             relationMap.put(relation.getId(), relation);
-            relationHopMap.put(relation.getId(), 1);
+            relationHopMap.putIfAbsent(relation.getId(), 1);
         });
 
-        if (Math.max(maxHops, 1) >= 2 && !oneHopRelations.isEmpty()) {
+        if (Math.max(effectiveQueryProfile.maxHops(), 1) >= 2 && !oneHopRelations.isEmpty()) {
             Set<Long> neighborEntityIds = relatedEntityIds(oneHopRelations);
             neighborEntityIds.removeAll(frontierEntityIds);
             if (!neighborEntityIds.isEmpty()) {
@@ -99,12 +196,12 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         evidenceEntityIds.addAll(relatedEntityIds(relationMap.values()));
         List<SuperAgentKgEvidence> evidences = listEvidences(documentIds, taskIds, evidenceEntityIds, relationIds);
         if (evidences.isEmpty()) {
-            return List.of();
+            return limitResults(communityResults, topK);
         }
 
         Map<Long, GraphRagSearchResult> resultMap = new LinkedHashMap<>();
         for (SuperAgentKgEvidence evidence : evidences) {
-            GraphRagSearchResult result = toResult(evidence, entityMap, relationMap, relationHopMap, seedScoreMap, terms);
+            GraphRagSearchResult result = toResult(evidence, entityMap, relationMap, relationHopMap, seedScoreMap, relationSeedScoreMap, terms);
             if (result == null) {
                 continue;
             }
@@ -112,10 +209,75 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 (left, right) -> left.getScore() >= right.getScore() ? left : right);
         }
 
-        return resultMap.values().stream()
+        List<GraphRagSearchResult> results = new ArrayList<>(resultMap.values());
+        results.addAll(communityResults);
+        return limitResults(results, topK);
+    }
+
+    private List<GraphRagSearchResult> limitResults(List<GraphRagSearchResult> results, int topK) {
+        if (CollUtil.isEmpty(results) || topK <= 0) {
+            return List.of();
+        }
+        return results.stream()
             .sorted(Comparator.comparingDouble(GraphRagSearchResult::getScore).reversed())
             .limit(topK)
             .toList();
+    }
+
+    private List<GraphRagSearchResult> searchCommunityReports(List<SuperAgentKgCommunity> communities,
+                                                              int topK,
+                                                              String normalizedQuestion,
+                                                              List<String> terms,
+                                                              QueryProfile queryProfile) {
+        if (communities.isEmpty()) {
+            return List.of();
+        }
+        List<ScoredCommunity> scoredCommunities = communities.stream()
+            .map(community -> new ScoredCommunity(community, scoreCommunity(community, normalizedQuestion, terms, queryProfile)))
+            .filter(item -> item.score() > 0D)
+            .sorted(Comparator.comparingDouble(ScoredCommunity::score).reversed())
+            .limit(Math.max(topK, 3))
+            .toList();
+        if (scoredCommunities.isEmpty()) {
+            return List.of();
+        }
+
+        Set<Long> evidenceIds = scoredCommunities.stream()
+            .flatMap(item -> readLongList(item.community().getEvidenceIdsJson()).stream())
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (evidenceIds.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, SuperAgentKgEvidence> evidenceMap = listEvidencesByIds(evidenceIds).stream()
+            .collect(Collectors.toMap(SuperAgentKgEvidence::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
+
+        List<GraphRagSearchResult> results = new ArrayList<>();
+        for (ScoredCommunity scoredCommunity : scoredCommunities) {
+            SuperAgentKgCommunity community = scoredCommunity.community();
+            SuperAgentKgEvidence representativeEvidence = readLongList(community.getEvidenceIdsJson()).stream()
+                .map(evidenceMap::get)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+            if (representativeEvidence == null) {
+                continue;
+            }
+            double rankBoost = communityRankBoost(community);
+            results.add(baseResult(representativeEvidence)
+                .communityId(community.getId())
+                .communityTitle(community.getTitle())
+                .communitySummary(community.getSummary())
+                .evidenceId(representativeEvidence.getId())
+                .quoteText(representativeEvidence.getQuoteText())
+                .graphPath("社区报告：" + StrUtil.blankToDefault(community.getTitle(), "未命名图谱社区"))
+                .hopCount(0)
+                .rankBoost(rankBoost)
+                .score(scoredCommunity.score()
+                    + graphRankScore(rankBoost)
+                    + evidenceBoost(representativeEvidence.getQuoteText(), terms))
+                .build());
+        }
+        return results;
     }
 
     private List<SuperAgentKgEntity> listEntities(List<Long> documentIds, List<Long> taskIds) {
@@ -143,6 +305,35 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             wrapper.in(SuperAgentKgRelation::getTaskId, taskIds);
         }
         return relationMapper.selectList(wrapper);
+    }
+
+    private List<SuperAgentKgRelation> listAllRelations(List<Long> documentIds, List<Long> taskIds) {
+        LambdaQueryWrapper<SuperAgentKgRelation> wrapper = new LambdaQueryWrapper<SuperAgentKgRelation>()
+            .in(SuperAgentKgRelation::getDocumentId, documentIds)
+            .eq(SuperAgentKgRelation::getStatus, BusinessStatus.YES.getCode());
+        if (CollUtil.isNotEmpty(taskIds)) {
+            wrapper.in(SuperAgentKgRelation::getTaskId, taskIds);
+        }
+        return relationMapper.selectList(wrapper);
+    }
+
+    private List<SuperAgentKgRelation> loadedOrQueryRelations(List<Long> documentIds,
+                                                              List<Long> taskIds,
+                                                              List<SuperAgentKgRelation> loadedRelations) {
+        if (CollUtil.isNotEmpty(loadedRelations)) {
+            return loadedRelations;
+        }
+        return listAllRelations(documentIds, taskIds);
+    }
+
+    private List<SuperAgentKgCommunity> listCommunities(List<Long> documentIds, List<Long> taskIds) {
+        LambdaQueryWrapper<SuperAgentKgCommunity> wrapper = new LambdaQueryWrapper<SuperAgentKgCommunity>()
+            .in(SuperAgentKgCommunity::getDocumentId, documentIds)
+            .eq(SuperAgentKgCommunity::getStatus, BusinessStatus.YES.getCode());
+        if (CollUtil.isNotEmpty(taskIds)) {
+            wrapper.in(SuperAgentKgCommunity::getTaskId, taskIds);
+        }
+        return communityMapper.selectList(wrapper);
     }
 
     private List<SuperAgentKgEvidence> listEvidences(List<Long> documentIds,
@@ -173,11 +364,21 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         return evidenceMapper.selectList(wrapper);
     }
 
+    private List<SuperAgentKgEvidence> listEvidencesByIds(Set<Long> evidenceIds) {
+        if (CollUtil.isEmpty(evidenceIds)) {
+            return List.of();
+        }
+        return evidenceMapper.selectList(new LambdaQueryWrapper<SuperAgentKgEvidence>()
+            .in(SuperAgentKgEvidence::getId, evidenceIds)
+            .eq(SuperAgentKgEvidence::getStatus, BusinessStatus.YES.getCode()));
+    }
+
     private GraphRagSearchResult toResult(SuperAgentKgEvidence evidence,
                                           Map<Long, SuperAgentKgEntity> entityMap,
                                           Map<Long, SuperAgentKgRelation> relationMap,
                                           Map<Long, Integer> relationHopMap,
                                           Map<Long, Double> seedScoreMap,
+                                          Map<Long, Double> relationSeedScoreMap,
                                           List<String> terms) {
         if (evidence.getRelationId() != null) {
             SuperAgentKgRelation relation = relationMap.get(evidence.getRelationId());
@@ -190,15 +391,22 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 return null;
             }
             boolean sourceSeed = seedScoreMap.containsKey(source.getId());
-            SuperAgentKgEntity seed = sourceSeed ? source : target;
-            SuperAgentKgEntity related = sourceSeed ? target : source;
+            boolean targetSeed = seedScoreMap.containsKey(target.getId());
+            SuperAgentKgEntity seed = sourceSeed || !targetSeed ? source : target;
+            SuperAgentKgEntity related = sourceSeed || !targetSeed ? target : source;
             double seedScore = Math.max(
                 seedScoreMap.getOrDefault(source.getId(), 0.25D),
                 seedScoreMap.getOrDefault(target.getId(), 0.25D)
             );
+            seedScore = Math.max(seedScore, relationSeedScoreMap.getOrDefault(relation.getId(), 0D));
             int hopCount = relationHopMap.getOrDefault(relation.getId(), 1);
             double hopPenalty = hopCount <= 1 ? 0D : 0.18D;
-            double score = seedScore + relationWeight(relation.getWeight()) + evidenceBoost(evidence.getQuoteText(), terms) - hopPenalty;
+            double rankBoost = relationRankBoost(relation, source, target);
+            double score = seedScore
+                + relationWeight(relation.getWeight())
+                + graphRankScore(rankBoost)
+                + evidenceBoost(evidence.getQuoteText(), terms)
+                - hopPenalty;
             return baseResult(evidence)
                 .entityId(seed.getId())
                 .entityName(seed.getName())
@@ -206,9 +414,10 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .relationType(relation.getRelationType())
                 .relatedEntityId(related.getId())
                 .relatedEntityName(related.getName())
-                .graphPath((hopCount <= 1 ? "一跳：" : "二跳：")
+                .graphPath((hopCount <= 0 ? "关系匹配：" : hopCount <= 1 ? "一跳：" : "二跳：")
                     + source.getName() + " --" + relation.getRelationType() + "--> " + target.getName())
                 .hopCount(hopCount)
+                .rankBoost(rankBoost)
                 .score(score)
                 .build();
         }
@@ -218,12 +427,16 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             if (entity == null) {
                 return null;
             }
-            double score = seedScoreMap.getOrDefault(entity.getId(), 0.35D) + evidenceBoost(evidence.getQuoteText(), terms);
+            double rankBoost = entityRankBoost(entity);
+            double score = seedScoreMap.getOrDefault(entity.getId(), 0.35D)
+                + graphRankScore(rankBoost)
+                + evidenceBoost(evidence.getQuoteText(), terms);
             return baseResult(evidence)
                 .entityId(entity.getId())
                 .entityName(entity.getName())
                 .graphPath(entity.getName())
                 .hopCount(0)
+                .rankBoost(rankBoost)
                 .score(score)
                 .build();
         }
@@ -260,7 +473,10 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         return entityIds;
     }
 
-    private double scoreEntity(SuperAgentKgEntity entity, String normalizedQuestion, List<String> terms) {
+    private double scoreEntity(SuperAgentKgEntity entity,
+                               String normalizedQuestion,
+                               List<String> terms,
+                               QueryProfile queryProfile) {
         String normalizedName = normalize(StrUtil.blankToDefault(entity.getNormalizedName(), entity.getName()));
         String name = normalize(entity.getName());
         if (normalizedName.isBlank() && name.isBlank()) {
@@ -273,6 +489,21 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         }
         if (StrUtil.isNotBlank(name) && normalizedQuestion.contains(name)) {
             score += 0.8D;
+        }
+        for (String alias : entityAliases(entity)) {
+            String normalizedAlias = normalize(alias);
+            if (normalizedAlias.length() >= 2 && normalizedQuestion.contains(normalizedAlias)) {
+                score += 0.7D;
+            }
+        }
+        String description = normalize(entity.getDescription());
+        if (StrUtil.isNotBlank(description)) {
+            for (String term : terms) {
+                String normalizedTerm = normalize(term);
+                if (normalizedTerm.length() >= 2 && description.contains(normalizedTerm)) {
+                    score += 0.12D;
+                }
+            }
         }
         for (String term : terms) {
             String normalizedTerm = normalize(term);
@@ -291,7 +522,77 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         if ("SECTION".equalsIgnoreCase(entity.getEntityType())) {
             score += 0.08D;
         }
-        return score;
+        if (queryProfile.entityTypes().contains(StrUtil.blankToDefault(entity.getEntityType(), "").toUpperCase(Locale.ROOT))) {
+            score += 0.22D;
+        }
+        if (queryProfile.entityIds().contains(entity.getId())) {
+            score += 0.95D;
+        }
+        if (matchesAdvisorEntityName(entity, queryProfile.entityNames())) {
+            score += 0.62D;
+        }
+        if (score <= 0D) {
+            return 0D;
+        }
+        score += Math.min(0.18D, metadataConfidence(entity.getMetadataJson()) * 0.18D);
+        score += graphRankScore(entityRankBoost(entity)) * 0.45D;
+        return Math.min(score, 2.2D);
+    }
+
+    private double scoreRelation(SuperAgentKgRelation relation,
+                                 Map<Long, SuperAgentKgEntity> entityMap,
+                                 String normalizedQuestion,
+                                 List<String> terms,
+                                 QueryProfile queryProfile) {
+        SuperAgentKgEntity source = entityMap.get(relation.getSourceEntityId());
+        SuperAgentKgEntity target = entityMap.get(relation.getTargetEntityId());
+        if (source == null || target == null) {
+            return 0D;
+        }
+        String relationType = StrUtil.blankToDefault(relation.getRelationType(), "ASSOCIATED_WITH").toUpperCase(Locale.ROOT);
+        String description = normalize(relation.getDescription());
+        String sourceText = searchableEntityText(source);
+        String targetText = searchableEntityText(target);
+        String relationText = normalize(relationType + " " + StrUtil.blankToDefault(relation.getDescription(), "") + " " + sourceText + " " + targetText);
+
+        double score = 0D;
+        if (queryProfile.relationTypes().contains(relationType)) {
+            score += 0.82D;
+        }
+        if (queryProfile.relationIds().contains(relation.getId())) {
+            score += 0.95D;
+        }
+        if (StrUtil.isNotBlank(description) && normalizedQuestion.contains(description)) {
+            score += 0.35D;
+        }
+        for (String term : terms) {
+            String normalizedTerm = normalize(term);
+            if (normalizedTerm.length() < 2) {
+                continue;
+            }
+            if (sourceText.contains(normalizedTerm) || targetText.contains(normalizedTerm)) {
+                score += 0.28D;
+            }
+            if (relationText.contains(normalizedTerm)) {
+                score += 0.16D;
+            }
+        }
+        if (!queryProfile.entityTypes().isEmpty()) {
+            String sourceType = StrUtil.blankToDefault(source.getEntityType(), "").toUpperCase(Locale.ROOT);
+            String targetType = StrUtil.blankToDefault(target.getEntityType(), "").toUpperCase(Locale.ROOT);
+            if (queryProfile.entityTypes().contains(sourceType) || queryProfile.entityTypes().contains(targetType)) {
+                score += 0.14D;
+            }
+        }
+        if (score <= 0D) {
+            return 0D;
+        }
+        if (queryProfile.relationQuestion() && !"ASSOCIATED_WITH".equals(relationType)) {
+            score += 0.12D;
+        }
+        score += relationWeight(relation.getWeight()) * 0.55D;
+        score += graphRankScore(relationRankBoost(relation, source, target)) * 0.40D;
+        return Math.min(score, 2.0D);
     }
 
     private double relationWeight(BigDecimal weight) {
@@ -299,6 +600,26 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return 0.35D;
         }
         return Math.min(0.6D, Math.max(0D, weight.doubleValue()) * 0.5D);
+    }
+
+    private double graphRankScore(double rankBoost) {
+        return Math.min(0.22D, Math.max(0D, rankBoost) * 0.22D);
+    }
+
+    private double entityRankBoost(SuperAgentKgEntity entity) {
+        Map<String, Object> metadata = readMap(entity == null ? null : entity.getMetadataJson());
+        return numberValue(metadata.get("rankBoost"), 0D);
+    }
+
+    private double relationRankBoost(SuperAgentKgRelation relation,
+                                     SuperAgentKgEntity source,
+                                     SuperAgentKgEntity target) {
+        Map<String, Object> metadata = readMap(relation == null ? null : relation.getMetadataJson());
+        double relationRankBoost = numberValue(metadata.get("rankBoost"), -1D);
+        if (relationRankBoost >= 0D) {
+            return relationRankBoost;
+        }
+        return Math.max(entityRankBoost(source), entityRankBoost(target));
     }
 
     private double evidenceBoost(String quoteText, List<String> terms) {
@@ -314,6 +635,483 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             }
         }
         return Math.min(0.32D, boost);
+    }
+
+    private double scoreCommunity(SuperAgentKgCommunity community,
+                                  String normalizedQuestion,
+                                  List<String> terms,
+                                  QueryProfile queryProfile) {
+        String title = normalize(community.getTitle());
+        String summary = normalize(community.getSummary());
+        if (title.isBlank() && summary.isBlank()) {
+            return 0D;
+        }
+        double score = 0D;
+        if (queryProfile.communityIds().contains(community.getId())) {
+            score += 0.92D;
+        }
+        if (queryProfile.communityQuestion()) {
+            score += 0.12D;
+        }
+        if (StrUtil.isNotBlank(title) && normalizedQuestion.contains(title)) {
+            score += 0.8D;
+        }
+        for (String term : terms) {
+            String normalizedTerm = normalize(term);
+            if (normalizedTerm.length() < 2) {
+                continue;
+            }
+            if (title.contains(normalizedTerm)) {
+                score += 0.28D;
+            }
+            if (summary.contains(normalizedTerm)) {
+                score += 0.18D;
+            }
+        }
+        return Math.min(score, 1.2D);
+    }
+
+    private double communityRankBoost(SuperAgentKgCommunity community) {
+        Map<String, Object> metadata = readMap(community == null ? null : community.getMetadataJson());
+        return numberValue(metadata.get("rankBoost"), 0D);
+    }
+
+    private QueryProfile analyzeQuery(String question, List<String> terms, int requestedMaxHops) {
+        String normalizedQuestion = normalize(question);
+        LinkedHashSet<String> relationTypes = new LinkedHashSet<>();
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "依赖", "DEPENDS_ON");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "依靠", "DEPENDS_ON");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "调用", "CALLS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "使用", "USES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "采用", "USES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "支持", "SUPPORTS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "包含", "CONTAINS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "包括", "CONTAINS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "组成", "PART_OF");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "属于", "BELONGS_TO");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "负责", "RESPONSIBLE_FOR");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "关联", "RELATED_TO");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "关系", "RELATED_TO");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "映射", "MAPS_TO");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "生成", "PRODUCES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "输出", "PRODUCES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "输入", "CONSUMES");
+
+        LinkedHashSet<String> entityTypes = new LinkedHashSet<>();
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "系统", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "平台", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "服务", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "模块", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "组件", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "接口", "SYSTEM");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "部门", "ORG");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "团队", "ORG");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "公司", "ORG");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "组织", "ORG");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "流程", "PROCESS");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "规则", "PROCESS");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "策略", "PROCESS");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "指标", "METRIC");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "金额", "METRIC");
+        addEntityTypeIfPresent(entityTypes, normalizedQuestion, "数量", "METRIC");
+
+        boolean relationQuestion = !relationTypes.isEmpty()
+            || normalizedQuestion.contains("上下游")
+            || normalizedQuestion.contains("链路")
+            || normalizedQuestion.contains("路径");
+        boolean communityQuestion = normalizedQuestion.contains("社区")
+            || normalizedQuestion.contains("主题")
+            || normalizedQuestion.contains("整体")
+            || normalizedQuestion.contains("全局")
+            || normalizedQuestion.contains("总结");
+        return new QueryProfile(
+            new LinkedHashSet<>(relationTypes),
+            new LinkedHashSet<>(entityTypes),
+            new LinkedHashSet<>(),
+            new LinkedHashSet<>(),
+            new LinkedHashSet<>(),
+            new LinkedHashSet<>(),
+            relationQuestion,
+            communityQuestion,
+            normalizeMaxHops(requestedMaxHops)
+        );
+    }
+
+    private boolean shouldAskAdvisor(String question,
+                                     QueryProfile queryProfile,
+                                     List<SuperAgentKgEntity> entities,
+                                     List<SuperAgentKgCommunity> communities) {
+        if (queryPlanAdvisor == null
+            || StrUtil.isBlank(question)
+            || (CollUtil.isEmpty(entities) && CollUtil.isEmpty(communities))) {
+            return false;
+        }
+        String normalizedQuestion = normalize(question);
+        boolean graphCue = queryProfile.relationQuestion()
+            || queryProfile.communityQuestion()
+            || !queryProfile.entityTypes().isEmpty()
+            || normalizedQuestion.contains("图谱")
+            || normalizedQuestion.contains("实体")
+            || normalizedQuestion.contains("关系")
+            || normalizedQuestion.contains("上下游")
+            || normalizedQuestion.contains("链路")
+            || normalizedQuestion.contains("路径");
+        if (graphCue) {
+            return true;
+        }
+        return CollUtil.isNotEmpty(communities)
+            && (normalizedQuestion.contains("主题") || normalizedQuestion.contains("总结"));
+    }
+
+    private QueryProfile applyAdvisorProfile(String question,
+                                             QueryProfile baseProfile,
+                                             List<SuperAgentKgEntity> entities,
+                                             List<SuperAgentKgRelation> relations,
+                                             List<SuperAgentKgCommunity> communities,
+                                             int topK,
+                                             int requestedMaxHops) {
+        GraphRagQueryCatalog catalog = buildQueryCatalog(entities, relations, communities, topK);
+        Optional<GraphRagQueryPlanAdvice> advice;
+        try {
+            advice = queryPlanAdvisor.advise(question, catalog);
+        }
+        catch (RuntimeException exception) {
+            log.warn("GraphRAG 受控查询计划 advisor 失败，继续使用 Java 规则 profile: question='{}', message={}",
+                question,
+                exception.getMessage());
+            return baseProfile;
+        }
+        if (advice.isEmpty()) {
+            return baseProfile;
+        }
+        QueryProfile advisorProfile = validateAdvice(advice.get(), entities, relations, communities, requestedMaxHops);
+        if (advisorProfile == null) {
+            return baseProfile;
+        }
+        return mergeProfiles(baseProfile, advisorProfile);
+    }
+
+    private GraphRagQueryCatalog buildQueryCatalog(List<SuperAgentKgEntity> entities,
+                                                   List<SuperAgentKgRelation> relations,
+                                                   List<SuperAgentKgCommunity> communities,
+                                                   int topK) {
+        Map<Long, SuperAgentKgEntity> entityMap = entities.stream()
+            .collect(Collectors.toMap(SuperAgentKgEntity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
+        int entityLimit = Math.max(CATALOG_ENTITY_LIMIT, topK * 8);
+        int relationLimit = Math.max(CATALOG_RELATION_LIMIT, topK * 12);
+        int communityLimit = Math.max(CATALOG_COMMUNITY_LIMIT, topK * 4);
+        return GraphRagQueryCatalog.builder()
+            .entities(entities.stream()
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparingDouble(this::entityRankBoost).reversed())
+                .limit(entityLimit)
+                .map(entity -> GraphRagQueryCatalog.EntityItem.builder()
+                    .entityId(entity.getId())
+                    .name(entity.getName())
+                    .normalizedName(entity.getNormalizedName())
+                    .entityType(entity.getEntityType())
+                    .aliases(entityAliases(entity))
+                    .description(entity.getDescription())
+                    .build())
+                .toList())
+            .relations(relations.stream()
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparingDouble((SuperAgentKgRelation relation) -> relationRankBoost(
+                    relation,
+                    entityMap.get(relation.getSourceEntityId()),
+                    entityMap.get(relation.getTargetEntityId())
+                )).reversed())
+                .limit(relationLimit)
+                .map(relation -> {
+                    SuperAgentKgEntity source = entityMap.get(relation.getSourceEntityId());
+                    SuperAgentKgEntity target = entityMap.get(relation.getTargetEntityId());
+                    return GraphRagQueryCatalog.RelationItem.builder()
+                        .relationId(relation.getId())
+                        .relationType(relation.getRelationType())
+                        .sourceEntityId(relation.getSourceEntityId())
+                        .sourceEntityName(source == null ? "" : source.getName())
+                        .targetEntityId(relation.getTargetEntityId())
+                        .targetEntityName(target == null ? "" : target.getName())
+                        .description(relation.getDescription())
+                        .build();
+                })
+                .toList())
+            .communities(communities.stream()
+                .filter(Objects::nonNull)
+                .sorted(Comparator.comparingDouble(this::communityRankBoost).reversed())
+                .limit(communityLimit)
+                .map(community -> GraphRagQueryCatalog.CommunityItem.builder()
+                    .communityId(community.getId())
+                    .title(community.getTitle())
+                    .summary(community.getSummary())
+                    .build())
+                .toList())
+            .build();
+    }
+
+    private QueryProfile validateAdvice(GraphRagQueryPlanAdvice advice,
+                                        List<SuperAgentKgEntity> entities,
+                                        List<SuperAgentKgRelation> relations,
+                                        List<SuperAgentKgCommunity> communities,
+                                        int requestedMaxHops) {
+        if (advice == null || !Boolean.TRUE.equals(advice.getGraphQuery())) {
+            return null;
+        }
+        double confidence = numberValue(advice.getConfidence(), 0D);
+        if (confidence < ADVISOR_CONFIDENCE_THRESHOLD) {
+            return null;
+        }
+        Set<String> allowedEntityTypes = entities.stream()
+            .map(SuperAgentKgEntity::getEntityType)
+            .filter(StrUtil::isNotBlank)
+            .map(item -> item.toUpperCase(Locale.ROOT))
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> allowedRelationTypes = relations.stream()
+            .map(SuperAgentKgRelation::getRelationType)
+            .filter(StrUtil::isNotBlank)
+            .map(item -> item.toUpperCase(Locale.ROOT))
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<Long> allowedEntityIds = entities.stream()
+            .map(SuperAgentKgEntity::getId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<Long> allowedRelationIds = relations.stream()
+            .map(SuperAgentKgRelation::getId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<Long> allowedCommunityIds = communities.stream()
+            .map(SuperAgentKgCommunity::getId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        LinkedHashSet<String> entityTypes = normalizeAllowedStrings(advice.getEntityTypes(), allowedEntityTypes);
+        LinkedHashSet<String> relationTypes = normalizeAllowedStrings(advice.getRelationTypes(), allowedRelationTypes);
+        LinkedHashSet<Long> entityIds = normalizeAllowedLongs(advice.getEntityIds(), allowedEntityIds);
+        LinkedHashSet<Long> relationIds = normalizeAllowedLongs(advice.getRelationIds(), allowedRelationIds);
+        LinkedHashSet<Long> communityIds = normalizeAllowedLongs(advice.getCommunityIds(), allowedCommunityIds);
+        LinkedHashSet<String> entityNames = normalizeAllowedEntityNames(advice.getEntityNames(), entities);
+
+        boolean relationQuestion = Boolean.TRUE.equals(advice.getRelationQuestion())
+            || !relationTypes.isEmpty()
+            || !relationIds.isEmpty();
+        boolean communityQuestion = Boolean.TRUE.equals(advice.getCommunityQuestion()) || !communityIds.isEmpty();
+        if (entityTypes.isEmpty()
+            && relationTypes.isEmpty()
+            && entityIds.isEmpty()
+            && relationIds.isEmpty()
+            && communityIds.isEmpty()
+            && entityNames.isEmpty()) {
+            return null;
+        }
+        return new QueryProfile(
+            relationTypes,
+            entityTypes,
+            entityIds,
+            relationIds,
+            communityIds,
+            entityNames,
+            relationQuestion,
+            communityQuestion,
+            normalizeAdvisorMaxHops(advice.getMaxHops(), requestedMaxHops)
+        );
+    }
+
+    private QueryProfile mergeProfiles(QueryProfile baseProfile, QueryProfile advisorProfile) {
+        LinkedHashSet<String> relationTypes = new LinkedHashSet<>(baseProfile.relationTypes());
+        relationTypes.addAll(advisorProfile.relationTypes());
+        LinkedHashSet<String> entityTypes = new LinkedHashSet<>(baseProfile.entityTypes());
+        entityTypes.addAll(advisorProfile.entityTypes());
+        LinkedHashSet<Long> entityIds = new LinkedHashSet<>(baseProfile.entityIds());
+        entityIds.addAll(advisorProfile.entityIds());
+        LinkedHashSet<Long> relationIds = new LinkedHashSet<>(baseProfile.relationIds());
+        relationIds.addAll(advisorProfile.relationIds());
+        LinkedHashSet<Long> communityIds = new LinkedHashSet<>(baseProfile.communityIds());
+        communityIds.addAll(advisorProfile.communityIds());
+        LinkedHashSet<String> entityNames = new LinkedHashSet<>(baseProfile.entityNames());
+        entityNames.addAll(advisorProfile.entityNames());
+        return new QueryProfile(
+            relationTypes,
+            entityTypes,
+            entityIds,
+            relationIds,
+            communityIds,
+            entityNames,
+            baseProfile.relationQuestion() || advisorProfile.relationQuestion(),
+            baseProfile.communityQuestion() || advisorProfile.communityQuestion(),
+            Math.max(baseProfile.maxHops(), advisorProfile.maxHops())
+        );
+    }
+
+    private LinkedHashSet<String> normalizeAllowedStrings(List<String> values, Set<String> allowedValues) {
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        if (CollUtil.isEmpty(values) || CollUtil.isEmpty(allowedValues)) {
+            return result;
+        }
+        for (String value : values) {
+            String normalized = StrUtil.blankToDefault(value, "").trim().toUpperCase(Locale.ROOT);
+            if (allowedValues.contains(normalized)) {
+                result.add(normalized);
+            }
+        }
+        return result;
+    }
+
+    private LinkedHashSet<Long> normalizeAllowedLongs(List<Long> values, Set<Long> allowedValues) {
+        LinkedHashSet<Long> result = new LinkedHashSet<>();
+        if (CollUtil.isEmpty(values) || CollUtil.isEmpty(allowedValues)) {
+            return result;
+        }
+        for (Long value : values) {
+            if (value != null && allowedValues.contains(value)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private LinkedHashSet<String> normalizeAllowedEntityNames(List<String> entityNames,
+                                                              List<SuperAgentKgEntity> entities) {
+        LinkedHashSet<String> allowedNames = new LinkedHashSet<>();
+        for (SuperAgentKgEntity entity : entities) {
+            addNormalizedIfNotBlank(allowedNames, entity.getName());
+            addNormalizedIfNotBlank(allowedNames, entity.getNormalizedName());
+            for (String alias : entityAliases(entity)) {
+                addNormalizedIfNotBlank(allowedNames, alias);
+            }
+        }
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        if (CollUtil.isEmpty(entityNames)) {
+            return result;
+        }
+        for (String entityName : entityNames) {
+            String normalizedName = normalize(entityName);
+            if (normalizedName.length() >= 2 && allowedNames.contains(normalizedName)) {
+                result.add(normalizedName);
+            }
+        }
+        return result;
+    }
+
+    private void addNormalizedIfNotBlank(Set<String> target, String value) {
+        String normalized = normalize(value);
+        if (normalized.length() >= 2) {
+            target.add(normalized);
+        }
+    }
+
+    private int normalizeAdvisorMaxHops(Integer advisorMaxHops, int requestedMaxHops) {
+        if (advisorMaxHops == null) {
+            return normalizeMaxHops(requestedMaxHops);
+        }
+        return Math.min(normalizeMaxHops(requestedMaxHops), normalizeMaxHops(advisorMaxHops));
+    }
+
+    private int normalizeMaxHops(int maxHops) {
+        return Math.max(1, Math.min(2, maxHops));
+    }
+
+    private void addRelationTypeIfPresent(Set<String> relationTypes, String normalizedQuestion, String keyword, String relationType) {
+        if (normalizedQuestion.contains(normalize(keyword))) {
+            relationTypes.add(relationType);
+        }
+    }
+
+    private void addEntityTypeIfPresent(Set<String> entityTypes, String normalizedQuestion, String keyword, String entityType) {
+        if (normalizedQuestion.contains(normalize(keyword))) {
+            entityTypes.add(entityType);
+        }
+    }
+
+    private String searchableEntityText(SuperAgentKgEntity entity) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(StrUtil.blankToDefault(entity.getName(), "")).append(' ');
+        builder.append(StrUtil.blankToDefault(entity.getNormalizedName(), "")).append(' ');
+        builder.append(StrUtil.blankToDefault(entity.getDescription(), "")).append(' ');
+        for (String alias : entityAliases(entity)) {
+            builder.append(alias).append(' ');
+        }
+        return normalize(builder.toString());
+    }
+
+    private boolean matchesAdvisorEntityName(SuperAgentKgEntity entity, Set<String> entityNames) {
+        if (CollUtil.isEmpty(entityNames) || entity == null) {
+            return false;
+        }
+        if (entityNames.contains(normalize(entity.getName())) || entityNames.contains(normalize(entity.getNormalizedName()))) {
+            return true;
+        }
+        for (String alias : entityAliases(entity)) {
+            if (entityNames.contains(normalize(alias))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<String> entityAliases(SuperAgentKgEntity entity) {
+        Map<String, Object> metadata = readMap(entity.getMetadataJson());
+        return readStringList(metadata.get("aliases"));
+    }
+
+    private double metadataConfidence(String metadataJson) {
+        Map<String, Object> metadata = readMap(metadataJson);
+        return numberValue(metadata.get("confidence"), 0D);
+    }
+
+    private double numberValue(Object value, double defaultValue) {
+        if (value instanceof Number number) {
+            return Math.max(0D, Math.min(1D, number.doubleValue()));
+        }
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Math.max(0D, Math.min(1D, Double.parseDouble(String.valueOf(value))));
+        }
+        catch (Exception exception) {
+            return defaultValue;
+        }
+    }
+
+    private Map<String, Object> readMap(String json) {
+        if (StrUtil.isBlank(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
+        }
+        catch (Exception exception) {
+            return Map.of();
+        }
+    }
+
+    private List<String> readStringList(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof Collection<?> collection) {
+            List<String> result = new ArrayList<>();
+            for (Object item : collection) {
+                if (item != null && StrUtil.isNotBlank(String.valueOf(item))) {
+                    result.add(String.valueOf(item));
+                }
+            }
+            return result;
+        }
+        if (value instanceof String text) {
+            if (StrUtil.isBlank(text)) {
+                return List.of();
+            }
+            List<String> result = new ArrayList<>();
+            for (String item : text.split("[\\n\\r,，;；、|]+")) {
+                if (StrUtil.isNotBlank(item)) {
+                    result.add(item.trim());
+                }
+            }
+            return result;
+        }
+        return List.of(String.valueOf(value));
     }
 
     private List<String> extractTerms(String question) {
@@ -344,6 +1142,36 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .toLowerCase(Locale.ROOT);
     }
 
+    private List<Long> readLongList(String json) {
+        if (StrUtil.isBlank(json)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, Long.class));
+        }
+        catch (Exception exception) {
+            return List.of();
+        }
+    }
+
     private record ScoredEntity(SuperAgentKgEntity entity, double score) {
+    }
+
+    private record ScoredRelation(SuperAgentKgRelation relation, double score) {
+    }
+
+    private record ScoredCommunity(SuperAgentKgCommunity community, double score) {
+    }
+
+    private record QueryProfile(Set<String> relationTypes,
+                                Set<String> entityTypes,
+                                Set<Long> entityIds,
+                                Set<Long> relationIds,
+                                Set<Long> communityIds,
+                                Set<String> entityNames,
+                                boolean relationQuestion,
+                                boolean communityQuestion,
+                                int maxHops) {
     }
 }

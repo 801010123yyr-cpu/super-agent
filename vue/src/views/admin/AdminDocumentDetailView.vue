@@ -389,6 +389,9 @@
                 <span>样例 {{ formatCount(ragArtifactSampleCount) }} 条</span>
               </div>
               <p class="text-[13px] text-[var(--color-muted-strong)]">{{ ragSnapshot.runtimeObservationNote }}</p>
+              <div v-if="hasRagTableHighlight" class="mt-3 rounded-md border border-primary/20 bg-card px-3 py-2 text-xs text-primary">
+                已从问答引用定位到表格证据：{{ ragTableHighlightSummary }}
+              </div>
             </div>
 
             <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
@@ -427,6 +430,57 @@
                 <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ section.records.length }} 条样例</span>
               </div>
               <div v-if="!section.records.length" class="rounded-md border border-dashed border-border bg-secondary py-5 text-center text-sm text-muted-foreground">{{ section.emptyText }}</div>
+              <div v-else-if="section.key === 'table'" class="grid gap-3">
+                <article v-for="(record, index) in section.records" :key="`${section.key}-${index}`"
+                  class="rounded-lg border bg-secondary p-3"
+                  :class="isHighlightedTable(record) ? 'border-primary/40 ring-2 ring-primary/10' : 'border-border'">
+                  <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                    <div>
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        <strong class="text-[13px] text-foreground">{{ record.title }}</strong>
+                        <span v-if="isHighlightedTable(record)" class="rounded-full bg-primary/[0.08] px-2 py-0.5 text-[11px] font-semibold text-primary">引用命中</span>
+                      </div>
+                      <p class="mt-0.5 text-xs text-muted-foreground">{{ record.subtitle }}</p>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                      <span v-for="chip in record.chips.filter(Boolean).slice(0,4)" :key="`${section.key}-${index}-chip-${chip}`" class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
+                    </div>
+                  </div>
+                  <p v-if="record.meta?.length" class="mb-3 text-[11px] text-muted-foreground">{{ record.meta.join(' · ') }}</p>
+                  <div class="overflow-x-auto rounded-md border border-border bg-card">
+                    <table class="w-full min-w-[640px] border-collapse text-sm">
+                      <thead>
+                        <tr class="bg-secondary">
+                          <th class="border-b border-border px-3 py-2 text-left text-xs font-semibold text-muted-foreground">行号</th>
+                          <th v-for="column in record.columns" :key="`${record.tableId}-col-${column.columnNo}`"
+                            class="border-b border-border px-3 py-2 text-left text-xs font-semibold"
+                            :class="isHighlightedColumn(record, column) ? 'text-primary' : 'text-muted-foreground'">
+                            {{ column.columnName || column.normalizedName || `C#${column.columnNo || '-'}` }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="row in record.rows" :key="`${record.tableId}-row-${row.rowId || row.rowNo}`"
+                          class="border-b border-border last:border-0"
+                          :class="isHighlightedTableRow(record, row) ? 'bg-primary/[0.04]' : ''">
+                          <td class="whitespace-nowrap px-3 py-2 text-xs font-semibold" :class="isHighlightedTableRow(record, row) ? 'text-primary' : 'text-muted-foreground'">R#{{ row.rowNo || '-' }}</td>
+                          <td v-for="(column, ci) in record.columns" :key="`${record.tableId}-row-${row.rowId || row.rowNo}-cell-${column.columnNo || ci}`"
+                            class="px-3 py-2 text-[13px] transition-colors"
+                            :class="tableCellClass(record, row, cellForColumn(row, column, ci), column)">
+                            <div class="flex min-w-[120px] flex-col gap-0.5">
+                              <span class="break-words">{{ cellForColumn(row, column, ci)?.cellText || cellForColumn(row, column, ci)?.text || '-' }}</span>
+                              <span v-if="cellForColumn(row, column, ci)?.sourceCellRef || cellForColumn(row, column, ci)?.bboxJson" class="text-[11px]" :class="isHighlightedTableCell(record, row, cellForColumn(row, column, ci), column) ? 'text-primary' : 'text-muted-foreground'">
+                                {{ compactList([cellForColumn(row, column, ci)?.sourceCellRef, cellForColumn(row, column, ci)?.bboxJson ? 'bbox' : '']).join(' · ') }}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p v-if="record.sampleNote" class="mt-2 text-[11px] text-muted-foreground">{{ record.sampleNote }}</p>
+                </article>
+              </div>
               <div v-else class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
                 <article v-for="(record, index) in section.records" :key="`${section.key}-${index}`" class="grid gap-2 rounded-lg border border-border bg-secondary p-3">
                   <div>
@@ -550,6 +604,17 @@ const pageNotice = reactive({
 })
 
 const documentId = computed(() => String(route.params.documentId || ''))
+const ragTableHighlightSpec = computed(() => buildRagTableHighlightSpec(route.query || {}))
+const hasRagTableHighlight = computed(() => ragTableHighlightSpec.value.active)
+const ragTableHighlightSummary = computed(() => {
+  const spec = ragTableHighlightSpec.value
+  return compactList([
+    spec.tableId ? `表 ${spec.tableId}` : (spec.tableNo ? `T#${spec.tableNo}` : ''),
+    spec.rowNos.length ? `行 ${spec.rowNos.join('、')}` : '',
+    spec.columnNames.length ? `列 ${spec.columnNames.join('、')}` : '',
+    spec.cellCoordinates.length ? `单元格 ${spec.cellCoordinates.join('、')}` : ''
+  ]).join(' / ') || '已定位表格证据'
+})
 const showOriginalFileName = computed(() => {
   const documentName = String(documentDetail.value?.documentName || '').trim()
   const originalFileName = String(documentDetail.value?.originalFileName || '').trim()
@@ -696,11 +761,18 @@ const ragArtifactSections = computed(() => {
       caption: '表格拆成表、列、行、单元格，用于结构化问答和字段过滤。',
       emptyText: '当前没有表格结构样例。',
       records: asArray(snapshot.tables).map((item) => ({
+        tableId: item.tableId,
+        tableNo: item.tableNo,
         title: `表格 T#${item.tableNo || '-'}`,
         subtitle: item.title || item.sectionPath || '未命名表格',
         chips: [`${formatCount(item.rowCount)} 行`, `${formatCount(item.columnCount)} 列`, item.pageRange || ''],
-        meta: compactList([item.tableId ? `ID ${item.tableId}` : '', item.pageNo ? `第 ${item.pageNo} 页` : '']),
+        meta: compactList([item.tableId ? `ID ${item.tableId}` : '', item.pageNo ? `第 ${item.pageNo} 页` : '', item.bboxJson ? '有表格 bbox' : '']),
         body: asArray(item.columns).map((column) => column.columnName || column.normalizedName).filter(Boolean).join(' / ') || '暂无列信息',
+        columns: asArray(item.columns),
+        rows: normalizeTableRows(item),
+        sampleNote: Number(item.rowCount || 0) > asArray(item.rows).length
+          ? `当前展示 ${asArray(item.rows).length} 行样例；如果从问答引用跳转，命中行会额外并入样例。`
+          : '',
         lines: asArray(item.rows).map((row) => `R#${row.rowNo || '-'} ${asArray(row.cells).filter(Boolean).join(' | ') || row.rowText || ''}`)
       }))
     },
@@ -1332,6 +1404,42 @@ function asArray(value) {
   return Array.isArray(value) ? value : []
 }
 
+function firstQueryValue(value) {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function splitQueryList(value) {
+  const raw = firstQueryValue(value)
+  if (raw == null || raw === '') {
+    return []
+  }
+  return String(raw)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function buildRagTableHighlightSpec(query) {
+  const rowNos = splitQueryList(query.highlightRows)
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item))
+  const columnNames = splitQueryList(query.highlightColumns)
+  const cellCoordinates = splitQueryList(query.highlightCells)
+  const tableId = firstQueryValue(query.highlightTableId)
+  const tableNo = firstQueryValue(query.highlightTableNo)
+  return {
+    active: Boolean(tableId || tableNo || rowNos.length || columnNames.length || cellCoordinates.length),
+    tableId: tableId ? String(tableId) : '',
+    tableNo: tableNo ? String(tableNo) : '',
+    rowNos,
+    rowNoSet: new Set(rowNos.map((item) => String(item))),
+    columnNames,
+    columnNameSet: new Set(columnNames.map(normalizeMatchText)),
+    cellCoordinates,
+    cellCoordinateSet: new Set(cellCoordinates.map(normalizeMatchText))
+  }
+}
+
 function compactList(values) {
   return asArray(values)
     .map((item) => String(item || '').trim())
@@ -1354,6 +1462,110 @@ function ragStageClass(statusText) {
   if (String(statusText || '').includes('已生成')) return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (String(statusText || '').includes('观测')) return 'border-primary/20 bg-primary/[0.04]'
   return 'border-border bg-card'
+}
+
+function normalizeMatchText(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function normalizeTableRows(table) {
+  return asArray(table.rows).map((row) => {
+    const cellItems = asArray(row.cellItems)
+    return {
+      ...row,
+      cellItems: cellItems.length
+        ? cellItems
+        : asArray(row.cells).map((cellText, index) => ({
+            columnNo: asArray(table.columns)[index]?.columnNo || index + 1,
+            cellText,
+            text: cellText
+          }))
+    }
+  })
+}
+
+function isHighlightedTable(record) {
+  const spec = ragTableHighlightSpec.value
+  if (!spec.active) {
+    return false
+  }
+  if (spec.tableId) {
+    return normalizeCode(record?.tableId) === spec.tableId
+  }
+  if (spec.tableNo) {
+    return normalizeCode(record?.tableNo) === spec.tableNo
+  }
+  return false
+}
+
+function isHighlightedColumn(record, column) {
+  const spec = ragTableHighlightSpec.value
+  if (!isHighlightedTable(record) || !spec.columnNameSet.size) {
+    return false
+  }
+  return columnMatchCandidates(column).some((item) => spec.columnNameSet.has(item))
+}
+
+function isHighlightedTableRow(record, row) {
+  const spec = ragTableHighlightSpec.value
+  return isHighlightedTable(record) && spec.rowNoSet.has(String(row?.rowNo || ''))
+}
+
+function isHighlightedTableCell(record, row, cell, column) {
+  const spec = ragTableHighlightSpec.value
+  if (!isHighlightedTable(record) || !cell) {
+    return false
+  }
+  const coordinateMatched = cellCoordinateCandidates(row, cell, column).some((item) => spec.cellCoordinateSet.has(item))
+  if (coordinateMatched) {
+    return true
+  }
+  const rowMatched = spec.rowNoSet.has(String(row?.rowNo || ''))
+  const columnMatched = columnMatchCandidates(column).some((item) => spec.columnNameSet.has(item))
+  if (rowMatched && columnMatched) {
+    return true
+  }
+  if (rowMatched && !spec.columnNameSet.size && !spec.cellCoordinateSet.size) {
+    return true
+  }
+  return columnMatched && !spec.rowNoSet.size && !spec.cellCoordinateSet.size
+}
+
+function tableCellClass(record, row, cell, column) {
+  if (isHighlightedTableCell(record, row, cell, column)) {
+    return 'border-l-2 border-primary bg-primary/[0.10] font-semibold text-primary'
+  }
+  if (isHighlightedTableRow(record, row)) {
+    return 'bg-primary/[0.04] text-foreground'
+  }
+  return 'text-foreground'
+}
+
+function cellForColumn(row, column, fallbackIndex) {
+  const cells = asArray(row?.cellItems)
+  return cells.find((cell) => normalizeCode(cell.columnId) === normalizeCode(column?.columnId))
+    || cells.find((cell) => normalizeCode(cell.columnNo) === normalizeCode(column?.columnNo))
+    || cells[fallbackIndex]
+    || null
+}
+
+function columnMatchCandidates(column) {
+  return compactList([
+    column?.columnName,
+    column?.normalizedName,
+    column?.columnNo ? `C#${column.columnNo}` : '',
+    column?.columnNo ? `C${column.columnNo}` : ''
+  ]).map(normalizeMatchText)
+}
+
+function cellCoordinateCandidates(row, cell, column) {
+  return compactList([
+    cell?.sourceCellRef,
+    cell?.sourceRowNo && cell?.sourceColumnNo ? `R${cell.sourceRowNo}C${cell.sourceColumnNo}` : '',
+    cell?.rowNo && cell?.columnNo ? `R${cell.rowNo}C${cell.columnNo}` : '',
+    row?.rowNo && column?.columnNo ? `R${row.rowNo}C${column.columnNo}` : '',
+    row?.rowNo && column?.columnNo ? `${row.rowNo}:${column.columnNo}` : ''
+  ]).map(normalizeMatchText)
 }
 
 function buildChunkRelationText(chunk) {
@@ -1592,12 +1804,37 @@ async function loadDocumentChunks(page = chunkCurrentPage.value, options = {}) {
 async function loadDocumentRagSnapshot() {
   ragSnapshotLoading.value = true
   try {
-    ragSnapshot.value = await manageApi.queryDocumentRagSnapshot(documentId.value)
+    ragSnapshot.value = await manageApi.queryDocumentRagSnapshot(documentId.value, buildRagSnapshotHighlightPayload())
   } catch (error) {
     console.error('读取 RAG 学习快照失败', error)
     ragSnapshot.value = null
   } finally {
     ragSnapshotLoading.value = false
+  }
+}
+
+function buildRagSnapshotHighlightPayload() {
+  const spec = ragTableHighlightSpec.value
+  if (!spec.active) {
+    return {}
+  }
+  return {
+    highlightTableId: spec.tableId || undefined,
+    highlightTableNo: spec.tableNo || undefined,
+    highlightRowNos: spec.rowNos,
+    highlightColumnNames: spec.columnNames,
+    highlightCellCoordinates: spec.cellCoordinates
+  }
+}
+
+function applyRouteWorkbenchFocus() {
+  const section = firstQueryValue(route.query?.section)
+  if (section && WORKBENCH_SECTION_KEYS.includes(section)) {
+    activeWorkbenchSection.value = section
+    return
+  }
+  if (hasRagTableHighlight.value) {
+    activeWorkbenchSection.value = 'rag'
   }
 }
 
@@ -1848,8 +2085,16 @@ watch(() => route.params.documentId, async (value, oldValue) => {
   chunkDetailDrawerOpen.value = false
   chunkDetailFocusMode.value = 'chunk'
   await loadAll()
+  applyRouteWorkbenchFocus()
   await nextTick()
 })
+
+watch(() => route.query, async () => {
+  applyRouteWorkbenchFocus()
+  if (documentId.value) {
+    await loadDocumentRagSnapshot()
+  }
+}, { deep: true })
 
 watch(documentDetail, (value) => {
   if (!value) {
@@ -1869,6 +2114,7 @@ watch(documentDetail, (value) => {
 
 onMounted(async () => {
   await loadAll()
+  applyRouteWorkbenchFocus()
   await nextTick()
   if (!strategyPlan.value?.planReady && normalizeCode(strategyPlan.value?.parseStatus) !== '4') {
     startPlanPolling()

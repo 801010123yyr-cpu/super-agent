@@ -44,6 +44,8 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String METADATA_BOOST = "metadataBoost";
     public static final String VECTOR_SCORE = "vectorScore";
     public static final String KEYWORD_SCORE = "keywordScore";
+    public static final String RETRIEVAL_INTENT = "retrievalIntent";
+    public static final String CHANNEL_WEIGHT = "channelWeight";
     public static final String TABLE_ID = "tableId";
     public static final String TABLE_NO = "tableNo";
     public static final String TABLE_TITLE = "tableTitle";
@@ -51,6 +53,14 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String TABLE_METRIC_COLUMN = "tableMetricColumn";
     public static final String TABLE_GROUP_BY_COLUMN = "tableGroupByColumn";
     public static final String TABLE_MATCHED_ROW_COUNT = "tableMatchedRowCount";
+    public static final String TABLE_EVIDENCE_ROW_IDS = "tableEvidenceRowIds";
+    public static final String TABLE_EVIDENCE_ROW_NOS = "tableEvidenceRowNos";
+    public static final String TABLE_EVIDENCE_COLUMN_IDS = "tableEvidenceColumnIds";
+    public static final String TABLE_EVIDENCE_COLUMN_NOS = "tableEvidenceColumnNos";
+    public static final String TABLE_EVIDENCE_COLUMN_NAMES = "tableEvidenceColumnNames";
+    public static final String TABLE_EVIDENCE_CELL_IDS = "tableEvidenceCellIds";
+    public static final String TABLE_EVIDENCE_CELL_COORDINATES = "tableEvidenceCellCoordinates";
+    public static final String TABLE_EVIDENCE_CELL_BBOX_JSONS = "tableEvidenceCellBboxJsons";
     public static final String KG_ENTITY_ID = "kgEntityId";
     public static final String KG_ENTITY_NAME = "kgEntityName";
     public static final String KG_RELATED_ENTITY_ID = "kgRelatedEntityId";
@@ -60,6 +70,13 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_EVIDENCE_ID = "kgEvidenceId";
     public static final String KG_GRAPH_PATH = "kgGraphPath";
     public static final String KG_HOP_COUNT = "kgHopCount";
+    public static final String KG_COMMUNITY_ID = "kgCommunityId";
+    public static final String KG_COMMUNITY_TITLE = "kgCommunityTitle";
+    public static final String KG_COMMUNITY_SUMMARY = "kgCommunitySummary";
+    public static final String KG_RANK_BOOST = "kgRankBoost";
+    public static final String KG_PAGERANK = "kgPagerank";
+    public static final String KG_RANK_POSITION = "kgRankPosition";
+    public static final String KG_DEGREE = "kgDegree";
     public static final String RAPTOR_NODE_ID = "raptorNodeId";
     public static final String RAPTOR_NODE_TITLE = "raptorNodeTitle";
     public static final String RAPTOR_NODE_LEVEL = "raptorNodeLevel";

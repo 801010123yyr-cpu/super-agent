@@ -99,6 +99,14 @@ public class TableRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.TABLE_METRIC_COLUMN, StrUtil.blankToDefault(queryPlan.getQuery().getMetricColumn(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.TABLE_GROUP_BY_COLUMN, StrUtil.blankToDefault(queryPlan.getQuery().getGroupByColumn(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.TABLE_MATCHED_ROW_COUNT, result.getMatchedRowCount());
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_ROW_IDS, emptyListIfNull(result.getEvidenceRowIds()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_ROW_NOS, emptyListIfNull(result.getEvidenceRowNos()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_IDS, emptyListIfNull(result.getEvidenceColumnIds()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_NOS, emptyListIfNull(result.getEvidenceColumnNos()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_NAMES, emptyListIfNull(result.getEvidenceColumnNames()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_IDS, emptyListIfNull(result.getEvidenceCellIds()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_COORDINATES, emptyListIfNull(result.getEvidenceCellCoordinates()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_BBOX_JSONS, emptyListIfNull(result.getEvidenceCellBboxJsons()));
 
         return Document.builder()
             .id("table-" + result.getTableId() + "-" + Math.abs(StrUtil.blankToDefault(subQuestion, "").hashCode()))
@@ -171,5 +179,9 @@ public class TableRetrievalChannel implements RetrievalChannel {
         if (value != null) {
             metadata.put(key, value);
         }
+    }
+
+    private List<?> emptyListIfNull(List<?> values) {
+        return values == null ? List.of() : values;
     }
 }

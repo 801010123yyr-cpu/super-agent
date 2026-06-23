@@ -11,6 +11,7 @@ import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalQuestionPlan;
+import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.service.ObservedChatModelService;
 import org.javaup.ai.manage.model.graph.GraphSection;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
@@ -142,6 +143,21 @@ public class DocumentQuestionRouter {
         "哪一节", "哪一章", "哪个章节", "哪个小节", "哪个标题", "哪部分", "哪块"
     );
 
+    private static final List<String> TABLE_INTENT_HINTS = List.of(
+        "表格", "表中", "清单", "列表", "统计", "合计", "总计", "总数", "数量",
+        "求和", "平均", "最大", "最小", "最高", "最低", "排名", "分组", "金额", "费用"
+    );
+
+    private static final List<String> GRAPH_RAG_INTENT_HINTS = List.of(
+        "实体", "关系", "关联", "联系", "依赖", "调用", "影响", "负责", "谁负责",
+        "上下游", "属于", "包含", "连接", "之间", "路径", "链路"
+    );
+
+    private static final List<String> RAPTOR_INTENT_HINTS = List.of(
+        "总结", "概括", "归纳", "整体", "全文", "全局", "主要内容", "主题",
+        "核心观点", "总体", "跨章节", "综合说明", "梳理一下"
+    );
+
     private final DocumentStructureGraphService graphService;
     private final ObjectProvider<DocumentNavigationIndexService> navigationIndexServiceProvider;
     private final ObservedChatModelService observedChatModelService;
@@ -176,6 +192,7 @@ public class DocumentQuestionRouter {
             rewrittenQuestion,
             subQuestions
         );
+        RetrievalIntent retrievalIntent = detectRetrievalIntent(routeText, questionIntent);
         GraphOnlyIntentDecision graphOnlyIntent = questionIntent.graphOnlyIntent();
         boolean analyticQuestion = questionIntent.analytic();
         
@@ -188,6 +205,7 @@ public class DocumentQuestionRouter {
                 section,
                 null,
                 retrievalPlan,
+                retrievalIntent,
                 graphOnlyIntent.reason()
             );
         }
@@ -203,6 +221,7 @@ public class DocumentQuestionRouter {
                 section,
                 itemIndex,
                 retrievalPlan,
+                retrievalIntent,
                 "编号项或步骤型问题走图定位取证"
             );
         }
@@ -221,6 +240,7 @@ public class DocumentQuestionRouter {
             assistedSection,
             itemIndex,
             retrievalPlan,
+            retrievalIntent,
             assistedSection == null
                 ? "普通文档问题走混合检索"
                 : "结构线索仅作为软提示辅助混合检索"
@@ -232,6 +252,7 @@ public class DocumentQuestionRouter {
                                                      GraphSection section,
                                                      Integer itemIndex,
                                                      RetrievalQuestionPlan retrievalPlan,
+                                                     RetrievalIntent retrievalIntent,
                                                      String reason) {
         ConversationStructureAnchor structureAnchor = section == null
             ? ConversationStructureAnchor.builder().scopeMode(mode == ExecutionMode.RETRIEVAL ? "NONE" : "GRAPH_UNRESOLVED").build()
@@ -248,6 +269,7 @@ public class DocumentQuestionRouter {
             : ConversationItemAnchor.builder().itemIndex(itemIndex).build();
         List<String> queryHints = buildQueryHints(retrievalPlan, section, itemIndex);
         String summaryText = "mode=" + mode.name()
+            + "; retrievalIntent=" + (retrievalIntent == null ? RetrievalIntent.GENERAL.name() : retrievalIntent.name())
             + "; reason=" + reason
             + "; section=" + (section == null ? "" : section.displayTitle())
             + "; itemIndex=" + (itemIndex == null ? "" : itemIndex);
@@ -263,10 +285,32 @@ public class DocumentQuestionRouter {
             .structureAnchor(structureAnchor)
             .itemAnchor(itemAnchor)
             .retrievalPlan(retrievalPlan)
+            .retrievalIntent(retrievalIntent == null ? RetrievalIntent.GENERAL : retrievalIntent)
             .summaryText(summaryText)
             .queryContextHints(queryHints)
             .softSectionHints(section == null ? List.of() : List.of(section.displayTitle()))
             .build();
+    }
+
+    private RetrievalIntent detectRetrievalIntent(String routeText, DocumentQuestionIntentDecision questionIntent) {
+        String question = safeText(routeText);
+        if (questionIntent != null && questionIntent.graphOnlyIntent() != null && questionIntent.graphOnlyIntent().matched()) {
+            return RetrievalIntent.STRUCTURE;
+        }
+        if (containsAny(question, TABLE_INTENT_HINTS)) {
+            return RetrievalIntent.TABLE;
+        }
+        if (containsAny(question, RAPTOR_INTENT_HINTS)) {
+            return RetrievalIntent.RAPTOR;
+        }
+        if (containsAny(question, GRAPH_RAG_INTENT_HINTS)
+            && (questionIntent == null || !questionIntent.contentQuestion() || questionIntent.analytic())) {
+            return RetrievalIntent.GRAPH_RAG;
+        }
+        if (questionIntent != null && questionIntent.outline()) {
+            return RetrievalIntent.STRUCTURE;
+        }
+        return RetrievalIntent.GENERAL;
     }
 
     /**

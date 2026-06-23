@@ -12,7 +12,8 @@ public enum DocumentFileTypeEnum {
     DOCX(3, "DOCX"),
     TXT(4, "TXT"),
     MD(5, "MD"),
-    HTML(6, "HTML");
+    HTML(6, "HTML"),
+    XLSX(7, "XLSX");
 
     private final Integer code;
 
@@ -52,6 +53,7 @@ public enum DocumentFileTypeEnum {
             case "txt" -> TXT;
             case "md", "markdown" -> MD;
             case "html", "htm" -> HTML;
+            case "xlsx" -> XLSX;
             default -> null;
         };
     }

@@ -38,4 +38,14 @@ public class SuperAgentDocumentTableCell extends BaseTableData {
     private String cellText;
 
     private BigDecimal numericValue;
+
+    private Integer sourceRowNo;
+
+    private Integer sourceColumnNo;
+
+    private String sourceCellRef;
+
+    private String bboxJson;
+
+    private String metadataJson;
 }

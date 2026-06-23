@@ -34,6 +34,8 @@ import org.javaup.ai.manage.mapper.SuperAgentKgCommunityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
+import org.javaup.ai.manage.model.graph.GraphRagQualityReport;
+import org.javaup.ai.manage.service.GraphRagQualityService;
 import org.javaup.ai.manage.service.DocumentRagSnapshotService;
 import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogVo;
@@ -51,7 +53,9 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -117,6 +121,8 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private final SuperAgentRaptorNodeMapper raptorNodeMapper;
 
+    private final GraphRagQualityService graphRagQualityService;
+
     @Override
     public DocumentRagSnapshotVo querySnapshot(DocumentRagSnapshotQueryDto dto) {
         SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
@@ -134,6 +140,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         long kgRelationCount = indexTaskId == null ? 0L : countKgRelations(document.getId(), indexTaskId);
         long kgCommunityCount = indexTaskId == null ? 0L : countKgCommunities(document.getId(), indexTaskId);
         long raptorNodeCount = indexTaskId == null ? 0L : countRaptorNodes(document.getId(), indexTaskId);
+        GraphRagQualityReport graphRagQuality = graphRagQualityService.evaluate(document.getId(), indexTaskId);
 
         return new DocumentRagSnapshotVo(
             document.getId(),
@@ -142,14 +149,14 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             indexTaskId,
             indexTask == null ? document.getCurrentPlanId() : indexTask.getPlanId(),
             buildMetrics(parseBlockCount, structureNodeCount, parentBlockCount, chunkCount, vectorReadyCount,
-                tableCount, kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount),
+                tableCount, kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount, graphRagQuality),
             buildPipelineStages(parseBlockCount, structureNodeCount, parentBlockCount, chunkCount, tableCount,
                 kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount),
             listParseBlocks(document.getId(), parseTaskId),
             listStructureNodes(document.getId(), parseTaskId),
             listParentBlocks(document.getId(), indexTaskId),
             listChunks(document.getId(), indexTaskId),
-            listTables(document.getId(), indexTaskId),
+            listTables(document.getId(), indexTaskId, tableHighlightFocus(dto)),
             listKgEntities(document.getId(), indexTaskId),
             listKgRelations(document.getId(), indexTaskId),
             listKgCommunities(document.getId(), indexTaskId),
@@ -196,7 +203,8 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
                                                                 long kgEntityCount,
                                                                 long kgRelationCount,
                                                                 long kgCommunityCount,
-                                                                long raptorNodeCount) {
+                                                                long raptorNodeCount,
+                                                                GraphRagQualityReport graphRagQuality) {
         List<DocumentRagSnapshotVo.MetricItem> metrics = new ArrayList<>();
         metrics.add(new DocumentRagSnapshotVo.MetricItem("解析块", String.valueOf(parseBlockCount), "Python parser 输出的 layout/text/table/image block", tone(parseBlockCount)));
         metrics.add(new DocumentRagSnapshotVo.MetricItem("结构节点", String.valueOf(structureNodeCount), "Document -> Section -> Item 文档结构图", tone(structureNodeCount)));
@@ -206,8 +214,37 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         metrics.add(new DocumentRagSnapshotVo.MetricItem("表格", String.valueOf(tableCount), "结构化表格问答的表、列、行、单元格", tone(tableCount)));
         metrics.add(new DocumentRagSnapshotVo.MetricItem("知识图谱", kgEntityCount + " 实体 / " + kgRelationCount + " 关系", "GraphRAG 独立 KG，不等同于文档结构图", kgEntityCount > 0 || kgRelationCount > 0 ? "success" : "neutral"));
         metrics.add(new DocumentRagSnapshotVo.MetricItem("图谱社区", String.valueOf(kgCommunityCount), "GraphRAG 社区摘要用于跨实体导航", tone(kgCommunityCount)));
+        appendGraphRagQualityMetrics(metrics, graphRagQuality);
         metrics.add(new DocumentRagSnapshotVo.MetricItem("RAPTOR 节点", String.valueOf(raptorNodeCount), "层级摘要节点，只负责召回导航", tone(raptorNodeCount)));
         return metrics;
+    }
+
+    private void appendGraphRagQualityMetrics(List<DocumentRagSnapshotVo.MetricItem> metrics,
+                                              GraphRagQualityReport report) {
+        if (report == null) {
+            return;
+        }
+        metrics.add(new DocumentRagSnapshotVo.MetricItem(
+            "图谱质量",
+            percentText(report.getQualityScore()),
+            report.getSummary(),
+            graphQualityTone(report.getQualityLevel())
+        ));
+        metrics.add(new DocumentRagSnapshotVo.MetricItem(
+            "图谱证据追溯",
+            report.getTraceableEvidenceCount() + "/" + report.getEvidenceCount(),
+            "evidence 需要同时有 chunkId 和 quoteText，覆盖率 " + percentText(report.getEvidenceTraceabilityCoverage()),
+            ratioTone(report.getEvidenceTraceabilityCoverage(), report.getEvidenceCount())
+        ));
+        long controlledCount = safeLong(report.getControlledExtractionItemCount())
+            + safeLong(report.getEntityResolutionEnhancedCount())
+            + safeLong(report.getCommunityReportEnhancedCount());
+        metrics.add(new DocumentRagSnapshotVo.MetricItem(
+            "GraphRAG 受控增强",
+            String.valueOf(controlledCount),
+            "LLM 受控 extraction、entity resolution、community report 通过 Java 校验后的命中数",
+            controlledCount > 0L ? "success" : "neutral"
+        ));
     }
 
     private List<DocumentRagSnapshotVo.PipelineStageItem> buildPipelineStages(long parseBlockCount,
@@ -332,7 +369,9 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             .toList();
     }
 
-    private List<DocumentRagSnapshotVo.TableItem> listTables(Long documentId, Long indexTaskId) {
+    private List<DocumentRagSnapshotVo.TableItem> listTables(Long documentId,
+                                                             Long indexTaskId,
+                                                             TableHighlightFocus highlightFocus) {
         if (indexTaskId == null) {
             return List.of();
         }
@@ -342,6 +381,10 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             .eq(SuperAgentDocumentTable::getStatus, BusinessStatus.YES.getCode())
             .orderByAsc(SuperAgentDocumentTable::getTableNo, SuperAgentDocumentTable::getId)
             .last("limit " + TABLE_SAMPLE_SIZE));
+        if (tableList.isEmpty()) {
+            tableList = new ArrayList<>();
+        }
+        tableList = includeHighlightedTable(documentId, indexTaskId, tableList, highlightFocus);
         if (tableList.isEmpty()) {
             return List.of();
         }
@@ -371,7 +414,14 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             .stream()
             .flatMap(rows -> rows.stream().limit(TABLE_ROW_SAMPLE_SIZE))
             .map(SuperAgentDocumentTableRow::getId)
-            .collect(Collectors.toSet());
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (highlightFocus.hasRows()) {
+            rowMap.values().stream()
+                .flatMap(List::stream)
+                .filter(row -> highlightFocus.matchesRow(row.getTableId(), row.getRowNo()))
+                .map(SuperAgentDocumentTableRow::getId)
+                .forEach(sampledRowIds::add);
+        }
 
         Map<Long, List<SuperAgentDocumentTableCell>> cellMap = sampledRowIds.isEmpty()
             ? Map.of()
@@ -384,8 +434,57 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
         return tableList.stream()
             .map(table -> toTableItem(table, columnMap.getOrDefault(table.getId(), List.of()),
-                rowMap.getOrDefault(table.getId(), List.of()), cellMap))
+                sampleRows(table, rowMap.getOrDefault(table.getId(), List.of()), highlightFocus), cellMap))
             .toList();
+    }
+
+    private List<SuperAgentDocumentTable> includeHighlightedTable(Long documentId,
+                                                                  Long indexTaskId,
+                                                                  List<SuperAgentDocumentTable> tableList,
+                                                                  TableHighlightFocus highlightFocus) {
+        if (!highlightFocus.hasTable()) {
+            return tableList;
+        }
+        Map<Long, SuperAgentDocumentTable> tableById = tableList.stream()
+            .collect(Collectors.toMap(SuperAgentDocumentTable::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        SuperAgentDocumentTable highlightedTable = null;
+        if (highlightFocus.tableId() != null && !tableById.containsKey(highlightFocus.tableId())) {
+            highlightedTable = tableMapper.selectById(highlightFocus.tableId());
+        }
+        if (highlightedTable == null && highlightFocus.tableNo() != null
+            && tableList.stream().noneMatch(table -> Objects.equals(table.getTableNo(), highlightFocus.tableNo()))) {
+            highlightedTable = tableMapper.selectOne(new LambdaQueryWrapper<SuperAgentDocumentTable>()
+                .eq(SuperAgentDocumentTable::getDocumentId, documentId)
+                .eq(SuperAgentDocumentTable::getTaskId, indexTaskId)
+                .eq(SuperAgentDocumentTable::getTableNo, highlightFocus.tableNo())
+                .eq(SuperAgentDocumentTable::getStatus, BusinessStatus.YES.getCode())
+                .last("limit 1"));
+        }
+        if (highlightedTable == null
+            || !Objects.equals(highlightedTable.getDocumentId(), documentId)
+            || !Objects.equals(highlightedTable.getTaskId(), indexTaskId)
+            || !Objects.equals(highlightedTable.getStatus(), BusinessStatus.YES.getCode())) {
+            return tableList;
+        }
+        tableById.putIfAbsent(highlightedTable.getId(), highlightedTable);
+        return new ArrayList<>(tableById.values());
+    }
+
+    private List<SuperAgentDocumentTableRow> sampleRows(SuperAgentDocumentTable table,
+                                                        List<SuperAgentDocumentTableRow> rows,
+                                                        TableHighlightFocus highlightFocus) {
+        Map<Long, SuperAgentDocumentTableRow> sampled = new LinkedHashMap<>();
+        rows.stream()
+            .sorted(Comparator.comparing(SuperAgentDocumentTableRow::getRowNo).thenComparing(SuperAgentDocumentTableRow::getId))
+            .limit(TABLE_ROW_SAMPLE_SIZE)
+            .forEach(row -> sampled.put(row.getId(), row));
+        if (highlightFocus.matchesTable(table)) {
+            rows.stream()
+                .filter(row -> highlightFocus.matchesRow(row.getTableId(), row.getRowNo()))
+                .sorted(Comparator.comparing(SuperAgentDocumentTableRow::getRowNo).thenComparing(SuperAgentDocumentTableRow::getId))
+                .forEach(row -> sampled.putIfAbsent(row.getId(), row));
+        }
+        return new ArrayList<>(sampled.values());
     }
 
     private DocumentRagSnapshotVo.TableItem toTableItem(SuperAgentDocumentTable table,
@@ -403,7 +502,6 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             .toList();
 
         List<DocumentRagSnapshotVo.TableRowItem> rowItems = rows.stream()
-            .limit(TABLE_ROW_SAMPLE_SIZE)
             .map(row -> new DocumentRagSnapshotVo.TableRowItem(
                 row.getId(),
                 row.getRowNo(),
@@ -412,6 +510,21 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
                     .sorted(Comparator.comparing(SuperAgentDocumentTableCell::getColumnNo)
                         .thenComparing(SuperAgentDocumentTableCell::getId))
                     .map(SuperAgentDocumentTableCell::getCellText)
+                    .toList(),
+                cellMap.getOrDefault(row.getId(), List.of()).stream()
+                    .sorted(Comparator.comparing(SuperAgentDocumentTableCell::getColumnNo)
+                        .thenComparing(SuperAgentDocumentTableCell::getId))
+                    .map(cell -> new DocumentRagSnapshotVo.TableCellItem(
+                        cell.getId(),
+                        cell.getColumnId(),
+                        cell.getRowNo(),
+                        cell.getColumnNo(),
+                        cell.getCellText(),
+                        cell.getSourceRowNo(),
+                        cell.getSourceColumnNo(),
+                        cell.getSourceCellRef(),
+                        cell.getBboxJson()
+                    ))
                     .toList()
             ))
             .toList();
@@ -425,9 +538,55 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             table.getPageRange(),
             table.getRowCount(),
             table.getColumnCount(),
+            table.getBboxJson(),
             columnItems,
             rowItems
         );
+    }
+
+    private TableHighlightFocus tableHighlightFocus(DocumentRagSnapshotQueryDto dto) {
+        return new TableHighlightFocus(
+            dto.getHighlightTableId(),
+            dto.getHighlightTableNo(),
+            dto.getHighlightRowNos() == null ? Set.of() : new HashSet<>(dto.getHighlightRowNos()),
+            dto.getHighlightColumnNames() == null ? Set.of() : new HashSet<>(dto.getHighlightColumnNames()),
+            dto.getHighlightCellCoordinates() == null ? Set.of() : new HashSet<>(dto.getHighlightCellCoordinates())
+        );
+    }
+
+    private record TableHighlightFocus(Long tableId,
+                                       Integer tableNo,
+                                       Set<Integer> rowNos,
+                                       Set<String> columnNames,
+                                       Set<String> cellCoordinates) {
+
+        private boolean hasTable() {
+            return tableId != null || tableNo != null;
+        }
+
+        private boolean hasRows() {
+            return rowNos != null && !rowNos.isEmpty();
+        }
+
+        private boolean matchesTable(SuperAgentDocumentTable table) {
+            if (table == null) {
+                return false;
+            }
+            if (tableId != null) {
+                return Objects.equals(table.getId(), tableId);
+            }
+            if (tableNo != null) {
+                return Objects.equals(table.getTableNo(), tableNo);
+            }
+            return !hasTable();
+        }
+
+        private boolean matchesRow(Long candidateTableId, Integer rowNo) {
+            if (tableId != null && !Objects.equals(candidateTableId, tableId)) {
+                return false;
+            }
+            return rowNo != null && rowNos != null && rowNos.contains(rowNo);
+        }
     }
 
     private List<DocumentRagSnapshotVo.KgEntityItem> listKgEntities(Long documentId, Long indexTaskId) {
@@ -653,6 +812,42 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private String tone(long count) {
         return count > 0 ? "success" : "neutral";
+    }
+
+    private String graphQualityTone(String level) {
+        if (GraphRagQualityReport.LEVEL_STRONG.equals(level)) {
+            return "success";
+        }
+        if (GraphRagQualityReport.LEVEL_WATCH.equals(level)) {
+            return "warning";
+        }
+        if (GraphRagQualityReport.LEVEL_WEAK.equals(level)) {
+            return "danger";
+        }
+        return "neutral";
+    }
+
+    private String ratioTone(Double ratio, Long denominator) {
+        if (denominator == null || denominator <= 0L) {
+            return "neutral";
+        }
+        double value = ratio == null ? 0D : ratio;
+        if (value >= 0.85D) {
+            return "success";
+        }
+        if (value >= 0.65D) {
+            return "warning";
+        }
+        return "danger";
+    }
+
+    private String percentText(Double value) {
+        double normalized = value == null ? 0D : Math.max(0D, Math.min(1D, value));
+        return Math.round(normalized * 100D) + "%";
+    }
+
+    private long safeLong(Long value) {
+        return value == null ? 0L : value;
     }
 
     private String preview(String value) {

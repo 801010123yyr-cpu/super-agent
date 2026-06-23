@@ -4,6 +4,8 @@ import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.springframework.ai.document.Document;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -64,6 +66,14 @@ public final class SearchReferenceMapper {
         reference.setTableMetricColumn(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_METRIC_COLUMN), ""));
         reference.setTableGroupByColumn(asText(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_GROUP_BY_COLUMN), ""));
         reference.setTableMatchedRowCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_MATCHED_ROW_COUNT)));
+        reference.setTableEvidenceRowIds(asLongList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_ROW_IDS)));
+        reference.setTableEvidenceRowNos(asIntegerList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_ROW_NOS)));
+        reference.setTableEvidenceColumnIds(asLongList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_IDS)));
+        reference.setTableEvidenceColumnNos(asIntegerList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_NOS)));
+        reference.setTableEvidenceColumnNames(asStringList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_COLUMN_NAMES)));
+        reference.setTableEvidenceCellIds(asLongList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_IDS)));
+        reference.setTableEvidenceCellCoordinates(asStringList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_COORDINATES)));
+        reference.setTableEvidenceCellBboxJsons(asStringList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_BBOX_JSONS)));
         reference.setKgEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID)));
         reference.setKgEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME), ""));
         reference.setKgRelatedEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID)));
@@ -94,5 +104,46 @@ public final class SearchReferenceMapper {
 
     private static Double asDouble(Object value) {
         return value instanceof Number number ? number.doubleValue() : null;
+    }
+
+    private static List<Long> asLongList(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<Long> values = new ArrayList<>();
+        for (Object item : iterable) {
+            Long parsed = asLong(item);
+            if (parsed != null) {
+                values.add(parsed);
+            }
+        }
+        return values;
+    }
+
+    private static List<Integer> asIntegerList(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<Integer> values = new ArrayList<>();
+        for (Object item : iterable) {
+            Integer parsed = asInteger(item);
+            if (parsed != null) {
+                values.add(parsed);
+            }
+        }
+        return values;
+    }
+
+    private static List<String> asStringList(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (Object item : iterable) {
+            if (item != null) {
+                values.add(String.valueOf(item));
+            }
+        }
+        return values;
     }
 }

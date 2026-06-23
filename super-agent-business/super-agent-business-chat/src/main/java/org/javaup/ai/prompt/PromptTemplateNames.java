@@ -12,9 +12,14 @@ public final class PromptTemplateNames {
     public static final String CONVERSATION_SUMMARY_MERGE = "conversation-summary-merge";
     public static final String CONVERSATION_SUMMARY_SYSTEM = "conversation-summary-system";
     public static final String DOCUMENT_GRAPH_ONLY_INTENT = "document-graph-only-intent";
+    public static final String DOCUMENT_GRAPH_RAG_COMMUNITY_REPORT = "document-graph-rag-community-report";
+    public static final String DOCUMENT_GRAPH_RAG_EXTRACTION = "document-graph-rag-extraction";
+    public static final String DOCUMENT_GRAPH_RAG_ENTITY_RESOLUTION = "document-graph-rag-entity-resolution";
+    public static final String DOCUMENT_GRAPH_RAG_QUERY_PLAN = "document-graph-rag-query-plan";
     public static final String DOCUMENT_LLM_SPLIT = "document-llm-split";
     public static final String DOCUMENT_STRUCTURE_AMBIGUITY = "document-structure-ambiguity";
     public static final String DOCUMENT_STRUCTURE_AMBIGUITY_CANDIDATE = "document-structure-ambiguity-candidate";
+    public static final String DOCUMENT_TABLE_QUERY_PLAN = "document-table-query-plan";
     public static final String RAG_ANSWER_DOCUMENT_REFERENCE = "rag-answer-document-reference";
     public static final String RAG_ANSWER_NO_EVIDENCE = "rag-answer-no-evidence";
     public static final String RAG_ANSWER_OMITTED_EVIDENCE = "rag-answer-omitted-evidence";

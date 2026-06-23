@@ -43,6 +43,9 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
 
     private static final TypeReference<List<List<String>>> TABLE_ROWS_TYPE = new TypeReference<>() {
     };
+    private static final int MAX_EVIDENCE_ROWS = 20;
+    private static final int MAX_EVIDENCE_COLUMNS = 6;
+    private static final int MAX_EVIDENCE_CELLS = 80;
 
     private final SuperAgentDocumentTableMapper tableMapper;
     private final SuperAgentDocumentTableColumnMapper columnMapper;
@@ -60,11 +63,11 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
         }
         int tableNo = 1;
         for (SuperAgentDocumentBlock block : blockList) {
-            List<List<String>> tableRows = readTableRows(block);
-            if (tableRows.isEmpty()) {
+            TableBlockContent tableContent = readTableBlockContent(block);
+            if (tableContent.rows().isEmpty()) {
                 continue;
             }
-            saveTable(documentId, taskId, block, tableNo++, normalizeRows(tableRows));
+            saveTable(documentId, taskId, block, tableNo++, normalizeRows(tableContent.rows()), tableContent.cellMetadata());
         }
     }
 
@@ -151,6 +154,12 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                 groupedValues.merge(group, row.numeric(metricColumn.getColumnNo()).orElse(BigDecimal.ZERO), BigDecimal::add);
             }
         }
+        List<SuperAgentDocumentTableColumn> evidenceColumns = resolveEvidenceColumns(query, columns, columnByName);
+        List<RowView> evidenceRows = matchedRows.stream()
+            .sorted(Comparator.comparing(RowView::rowNo))
+            .limit(MAX_EVIDENCE_ROWS)
+            .toList();
+        TableEvidenceLocation evidenceLocation = buildEvidenceLocation(evidenceRows, evidenceColumns);
 
         return DocumentTableQueryResult.builder()
             .tableId(query.getTableId())
@@ -167,6 +176,14 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
             .value(value)
             .groupedValues(groupedValues)
             .matchedRowCount(matchedRows.size())
+            .evidenceRowIds(evidenceLocation.rowIds())
+            .evidenceRowNos(evidenceLocation.rowNos())
+            .evidenceColumnIds(evidenceLocation.columnIds())
+            .evidenceColumnNos(evidenceLocation.columnNos())
+            .evidenceColumnNames(evidenceLocation.columnNames())
+            .evidenceCellIds(evidenceLocation.cellIds())
+            .evidenceCellCoordinates(evidenceLocation.cellCoordinates())
+            .evidenceCellBboxJsons(evidenceLocation.cellBboxJsons())
             .evidenceText(renderEvidenceText(columns, matchedRows, groupedValues, value, query.getOperation()))
             .build();
     }
@@ -209,18 +226,21 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                            Long taskId,
                            SuperAgentDocumentBlock block,
                            int tableNo,
-                           List<List<String>> rows) {
+                           List<List<String>> rows,
+                           List<TableCellMetadata> cellMetadata) {
         int headerRowIndex = resolveHeaderRowIndex(rows);
         if (rows.isEmpty() || maxColumnCount(rows) <= 0) {
             return;
         }
         List<String> header = normalizeHeader(rows.get(headerRowIndex), maxColumnCount(rows));
         List<List<String>> dataRows = new ArrayList<>();
+        List<Integer> sourceRowIndexes = new ArrayList<>();
         for (int index = 0; index < rows.size(); index++) {
             if (index == headerRowIndex) {
                 continue;
             }
             dataRows.add(padRow(rows.get(index), header.size()));
+            sourceRowIndexes.add(index + 1);
         }
 
         Long tableId = uidGenerator.getUid();
@@ -243,7 +263,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
         tableMapper.insert(table);
 
         Map<Integer, Long> columnIdByNo = saveColumns(documentId, taskId, tableId, header, dataRows);
-        saveRowsAndCells(documentId, taskId, tableId, dataRows, columnIdByNo);
+        saveRowsAndCells(documentId, taskId, tableId, dataRows, sourceRowIndexes, metadataByPosition(cellMetadata), columnIdByNo);
     }
 
     private Map<Integer, Long> saveColumns(Long documentId,
@@ -276,9 +296,12 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                                   Long taskId,
                                   Long tableId,
                                   List<List<String>> dataRows,
+                                  List<Integer> sourceRowIndexes,
+                                  Map<CellPosition, TableCellMetadata> metadataByPosition,
                                   Map<Integer, Long> columnIdByNo) {
         for (int rowIndex = 0; rowIndex < dataRows.size(); rowIndex++) {
             int rowNo = rowIndex + 1;
+            int sourceRowNo = rowIndex < sourceRowIndexes.size() ? sourceRowIndexes.get(rowIndex) : rowNo;
             Long rowId = uidGenerator.getUid();
             List<String> rowValues = dataRows.get(rowIndex);
 
@@ -295,6 +318,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
             for (int columnIndex = 0; columnIndex < rowValues.size(); columnIndex++) {
                 int columnNo = columnIndex + 1;
                 String cellText = rowValues.get(columnIndex);
+                TableCellMetadata metadata = metadataByPosition.getOrDefault(new CellPosition(sourceRowNo, columnNo), TableCellMetadata.empty());
                 SuperAgentDocumentTableCell cell = new SuperAgentDocumentTableCell();
                 cell.setId(uidGenerator.getUid());
                 cell.setDocumentId(documentId);
@@ -306,34 +330,189 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                 cell.setColumnNo(columnNo);
                 cell.setCellText(cellText);
                 cell.setNumericValue(parseDecimal(cellText).orElse(null));
+                cell.setSourceRowNo(firstNonNull(metadata.sourceRowNo(), sourceRowNo));
+                cell.setSourceColumnNo(firstNonNull(metadata.sourceColumnNo(), columnNo));
+                cell.setSourceCellRef(resolveSourceCellRef(metadata, sourceRowNo, columnNo));
+                cell.setBboxJson(StrUtil.isBlank(metadata.bboxJson()) ? null : metadata.bboxJson());
+                cell.setMetadataJson(writeMetadataJson(metadata));
                 cell.setStatus(BusinessStatus.YES.getCode());
                 cellMapper.insert(cell);
             }
         }
     }
 
-    private List<List<String>> readTableRows(SuperAgentDocumentBlock block) {
+    private TableBlockContent readTableBlockContent(SuperAgentDocumentBlock block) {
         if (block == null || !"TABLE".equalsIgnoreCase(StrUtil.blankToDefault(block.getBlockType(), ""))) {
-            return List.of();
+            return TableBlockContent.empty();
         }
         String metadataJson = block.getMetadataJson();
         if (StrUtil.isBlank(metadataJson)) {
-            return List.of();
+            return TableBlockContent.empty();
         }
         try {
             JsonNode root = objectMapper.readTree(metadataJson);
             JsonNode tableRowsNode = root.path("tableRows");
             if (!tableRowsNode.isArray() || tableRowsNode.isEmpty()) {
-                return List.of();
+                return TableBlockContent.empty();
             }
-            return objectMapper.convertValue(tableRowsNode, TABLE_ROWS_TYPE);
+            List<List<String>> rows = objectMapper.convertValue(tableRowsNode, TABLE_ROWS_TYPE);
+            JsonNode metadataNode = root.path("tableCellMetadata");
+            List<TableCellMetadata> cellMetadata = readTableCellMetadata(metadataNode);
+            return new TableBlockContent(rows, cellMetadata);
         }
         catch (RuntimeException exception) {
-            throw new IllegalStateException("解析表格 block metadata.tableRows 失败: blockId=" + block.getId(), exception);
+            throw new IllegalStateException("解析表格 block metadata 失败: blockId=" + block.getId(), exception);
         }
         catch (JsonProcessingException exception) {
-            throw new IllegalStateException("解析表格 block metadata.tableRows 失败: blockId=" + block.getId(), exception);
+            throw new IllegalStateException("解析表格 block metadata 失败: blockId=" + block.getId(), exception);
         }
+    }
+
+    private List<TableCellMetadata> readTableCellMetadata(JsonNode metadataNode) {
+        if (metadataNode == null || !metadataNode.isArray() || metadataNode.isEmpty()) {
+            return List.of();
+        }
+        List<TableCellMetadata> metadataList = new ArrayList<>();
+        for (JsonNode item : metadataNode) {
+            if (item == null || !item.isObject()) {
+                continue;
+            }
+            TableCellMetadata metadata = new TableCellMetadata(
+                readInteger(item, "rowNo"),
+                readInteger(item, "columnNo"),
+                readInteger(item, "sourceRowNo"),
+                readInteger(item, "sourceColumnNo"),
+                readText(item, "excelAddress"),
+                readText(item, "cellCoordinate"),
+                readText(item, "sheetName"),
+                readInteger(item, "pageNo"),
+                readText(item, "bboxJson"),
+                readText(item, "value"),
+                readBoolean(item, "mergedCell"),
+                readBoolean(item, "mergedCellAnchor"),
+                readText(item, "mergedCellRange"),
+                readText(item, "mergedCellAnchorAddress"),
+                readText(item, "mergedCellValue"),
+                readInteger(item, "rowSpan"),
+                readInteger(item, "columnSpan"),
+                readBoolean(item, "mergedValueFilled"),
+                readBoolean(item, "flattenedHeader"),
+                readInteger(item, "headerSourceRows")
+            );
+            if (!metadata.isEmpty()) {
+                metadataList.add(metadata);
+            }
+        }
+        return metadataList;
+    }
+
+    private Integer readInteger(JsonNode node, String fieldName) {
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        if (value.isInt() || value.isLong()) {
+            return value.intValue();
+        }
+        if (value.isTextual() && StrUtil.isNotBlank(value.asText())) {
+            try {
+                return Integer.parseInt(value.asText().trim());
+            }
+            catch (NumberFormatException exception) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private String readText(JsonNode node, String fieldName) {
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return "";
+        }
+        return value.asText("");
+    }
+
+    private Boolean readBoolean(JsonNode node, String fieldName) {
+        JsonNode value = node.path(fieldName);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        if (value.isBoolean()) {
+            return value.booleanValue();
+        }
+        if (value.isTextual() && StrUtil.isNotBlank(value.asText())) {
+            return Boolean.parseBoolean(value.asText().trim());
+        }
+        return null;
+    }
+
+    private Map<CellPosition, TableCellMetadata> metadataByPosition(List<TableCellMetadata> metadataList) {
+        Map<CellPosition, TableCellMetadata> result = new LinkedHashMap<>();
+        if (metadataList == null || metadataList.isEmpty()) {
+            return result;
+        }
+        for (TableCellMetadata metadata : metadataList) {
+            if (metadata == null || metadata.rowNo() == null || metadata.columnNo() == null) {
+                continue;
+            }
+            result.put(new CellPosition(metadata.rowNo(), metadata.columnNo()), metadata);
+        }
+        return result;
+    }
+
+    private String resolveSourceCellRef(TableCellMetadata metadata, int sourceRowNo, int columnNo) {
+        String ref = StrUtil.isNotBlank(metadata.excelAddress()) ? metadata.excelAddress() : metadata.cellCoordinate();
+        if (StrUtil.isNotBlank(ref)) {
+            return ref;
+        }
+        Integer metadataSourceRow = metadata.sourceRowNo();
+        Integer metadataSourceColumn = metadata.sourceColumnNo();
+        return "R" + firstNonNull(metadataSourceRow, sourceRowNo) + "C" + firstNonNull(metadataSourceColumn, columnNo);
+    }
+
+    private String writeMetadataJson(TableCellMetadata metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return "";
+        }
+        Map<String, Object> values = new LinkedHashMap<>();
+        putIfPresent(values, "sheetName", metadata.sheetName());
+        putIfPresent(values, "pageNo", metadata.pageNo());
+        putIfPresent(values, "value", metadata.value());
+        putIfPresent(values, "sourceRowNo", metadata.sourceRowNo());
+        putIfPresent(values, "sourceColumnNo", metadata.sourceColumnNo());
+        putIfPresent(values, "excelAddress", metadata.excelAddress());
+        putIfPresent(values, "cellCoordinate", metadata.cellCoordinate());
+        putIfPresent(values, "mergedCell", metadata.mergedCell());
+        putIfPresent(values, "mergedCellAnchor", metadata.mergedCellAnchor());
+        putIfPresent(values, "mergedCellRange", metadata.mergedCellRange());
+        putIfPresent(values, "mergedCellAnchorAddress", metadata.mergedCellAnchorAddress());
+        putIfPresent(values, "mergedCellValue", metadata.mergedCellValue());
+        putIfPresent(values, "rowSpan", metadata.rowSpan());
+        putIfPresent(values, "columnSpan", metadata.columnSpan());
+        putIfPresent(values, "mergedValueFilled", metadata.mergedValueFilled());
+        putIfPresent(values, "flattenedHeader", metadata.flattenedHeader());
+        putIfPresent(values, "headerSourceRows", metadata.headerSourceRows());
+        try {
+            return objectMapper.writeValueAsString(values);
+        }
+        catch (JsonProcessingException exception) {
+            throw new IllegalStateException("序列化表格单元格元数据失败", exception);
+        }
+    }
+
+    private void putIfPresent(Map<String, Object> values, String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof String text && StrUtil.isBlank(text)) {
+            return;
+        }
+        values.put(key, value);
+    }
+
+    private <T> T firstNonNull(T first, T fallback) {
+        return first == null ? fallback : first;
     }
 
     private List<List<String>> normalizeRows(List<List<String>> rows) {
@@ -438,12 +617,22 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                               Map<Integer, SuperAgentDocumentTableColumn> columnByNo) {
         Map<Integer, CellView> values = new LinkedHashMap<>();
         for (SuperAgentDocumentTableCell cell : cells) {
-            if (!columnByNo.containsKey(cell.getColumnNo())) {
+            SuperAgentDocumentTableColumn column = columnByNo.get(cell.getColumnNo());
+            if (column == null) {
                 continue;
             }
-            values.put(cell.getColumnNo(), new CellView(cell.getCellText(), cell.getNumericValue()));
+            values.put(cell.getColumnNo(), new CellView(
+                cell.getId(),
+                cell.getColumnId(),
+                cell.getColumnNo(),
+                column.getColumnName(),
+                cell.getCellText(),
+                cell.getNumericValue(),
+                StrUtil.blankToDefault(cell.getSourceCellRef(), ""),
+                StrUtil.blankToDefault(cell.getBboxJson(), "")
+            ));
         }
-        return new RowView(row.getRowNo(), values);
+        return new RowView(row.getId(), row.getRowNo(), values);
     }
 
     private boolean matchesFilters(RowView row,
@@ -533,10 +722,41 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
     }
 
     private String resolveTableTitle(SuperAgentDocumentBlock block, int tableNo) {
+        String parserTableTitle = readParserTableTitle(block.getMetadataJson());
+        if (StrUtil.isNotBlank(parserTableTitle)) {
+            if (StrUtil.isNotBlank(block.getSectionPath())) {
+                return block.getSectionPath() + " / " + parserTableTitle + " 表格" + tableNo;
+            }
+            return parserTableTitle + " 表格" + tableNo;
+        }
         if (StrUtil.isNotBlank(block.getSectionPath())) {
             return block.getSectionPath() + " 表格" + tableNo;
         }
         return "表格" + tableNo;
+    }
+
+    private String readParserTableTitle(String metadataJson) {
+        if (StrUtil.isBlank(metadataJson)) {
+            return "";
+        }
+        try {
+            JsonNode root = objectMapper.readTree(metadataJson);
+            JsonNode titleRows = root.path("tableTitleRows");
+            if (!titleRows.isArray() || titleRows.isEmpty()) {
+                return "";
+            }
+            List<String> titles = new ArrayList<>();
+            for (JsonNode titleRow : titleRows) {
+                String text = titleRow.asText("");
+                if (StrUtil.isNotBlank(text)) {
+                    titles.add(text.trim());
+                }
+            }
+            return String.join(" / ", titles);
+        }
+        catch (RuntimeException | JsonProcessingException exception) {
+            return "";
+        }
     }
 
     private String renderEvidenceText(List<SuperAgentDocumentTableColumn> columns,
@@ -567,6 +787,67 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
         return columns.stream()
             .map(column -> column.getColumnName() + "=" + StrUtil.blankToDefault(row.value(column.getColumnNo()), ""))
             .collect(Collectors.joining("；"));
+    }
+
+    private List<SuperAgentDocumentTableColumn> resolveEvidenceColumns(DocumentTableQuery query,
+                                                                       List<SuperAgentDocumentTableColumn> columns,
+                                                                       Map<String, SuperAgentDocumentTableColumn> columnByName) {
+        Map<Integer, SuperAgentDocumentTableColumn> evidenceColumnMap = new LinkedHashMap<>();
+        if (query.getFilters() != null) {
+            for (DocumentTableQuery.Filter filter : query.getFilters()) {
+                addEvidenceColumn(evidenceColumnMap, columnByName, filter.getColumn());
+            }
+        }
+        addEvidenceColumn(evidenceColumnMap, columnByName, query.getGroupByColumn());
+        addEvidenceColumn(evidenceColumnMap, columnByName, query.getMetricColumn());
+        if (evidenceColumnMap.isEmpty()) {
+            columns.stream()
+                .sorted(Comparator.comparing(SuperAgentDocumentTableColumn::getColumnNo))
+                .limit(MAX_EVIDENCE_COLUMNS)
+                .forEach(column -> evidenceColumnMap.put(column.getColumnNo(), column));
+        }
+        return evidenceColumnMap.values().stream()
+            .sorted(Comparator.comparing(SuperAgentDocumentTableColumn::getColumnNo))
+            .limit(MAX_EVIDENCE_COLUMNS)
+            .toList();
+    }
+
+    private void addEvidenceColumn(Map<Integer, SuperAgentDocumentTableColumn> evidenceColumnMap,
+                                   Map<String, SuperAgentDocumentTableColumn> columnByName,
+                                   String columnName) {
+        if (StrUtil.isBlank(columnName)) {
+            return;
+        }
+        SuperAgentDocumentTableColumn column = columnByName.get(normalizeName(columnName));
+        if (column != null) {
+            evidenceColumnMap.put(column.getColumnNo(), column);
+        }
+    }
+
+    private TableEvidenceLocation buildEvidenceLocation(List<RowView> rows, List<SuperAgentDocumentTableColumn> columns) {
+        List<Long> rowIds = rows.stream().map(RowView::rowId).filter(Objects::nonNull).toList();
+        List<Integer> rowNos = rows.stream().map(RowView::rowNo).filter(Objects::nonNull).toList();
+        List<Long> columnIds = columns.stream().map(SuperAgentDocumentTableColumn::getId).filter(Objects::nonNull).toList();
+        List<Integer> columnNos = columns.stream().map(SuperAgentDocumentTableColumn::getColumnNo).filter(Objects::nonNull).toList();
+        List<String> columnNames = columns.stream().map(SuperAgentDocumentTableColumn::getColumnName).filter(StrUtil::isNotBlank).toList();
+        List<Long> cellIds = new ArrayList<>();
+        List<String> cellCoordinates = new ArrayList<>();
+        List<String> cellBboxJsons = new ArrayList<>();
+        for (RowView row : rows) {
+            for (SuperAgentDocumentTableColumn column : columns) {
+                CellView cell = row.values().get(column.getColumnNo());
+                if (cell == null || cell.cellId() == null) {
+                    continue;
+                }
+                if (cellIds.size() >= MAX_EVIDENCE_CELLS) {
+                    return new TableEvidenceLocation(rowIds, rowNos, columnIds, columnNos, columnNames, cellIds, cellCoordinates, cellBboxJsons);
+                }
+                cellIds.add(cell.cellId());
+                cellCoordinates.add(StrUtil.blankToDefault(cell.sourceCellRef(), "R" + row.rowNo() + "C" + column.getColumnNo()));
+                cellBboxJsons.add(StrUtil.blankToDefault(cell.bboxJson(), ""));
+            }
+        }
+        return new TableEvidenceLocation(rowIds, rowNos, columnIds, columnNos, columnNames, cellIds, cellCoordinates, cellBboxJsons);
     }
 
     private void deleteByTableIds(List<Long> tableIds) {
@@ -612,7 +893,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
             .build();
     }
 
-    private record RowView(Integer rowNo, Map<Integer, CellView> values) {
+    private record RowView(Long rowId, Integer rowNo, Map<Integer, CellView> values) {
         private String value(Integer columnNo) {
             CellView cell = values.get(columnNo);
             return cell == null ? "" : cell.text();
@@ -624,6 +905,81 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
         }
     }
 
-    private record CellView(String text, BigDecimal numericValue) {
+    private record CellView(Long cellId,
+                            Long columnId,
+                            Integer columnNo,
+                            String columnName,
+                            String text,
+                            BigDecimal numericValue,
+                            String sourceCellRef,
+                            String bboxJson) {
+    }
+
+    private record TableEvidenceLocation(List<Long> rowIds,
+                                         List<Integer> rowNos,
+                                         List<Long> columnIds,
+                                         List<Integer> columnNos,
+                                         List<String> columnNames,
+                                         List<Long> cellIds,
+                                         List<String> cellCoordinates,
+                                         List<String> cellBboxJsons) {
+    }
+
+    private record TableBlockContent(List<List<String>> rows, List<TableCellMetadata> cellMetadata) {
+        private static TableBlockContent empty() {
+            return new TableBlockContent(List.of(), List.of());
+        }
+    }
+
+    private record CellPosition(Integer rowNo, Integer columnNo) {
+    }
+
+    private record TableCellMetadata(Integer rowNo,
+                                     Integer columnNo,
+                                     Integer sourceRowNo,
+                                     Integer sourceColumnNo,
+                                     String excelAddress,
+                                     String cellCoordinate,
+                                     String sheetName,
+                                     Integer pageNo,
+                                     String bboxJson,
+                                     String value,
+                                     Boolean mergedCell,
+                                     Boolean mergedCellAnchor,
+                                     String mergedCellRange,
+                                     String mergedCellAnchorAddress,
+                                     String mergedCellValue,
+                                     Integer rowSpan,
+                                     Integer columnSpan,
+                                     Boolean mergedValueFilled,
+                                     Boolean flattenedHeader,
+                                     Integer headerSourceRows) {
+        private static TableCellMetadata empty() {
+            return new TableCellMetadata(null, null, null, null, "", "", "", null, "", "",
+                null, null, "", "", "", null, null, null, null, null);
+        }
+
+        private boolean isEmpty() {
+            return rowNo == null
+                && columnNo == null
+                && sourceRowNo == null
+                && sourceColumnNo == null
+                && StrUtil.isBlank(excelAddress)
+                && StrUtil.isBlank(cellCoordinate)
+                && StrUtil.isBlank(sheetName)
+                && pageNo == null
+                && StrUtil.isBlank(bboxJson)
+                && StrUtil.isBlank(value)
+                && mergedCell == null
+                && mergedCellAnchor == null
+                && StrUtil.isBlank(mergedCellRange)
+                && StrUtil.isBlank(mergedCellAnchorAddress)
+                && StrUtil.isBlank(mergedCellValue)
+                && rowSpan == null
+                && columnSpan == null
+                && mergedValueFilled == null
+                && flattenedHeader == null
+                && headerSourceRows == null;
+        }
     }
 }

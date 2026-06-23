@@ -93,6 +93,10 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, StrUtil.blankToDefault(result.getGraphPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID, result.getCommunityId());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, StrUtil.blankToDefault(result.getCommunityTitle(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, StrUtil.blankToDefault(result.getCommunitySummary(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RANK_BOOST, result.getRankBoost());
 
         return Document.builder()
             .id(documentId(result))
@@ -107,6 +111,9 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         builder.append("[GraphRAG 图谱检索]\n");
         builder.append("用户问题：").append(StrUtil.blankToDefault(subQuestion, "")).append('\n');
         builder.append("图谱路径：").append(StrUtil.blankToDefault(result.getGraphPath(), result.getEntityName())).append('\n');
+        if (StrUtil.isNotBlank(result.getCommunitySummary())) {
+            builder.append("社区报告：").append(result.getCommunitySummary()).append('\n');
+        }
         if (StrUtil.isNotBlank(result.getSectionPath())) {
             builder.append("章节：").append(result.getSectionPath()).append('\n');
         }

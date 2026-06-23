@@ -29,6 +29,12 @@ public class GraphRagSearchResult {
 
     private Long evidenceId;
 
+    private Long communityId;
+
+    private String communityTitle;
+
+    private String communitySummary;
+
     private Long chunkId;
 
     private Long parentBlockId;
@@ -46,6 +52,8 @@ public class GraphRagSearchResult {
     private String graphPath;
 
     private Integer hopCount;
+
+    private Double rankBoost;
 
     private double score;
 }

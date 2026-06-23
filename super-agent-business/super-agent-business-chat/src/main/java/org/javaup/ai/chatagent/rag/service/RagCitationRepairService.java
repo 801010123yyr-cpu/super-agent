@@ -173,6 +173,21 @@ public class RagCitationRepairService {
         metadata.put("knowledgeScopeCode", StrUtil.blankToDefault(reference.getKnowledgeScopeCode(), ""));
         metadata.put("knowledgeScopeName", StrUtil.blankToDefault(reference.getKnowledgeScopeName(), ""));
         metadata.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
+        metadata.put("tableId", reference.getTableId());
+        metadata.put("tableNo", reference.getTableNo());
+        metadata.put("tableTitle", StrUtil.blankToDefault(reference.getTableTitle(), ""));
+        metadata.put("tableOperation", StrUtil.blankToDefault(reference.getTableOperation(), ""));
+        metadata.put("tableMetricColumn", StrUtil.blankToDefault(reference.getTableMetricColumn(), ""));
+        metadata.put("tableGroupByColumn", StrUtil.blankToDefault(reference.getTableGroupByColumn(), ""));
+        metadata.put("tableMatchedRowCount", reference.getTableMatchedRowCount());
+        metadata.put("tableEvidenceRowIds", reference.getTableEvidenceRowIds());
+        metadata.put("tableEvidenceRowNos", reference.getTableEvidenceRowNos());
+        metadata.put("tableEvidenceColumnIds", reference.getTableEvidenceColumnIds());
+        metadata.put("tableEvidenceColumnNos", reference.getTableEvidenceColumnNos());
+        metadata.put("tableEvidenceColumnNames", reference.getTableEvidenceColumnNames());
+        metadata.put("tableEvidenceCellIds", reference.getTableEvidenceCellIds());
+        metadata.put("tableEvidenceCellCoordinates", reference.getTableEvidenceCellCoordinates());
+        metadata.put("tableEvidenceCellBboxJsons", reference.getTableEvidenceCellBboxJsons());
         return metadata;
     }
 
@@ -186,6 +201,11 @@ public class RagCitationRepairService {
                 item.put("documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()));
                 item.put("chunkId", reference.getChunkId());
                 item.put("parentBlockId", reference.getParentBlockId());
+                item.put("tableId", reference.getTableId());
+                item.put("tableEvidenceRowNos", reference.getTableEvidenceRowNos());
+                item.put("tableEvidenceColumnNames", reference.getTableEvidenceColumnNames());
+                item.put("tableEvidenceCellCoordinates", reference.getTableEvidenceCellCoordinates());
+                item.put("tableEvidenceCellBboxJsons", reference.getTableEvidenceCellBboxJsons());
                 item.put("pageNo", reference.getPageNo());
                 item.put("pageRange", StrUtil.blankToDefault(reference.getPageRange(), ""));
                 item.put("score", reference.getCitationScore());
@@ -202,7 +222,8 @@ public class RagCitationRepairService {
 
     private boolean isRepairableDocumentReference(SearchReference reference) {
         return reference != null
-            && "DOCUMENT".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), ""))
+            && ("DOCUMENT".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), ""))
+            || "DOCUMENT_TABLE".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), "")))
             && StrUtil.isNotBlank(reference.getSnippet());
     }
 

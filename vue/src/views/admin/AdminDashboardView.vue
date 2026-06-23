@@ -93,7 +93,7 @@ const metricCards = computed(() => [
 ])
 
 const flowSteps = [
-  { index: 1, title: '上传文档', desc: '通过假登录后的管理台上传 PDF / Word / Markdown 文档。' },
+  { index: 1, title: '上传文档', desc: '通过假登录后的管理台上传 PDF / Word / Excel / Markdown 文档。' },
   { index: 2, title: '查看系统推荐策略', desc: '根据文档结构与内容长度，观察结构切块、递归分块、语义分块和智能切块的组合。' },
   { index: 3, title: '确认并构建索引', desc: '在推荐结果基础上补充或移除策略，再触发异步构建索引。' },
   { index: 4, title: '做对话观测', desc: '查看真实会话在当前文档问答与开放式提问两种模式下的执行轨迹。' }
@@ -132,4 +132,3 @@ function goDocuments() {
 
 onMounted(loadDashboard)
 </script>
-

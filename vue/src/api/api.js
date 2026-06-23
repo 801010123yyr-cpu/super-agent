@@ -514,11 +514,12 @@ export const manageApi = {
     })
   },
 
-  queryDocumentRagSnapshot(documentId) {
+  queryDocumentRagSnapshot(documentId, options = {}) {
     return requestApiEnvelope('/manage/document/rag/snapshot/query', {
       method: 'POST',
       body: stringifyManageValue({
-        documentId
+        documentId,
+        ...options
       })
     })
   },

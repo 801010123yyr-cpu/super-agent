@@ -1,9 +1,9 @@
-import math
 import re
-from collections import Counter
 
+from fastapi import HTTPException
+
+from rag_tools.semantic_model import SemanticModelUnavailable, score_citation_pairs
 from rag_tools.schemas.citation_repair import (
-    CitationEvidence,
     CitationRepairRequest,
     CitationRepairResponse,
     CitationRepairResult,
@@ -15,25 +15,34 @@ def repair_citations(request: CitationRepairRequest) -> CitationRepairResponse:
     if not segments or not request.evidences:
         return CitationRepairResponse()
 
+    pairs: list[tuple[str, str]] = []
+    pair_refs: list[tuple[int, int]] = []
+    for segment_index, segment in enumerate(segments, start=1):
+        for evidence_index, evidence in enumerate(request.evidences):
+            pairs.append((segment, evidence.text or ""))
+            pair_refs.append((segment_index, evidence_index))
+    try:
+        semantic_scores = score_citation_pairs(pairs)
+    except SemanticModelUnavailable as exception:
+        raise HTTPException(status_code=503, detail=str(exception)) from exception
+
+    scores_by_segment: dict[int, list[tuple[float, int]]] = {}
+    for score, (segment_index, evidence_index) in zip(semantic_scores, pair_refs):
+        if score < request.min_score:
+            continue
+        scores_by_segment.setdefault(segment_index, []).append((score, evidence_index))
+
     citations: list[CitationRepairResult] = []
     for segment_index, segment in enumerate(segments, start=1):
-        scored_evidences = []
-        segment_terms = _tokenize(segment)
-        segment_bigrams = _char_bigrams(segment)
-        for evidence_index, evidence in enumerate(request.evidences):
-            score = _score_evidence(segment_terms, segment_bigrams, evidence.text)
-            if score < request.min_score:
-                continue
-            scored_evidences.append((score, evidence_index, evidence))
-
-        scored_evidences.sort(key=lambda item: (-item[0], item[1]))
-        for rank, (score, _, evidence) in enumerate(scored_evidences[: request.max_matches_per_segment], start=1):
+        scored_evidences = sorted(scores_by_segment.get(segment_index, []), key=lambda item: (-item[0], item[1]))
+        for rank, (score, evidence_index) in enumerate(scored_evidences[: request.max_matches_per_segment], start=1):
+            evidence = request.evidences[evidence_index]
             citations.append(
                 CitationRepairResult(
                     evidence_id=evidence.id,
                     answer_segment=segment,
                     segment_index=segment_index,
-                    quote_text=_best_quote(segment_terms, evidence.text),
+                    quote_text=_best_quote(segment, evidence.text),
                     score=round(score, 6),
                     rank=rank,
                     document_id=evidence.document_id,
@@ -65,33 +74,14 @@ def _split_answer_segments(answer: str, max_segments: int) -> list[str]:
     return segments
 
 
-def _score_evidence(segment_terms: list[str], segment_bigrams: set[str], evidence_text: str) -> float:
-    evidence_terms = _tokenize(evidence_text)
-    if not segment_terms or not evidence_terms:
-        return 0.0
-
-    evidence_counter = Counter(evidence_terms)
-    unique_segment_terms = set(segment_terms)
-    matched_terms = unique_segment_terms.intersection(evidence_counter.keys())
-    term_recall = len(matched_terms) / max(len(unique_segment_terms), 1)
-    term_frequency = sum(math.log1p(evidence_counter[term]) for term in matched_terms)
-
-    evidence_bigrams = _char_bigrams(evidence_text)
-    bigram_overlap = len(segment_bigrams.intersection(evidence_bigrams)) / max(len(segment_bigrams), 1)
-    phrase_bonus = 0.12 if _phrase_present(segment_terms, evidence_text) else 0.0
-    length_penalty = 1.0 / (1.0 + max(len(evidence_terms) - 180, 0) / 360.0)
-
-    return (term_recall * 0.50 + bigram_overlap * 0.30 + min(term_frequency / 10.0, 1.0) * 0.20 + phrase_bonus) * length_penalty
-
-
-def _best_quote(segment_terms: list[str], evidence_text: str) -> str:
+def _best_quote(segment: str, evidence_text: str) -> str:
     text = (evidence_text or "").strip()
     if len(text) <= 260:
         return text
 
     normalized_text = _normalize(text)
     best_index = -1
-    for term in sorted(set(segment_terms), key=len, reverse=True):
+    for term in _quote_terms(segment):
         if len(term) < 2:
             continue
         best_index = normalized_text.find(term)
@@ -110,28 +100,11 @@ def _best_quote(segment_terms: list[str], evidence_text: str) -> str:
     return quote
 
 
-def _phrase_present(terms: list[str], text: str) -> bool:
-    normalized_text = _normalize(text)
-    return any(len(term) >= 4 and term in normalized_text for term in terms)
-
-
-def _tokenize(text: str) -> list[str]:
-    normalized = _normalize(text)
-    alnum_terms = re.findall(r"[a-z0-9._-]{2,}", normalized)
-    chinese_terms = re.findall(r"[\u4e00-\u9fff]{2,}", normalized)
-    split_chinese_terms = []
-    for term in chinese_terms:
-        if len(term) <= 6:
-            split_chinese_terms.append(term)
-            continue
-        split_chinese_terms.extend(term[index:index + 4] for index in range(0, len(term) - 1, 2))
-    return alnum_terms + split_chinese_terms
-
-
-def _char_bigrams(text: str) -> set[str]:
-    normalized = _normalize(text)
-    chars = [char for char in normalized if not char.isspace()]
-    return {chars[index] + chars[index + 1] for index in range(len(chars) - 1)}
+def _quote_terms(segment: str) -> list[str]:
+    normalized = _normalize(segment)
+    terms = re.findall(r"[a-z0-9._-]{2,}", normalized)
+    terms.extend(re.findall(r"[\u4e00-\u9fff]{2,}", normalized))
+    return sorted(set(terms), key=len, reverse=True)
 
 
 def _normalize(text: str) -> str:

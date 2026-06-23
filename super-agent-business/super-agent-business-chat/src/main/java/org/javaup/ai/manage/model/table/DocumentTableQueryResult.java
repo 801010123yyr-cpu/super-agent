@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Data
@@ -43,6 +45,30 @@ public class DocumentTableQueryResult {
     private Map<String, BigDecimal> groupedValues = new LinkedHashMap<>();
 
     private int matchedRowCount;
+
+    @Builder.Default
+    private List<Long> evidenceRowIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<Integer> evidenceRowNos = new ArrayList<>();
+
+    @Builder.Default
+    private List<Long> evidenceColumnIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<Integer> evidenceColumnNos = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> evidenceColumnNames = new ArrayList<>();
+
+    @Builder.Default
+    private List<Long> evidenceCellIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> evidenceCellCoordinates = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> evidenceCellBboxJsons = new ArrayList<>();
 
     private String evidenceText;
 }

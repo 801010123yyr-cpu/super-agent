@@ -14,4 +14,6 @@ public class RagToolsProperties {
     private int connectTimeoutMs = 3000;
 
     private int readTimeoutMs = 10000;
+
+    private int graphExtractReadTimeoutMs = 30000;
 }

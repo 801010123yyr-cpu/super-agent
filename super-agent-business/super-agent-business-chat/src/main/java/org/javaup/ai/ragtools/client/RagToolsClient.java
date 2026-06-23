@@ -24,11 +24,18 @@ public class RagToolsClient {
 
     private final RestClient restClient;
 
+    private final RestClient graphExtractRestClient;
+
     public RagToolsClient(RagToolsProperties properties) {
         this.restClient = RestClientFactorySupport.create(
             properties.getBaseUrl(),
             properties.getConnectTimeoutMs(),
             properties.getReadTimeoutMs()
+        );
+        this.graphExtractRestClient = RestClientFactorySupport.create(
+            properties.getBaseUrl(),
+            properties.getConnectTimeoutMs(),
+            properties.getGraphExtractReadTimeoutMs()
         );
     }
 
@@ -67,7 +74,7 @@ public class RagToolsClient {
     }
 
     public RagToolsGraphExtractResponse extractGraph(RagToolsGraphExtractRequest request) {
-        return restClient.post()
+        return graphExtractRestClient.post()
             .uri("/graph/extract")
             .contentType(MediaType.APPLICATION_JSON)
             .body(request)

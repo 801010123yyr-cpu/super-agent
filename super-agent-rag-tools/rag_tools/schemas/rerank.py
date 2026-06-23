@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,7 +14,7 @@ class RerankRequest(BaseModel):
 
     query: str = ""
     candidates: list[RerankCandidate] = Field(default_factory=list)
-    top_k: Annotated[int, Field(alias="topK", ge=0)] = 5
+    top_k: int = Field(default=5, alias="topK", ge=0)
 
 
 class RerankResult(BaseModel):

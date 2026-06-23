@@ -7,6 +7,7 @@ import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
+import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.model.SubQuestionChannelTrace;
 import org.javaup.ai.chatagent.rag.model.SubQuestionEvidence;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
@@ -245,7 +246,7 @@ public class RagRetrievalEngine {
         List<String> metadataBoostTerms = buildMetadataBoostTerms(subQuestion, plan);
 
         for (RetrievalChannelResult retrievalChannelResult : channelResults) {
-            accumulateWeightedHybrid(retrievalChannelResult, holders, channelMaxScoreMap, metadataBoostTerms);
+            accumulateWeightedHybrid(retrievalChannelResult, holders, channelMaxScoreMap, metadataBoostTerms, plan);
         }
 
         return holders.values().stream()
@@ -291,7 +292,8 @@ public class RagRetrievalEngine {
     private void accumulateWeightedHybrid(RetrievalChannelResult channelResult,
                                           Map<String, CandidateHolder> holders,
                                           Map<String, Double> channelMaxScoreMap,
-                                          List<String> metadataBoostTerms) {
+                                          List<String> metadataBoostTerms,
+                                          ConversationExecutionPlan plan) {
         if (channelResult == null || channelResult.getDocuments() == null) {
             return;
         }
@@ -307,7 +309,9 @@ public class RagRetrievalEngine {
                 originalScore,
                 channelMaxScoreMap.getOrDefault(channelResult.getChannelName(), 0D)
             );
-            double channelWeight = resolveChannelWeight(channelResult.getChannelName());
+            double channelWeight = resolveChannelWeight(channelResult.getChannelName(), plan);
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RETRIEVAL_INTENT, resolveRetrievalIntent(plan).name());
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL_WEIGHT, channelWeight);
             if (RetrievalChannelEnum.VECTOR.getName().equals(channelResult.getChannelName()) && originalScore != null) {
                 document.getMetadata().put(DocumentKnowledgeMetadataKeys.VECTOR_SCORE, originalScore);
             }
@@ -342,24 +346,68 @@ public class RagRetrievalEngine {
         return Math.min(1D, originalScore / channelMaxScore);
     }
 
-    private double resolveChannelWeight(String channelName) {
+    private double resolveChannelWeight(String channelName, ConversationExecutionPlan plan) {
         ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        double baseWeight;
         if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
-            return hybrid == null ? 1D : Math.max(0D, hybrid.getVectorWeight());
+            baseWeight = hybrid == null ? 1D : Math.max(0D, hybrid.getVectorWeight());
+            return baseWeight * resolveIntentMultiplier(channelName, plan);
         }
         if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
-            return hybrid == null ? 1D : Math.max(0D, hybrid.getKeywordWeight());
+            baseWeight = hybrid == null ? 1D : Math.max(0D, hybrid.getKeywordWeight());
+            return baseWeight * resolveIntentMultiplier(channelName, plan);
         }
         if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
-            return hybrid == null ? 1.2D : Math.max(0D, hybrid.getTableWeight());
+            baseWeight = hybrid == null ? 1.2D : Math.max(0D, hybrid.getTableWeight());
+            return baseWeight * resolveIntentMultiplier(channelName, plan);
         }
         if (RetrievalChannelEnum.GRAPH_RAG.getName().equals(channelName)) {
-            return hybrid == null ? 1.1D : Math.max(0D, hybrid.getGraphRagWeight());
+            baseWeight = hybrid == null ? 1.1D : Math.max(0D, hybrid.getGraphRagWeight());
+            return baseWeight * resolveIntentMultiplier(channelName, plan);
         }
         if (RetrievalChannelEnum.RAPTOR.getName().equals(channelName)) {
-            return hybrid == null ? 1.05D : Math.max(0D, hybrid.getRaptorWeight());
+            baseWeight = hybrid == null ? 1.05D : Math.max(0D, hybrid.getRaptorWeight());
+            return baseWeight * resolveIntentMultiplier(channelName, plan);
         }
         return 1D;
+    }
+
+    private double resolveIntentMultiplier(String channelName, ConversationExecutionPlan plan) {
+        RetrievalIntent intent = resolveRetrievalIntent(plan);
+        if (intent == RetrievalIntent.TABLE) {
+            if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
+                return 1.45D;
+            }
+            if (RetrievalChannelEnum.VECTOR.getName().equals(channelName) || RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+                return 0.9D;
+            }
+        }
+        if (intent == RetrievalIntent.GRAPH_RAG) {
+            if (RetrievalChannelEnum.GRAPH_RAG.getName().equals(channelName)) {
+                return 1.4D;
+            }
+            if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+                return 1.05D;
+            }
+        }
+        if (intent == RetrievalIntent.RAPTOR) {
+            if (RetrievalChannelEnum.RAPTOR.getName().equals(channelName)) {
+                return 1.4D;
+            }
+            if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
+                return 1.1D;
+            }
+        }
+        if (intent == RetrievalIntent.STRUCTURE) {
+            if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName) || RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
+                return 1.1D;
+            }
+        }
+        return 1D;
+    }
+
+    private RetrievalIntent resolveRetrievalIntent(ConversationExecutionPlan plan) {
+        return plan == null || plan.getRetrievalIntent() == null ? RetrievalIntent.GENERAL : plan.getRetrievalIntent();
     }
 
     private double hybridRankWeight() {
@@ -441,6 +489,7 @@ public class RagRetrievalEngine {
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY) ? 0.06D : 0D;
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS) ? 0.06D : 0D;
         boost += chunkTypeBoost(document, terms);
+        boost += graphRankMetadataBoost(document);
         return Math.min(boost, hybridMaxMetadataBoost());
     }
 
@@ -466,6 +515,30 @@ public class RagRetrievalEngine {
             return 0.08D;
         }
         return 0D;
+    }
+
+    private double graphRankMetadataBoost(Document document) {
+        Object value = document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RANK_BOOST);
+        Double rankBoost = numericMetadataValue(value);
+        if (rankBoost == null || rankBoost <= 0D) {
+            return 0D;
+        }
+        return Math.min(0.08D, rankBoost * 0.08D);
+    }
+
+    private Double numericMetadataValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        }
+        catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private String normalizeBoostText(String value) {

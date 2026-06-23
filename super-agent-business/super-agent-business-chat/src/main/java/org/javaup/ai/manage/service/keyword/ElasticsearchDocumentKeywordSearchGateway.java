@@ -19,6 +19,7 @@ import org.javaup.ai.manage.model.DocumentRetrieveFilters;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.es.DocumentKeywordIndexRecord;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
+import org.javaup.ai.manage.support.GraphRagTypedChunkMetadataSupport;
 import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -48,14 +49,17 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
     private final ElasticsearchClient elasticsearchClient;
     private final SuperAgentDocumentMapper documentMapper;
     private final DocumentManageProperties properties;
+    private final GraphRagTypedChunkMetadataSupport graphRagTypedChunkMetadataSupport;
 
     public ElasticsearchDocumentKeywordSearchGateway(
         @Qualifier("documentManageElasticsearchClient") ElasticsearchClient elasticsearchClient,
         SuperAgentDocumentMapper documentMapper,
-        DocumentManageProperties properties) {
+        DocumentManageProperties properties,
+        GraphRagTypedChunkMetadataSupport graphRagTypedChunkMetadataSupport) {
         this.elasticsearchClient = elasticsearchClient;
         this.documentMapper = documentMapper;
         this.properties = properties;
+        this.graphRagTypedChunkMetadataSupport = graphRagTypedChunkMetadataSupport;
     }
 
     @Override
@@ -334,7 +338,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
 
     private Document toSpringDocument(DocumentKeywordIndexRecord source, Double score) {
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE,
+            graphRagTypedChunkMetadataSupport.isGraphTypedChunk(source.getChunkType()) ? "GRAPH_RAG" : "DOCUMENT");
         metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, "keyword");
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score == null ? 0D : score.doubleValue());
         metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_ID, parseLong(source.getChunkId()));
@@ -361,6 +366,7 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(source.getTitle()));
         metadata.put(DocumentKnowledgeMetadataKeys.KEYWORDS, String.join(",", source.getKeywords()));
         metadata.put(DocumentKnowledgeMetadataKeys.QUESTIONS, String.join(",", source.getQuestions()));
+        graphRagTypedChunkMetadataSupport.enrichMetadata(metadata, source.getChunkType(), source.getSourceBlockIds());
 
         return Document.builder()
             .id(source.getChunkId())

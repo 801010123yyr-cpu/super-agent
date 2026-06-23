@@ -12,6 +12,7 @@ import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
+import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.chatagent.service.TaskInfo;
@@ -264,6 +265,9 @@ public class ChatPreparationOrchestrator {
                     "targetItemIndex", navigationDecision == null || navigationDecision.getItemAnchor() == null || navigationDecision.getItemAnchor().getItemIndex() == null
                         ? ""
                         : String.valueOf(navigationDecision.getItemAnchor().getItemIndex()),
+                    "retrievalIntent", navigationDecision == null || navigationDecision.getRetrievalIntent() == null
+                        ? RetrievalIntent.GENERAL.name()
+                        : navigationDecision.getRetrievalIntent().name(),
                     "navigationSummary", navigationDecision == null ? "" : StrUtil.blankToDefault(navigationDecision.getSummaryText(), "")
                 ));
             }
@@ -285,20 +289,25 @@ public class ChatPreparationOrchestrator {
             || navigationDecision.getRetrievalPlan().getSubQuestions() == null || navigationDecision.getRetrievalPlan().getSubQuestions().isEmpty()
             ? rewriteSubQuestions
             : navigationDecision.getRetrievalPlan().getSubQuestions();
+        RetrievalIntent retrievalIntent = navigationDecision == null || navigationDecision.getRetrievalIntent() == null
+            ? RetrievalIntent.GENERAL
+            : navigationDecision.getRetrievalIntent();
 
-        log.info("聊天编排完成: conversationId={}, chatMode={}, originalQuestion='{}', rewriteQuestion='{}', retrievalQuestion='{}', executionMode={}, targetSection='{}'",
+        log.info("聊天编排完成: conversationId={}, chatMode={}, originalQuestion='{}', rewriteQuestion='{}', retrievalQuestion='{}', executionMode={}, retrievalIntent={}, targetSection='{}'",
             conversationId,
             chatMode,
             safeText(question),
             rewriteQuestion,
             retrievalQuestion,
             executionMode,
+            retrievalIntent,
             navigationDecision == null || navigationDecision.getStructureAnchor() == null ? "" : safeText(navigationDecision.getStructureAnchor().getTargetSectionHint()));
 
         return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
             requiresCurrentDateAnchoring, requiresFreshSearch)
             .mode(executionMode)
             .navigationDecision(navigationDecision)
+            .retrievalIntent(retrievalIntent)
             .rewriteQuestion(rewriteQuestion)
             .rewriteSubQuestions(rewriteSubQuestions)
             .retrievalQuestion(retrievalQuestion)
