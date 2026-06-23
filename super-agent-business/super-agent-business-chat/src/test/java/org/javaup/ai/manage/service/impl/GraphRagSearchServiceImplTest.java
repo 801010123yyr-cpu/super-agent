@@ -172,6 +172,48 @@ class GraphRagSearchServiceImplTest {
     }
 
     @Test
+    void policyRelationQuestionsUseControlledRelationTypeSeeds() {
+        SuperAgentKgEntity l4Data = entity(1001L, 10L, 20L, "L4 数据", "高敏感信息", "CONCEPT", "客户高敏感数据。");
+        SuperAgentKgEntity securityDept = entity(1002L, 10L, 20L, "信息安全部", null, "ORG", "审批高敏感数据访问。");
+        SuperAgentKgEntity auditTrail = entity(1003L, 10L, 20L, "AuditTrail", null, "SYSTEM", "审计系统。");
+        SuperAgentKgEntity permissionApply = entity(1004L, 10L, 20L, "权限申请", null, "PROCESS", "权限申请、审批和回收。");
+        SuperAgentKgRelation approves = relation(2001L, 10L, 20L, 1001L, 1002L, "APPROVES", "L4 数据需信息安全部审批。", 0.9D);
+        SuperAgentKgRelation records = relation(2002L, 10L, 20L, 1003L, 1004L, "RECORDS", "AuditTrail 记录权限申请、审批、回收。", 0.88D);
+        SuperAgentKgEvidence approvalEvidence = evidence(3001L, 10L, 20L, 4001L, 5001L, 2001L, null, "L4 权限申请需信息安全部三级审批。", 8);
+        SuperAgentKgEvidence recordEvidence = evidence(3002L, 10L, 20L, 4002L, 5002L, 2002L, null, "AuditTrail 需记录权限申请、审批、回收和延长。", 9);
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(l4Data, securityDept, auditTrail, permissionApply), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(approves, records), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(approvalEvidence, recordEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper()
+        );
+
+        List<GraphRagSearchResult> approvalResults = service.search(
+            "L4 数据需要谁审批？",
+            List.of(10L),
+            List.of(20L),
+            5,
+            2
+        );
+        List<GraphRagSearchResult> recordResults = service.search(
+            "AuditTrail 记录哪些权限相关行为？",
+            List.of(10L),
+            List.of(20L),
+            5,
+            2
+        );
+
+        assertThat(approvalResults).isNotEmpty();
+        assertThat(approvalResults.get(0).getRelationType()).isEqualTo("APPROVES");
+        assertThat(approvalResults.get(0).getGraphPath()).contains("关系匹配");
+        assertThat(recordResults).isNotEmpty();
+        assertThat(recordResults.get(0).getRelationType()).isEqualTo("RECORDS");
+        assertThat(recordResults.get(0).getGraphPath()).contains("关系匹配");
+    }
+
+    @Test
     void controlledAdvisorCanSeedRelationWhenQuestionUsesImplicitGraphIntent() {
         SuperAgentKgEntity source = entity(1001L, 10L, 20L, "SuperAgent", "超级智能体", "SYSTEM", "负责调用编排与图谱构建。");
         SuperAgentKgEntity target = entity(1002L, 10L, 20L, "RagTools", null, "SYSTEM", "图谱抽取与重排工具。");

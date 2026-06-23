@@ -13,6 +13,8 @@ import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
 import org.javaup.ai.manage.dto.DocumentTaskLogQueryDto;
 import org.javaup.ai.manage.dto.DocumentUploadDto;
+import org.javaup.ai.manage.model.graph.GraphRagEvaluationBatchReport;
+import org.javaup.ai.manage.service.GraphRagEvaluationBaselineService;
 import org.javaup.ai.manage.service.DocumentManageService;
 import org.javaup.ai.manage.service.DocumentRagSnapshotService;
 import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
@@ -49,10 +51,14 @@ public class DocumentManageController {
 
     private final DocumentRagSnapshotService documentRagSnapshotService;
 
+    private final GraphRagEvaluationBaselineService graphRagEvaluationBaselineService;
+
     public DocumentManageController(DocumentManageService documentManageService,
-                                    DocumentRagSnapshotService documentRagSnapshotService) {
+                                    DocumentRagSnapshotService documentRagSnapshotService,
+                                    GraphRagEvaluationBaselineService graphRagEvaluationBaselineService) {
         this.documentManageService = documentManageService;
         this.documentRagSnapshotService = documentRagSnapshotService;
+        this.graphRagEvaluationBaselineService = graphRagEvaluationBaselineService;
     }
 
     @Operation(summary = "上传文档并投递解析任务")
@@ -115,6 +121,12 @@ public class DocumentManageController {
     @PostMapping("/rag/snapshot/query")
     public ApiResponse<DocumentRagSnapshotVo> queryDocumentRagSnapshot(@Valid @RequestBody DocumentRagSnapshotQueryDto dto) {
         return ApiResponse.ok(documentRagSnapshotService.querySnapshot(dto));
+    }
+
+    @Operation(summary = "执行 O6 GraphRAG LLM/NER 真实文档 baseline 评测")
+    @PostMapping("/graph-rag/evaluation/o6/llm-ner/run")
+    public ApiResponse<GraphRagEvaluationBatchReport> runO6GraphRagLlmNerBaseline() {
+        return ApiResponse.ok(graphRagEvaluationBaselineService.evaluateO6LlmNerBaseline());
     }
 
     @Operation(summary = "查询任务执行日志")

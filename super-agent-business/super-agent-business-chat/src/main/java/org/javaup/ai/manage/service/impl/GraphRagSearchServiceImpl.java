@@ -690,6 +690,16 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "组成", "PART_OF");
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "属于", "BELONGS_TO");
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "负责", "RESPONSIBLE_FOR");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "审批", "APPROVES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "批准", "APPROVES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "审核", "APPROVES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "执行", "EXECUTES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "触发", "TRIGGERS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "发起", "TRIGGERS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "记录", "RECORDS");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "存放", "STORES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "归档", "ARCHIVES");
+        addRelationTypeIfPresent(relationTypes, normalizedQuestion, "回收", "REVOKES");
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "关联", "RELATED_TO");
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "关系", "RELATED_TO");
         addRelationTypeIfPresent(relationTypes, normalizedQuestion, "映射", "MAPS_TO");

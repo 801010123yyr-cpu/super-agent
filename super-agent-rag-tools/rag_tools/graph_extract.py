@@ -50,6 +50,14 @@ CHINESE_STOPWORDS = {
     "说明",
     "信息",
     "功能",
+    "简称",
+    "又称",
+    "也称",
+    "别名",
+    "英文名",
+    "英文名称",
+    "缩写",
+    "完成",
 }
 
 ENGLISH_STOPWORDS = {
@@ -79,6 +87,16 @@ RELATION_WORDS = [
     ("组成", "PART_OF", 0.8),
     ("属于", "BELONGS_TO", 0.86),
     ("负责", "RESPONSIBLE_FOR", 0.86),
+    ("审批", "APPROVES", 0.84),
+    ("批准", "APPROVES", 0.84),
+    ("审核", "APPROVES", 0.84),
+    ("执行", "EXECUTES", 0.86),
+    ("触发", "TRIGGERS", 0.84),
+    ("发起", "TRIGGERS", 0.84),
+    ("记录", "RECORDS", 0.84),
+    ("存放", "STORES", 0.82),
+    ("归档", "ARCHIVES", 0.82),
+    ("回收", "REVOKES", 0.82),
     ("关联", "RELATED_TO", 0.74),
     ("映射", "MAPS_TO", 0.86),
     ("生成", "PRODUCES", 0.82),
@@ -285,6 +303,9 @@ def _candidate_names(chunk, text: str) -> list[CandidateName]:
     for term in re.findall(r"\b(?:[A-Z][A-Za-z0-9]+(?:[\s/-]+|$)){2,5}", text):
         add(term, 5, "englishPhrase")
 
+    for term in re.findall(r"[\u4e00-\u9fff]{1,8}\s+[A-Z][A-Za-z0-9._/-]{1,16}|[A-Z][A-Za-z0-9._/-]{1,16}\s+[\u4e00-\u9fff]{1,8}", text):
+        add(term, 8, "mixedPhrase")
+
     for term in re.findall(r"\b[A-Za-z][A-Za-z0-9._/-]{1,40}\b", text):
         if any(char.isupper() for char in term) or re.search(r"[0-9._/-]", term):
             add(term, 4, "englishToken")
@@ -296,7 +317,7 @@ def _candidate_names(chunk, text: str) -> list[CandidateName]:
 
     return sorted(
         candidates.values(),
-        key=lambda item: (-item.score, -len(item.aliases), len(item.name), item.name.lower()),
+        key=lambda item: (-item.score, -len(item.aliases), -_candidate_name_priority(item), item.name.lower()),
     )
 
 
@@ -321,17 +342,45 @@ def _metadata_terms(metadata: dict[str, Any] | None, *keys: str) -> list[str]:
     return terms
 
 
+def _candidate_name_priority(candidate: CandidateName) -> int:
+    priority = len(candidate.name)
+    if candidate.sources.intersection({"title", "sectionPath", "metadata.keyword", "mixedPhrase"}):
+        priority += 8
+    if _is_acronym(candidate.name):
+        priority -= 4
+    return priority
+
+
 def _alias_pairs(text: str) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
-    pattern = re.compile(
+    parenthetical_pattern = re.compile(
         r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{1,40})[（(]"
         r"([A-Za-z][A-Za-z0-9_.\-]{1,16}|[\u4e00-\u9fff]{2,16})[）)]"
     )
-    for match in pattern.finditer(text or ""):
+    for match in parenthetical_pattern.finditer(text or ""):
         primary = _clean_name(match.group(1))
         alias = _clean_name(match.group(2))
         if _valid_name(primary) and _valid_name(alias):
             pairs.append((primary, alias))
+    explicit_patterns = [
+        re.compile(
+            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{1,40})"
+            r"(?:简称|缩写为|英文名为|英文名称为|又称|也称|别名为)"
+            r"([A-Za-z][A-Za-z0-9_.\-]{1,20}|[\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{2,24})"
+        ),
+        re.compile(
+            r"([A-Za-z][A-Za-z0-9_.\-]{1,20}|[\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{2,24})"
+            r"(?:是|为)"
+            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{1,40})"
+            r"(?:的简称|的缩写|的英文名|的英文名称|的别名)"
+        ),
+    ]
+    for pattern in explicit_patterns:
+        for match in pattern.finditer(text or ""):
+            primary = _clean_name(match.group(1))
+            alias = _clean_name(match.group(2))
+            if _valid_name(primary) and _valid_name(alias):
+                pairs.append((primary, alias))
     return pairs
 
 
@@ -359,7 +408,7 @@ def _split_chinese_phrase(phrase: str) -> list[str]:
     if 2 <= len(normalized) <= 12:
         parts.append(normalized)
     for item in re.split(
-        r"(?:的|和|与|及|或|并|在|对|通过|根据|用于|可以|需要|进行|实现|提供|支持|包括|包含|属于|作为|由|向|从|到|将|把|及其|以及)",
+        r"(?:的|和|与|及|或|并|在|对|通过|根据|用于|可以|需要|进行|实现|提供|支持|包括|包含|属于|作为|由|向|从|到|将|把|及其|以及|审批|批准|审核|执行|触发|发起|记录|存放|归档|回收|简称|又称|也称|别名为|英文名|英文名称|缩写为|完成)",
         normalized,
     ):
         item = item.strip()
@@ -384,15 +433,19 @@ def _valid_name(name: str) -> bool:
     lowered = name.lower()
     if lowered in ENGLISH_STOPWORDS or name in CHINESE_STOPWORDS:
         return False
+    if any(marker in name for marker in ("简称", "又称", "也称", "别名", "英文名", "英文名称", "缩写")):
+        return False
     if lowered in {word for word, _, _ in RELATION_WORDS}:
         return False
     for word, _, _ in RELATION_WORDS:
+        if word == "负责" and name.endswith("负责人"):
+            continue
         if re.search(r"[\u4e00-\u9fff]", word) and word in name and len(name) > len(word) + 1:
             return False
     if re.fullmatch(r"[0-9._/-]+", name):
         return False
     if re.fullmatch(r"[A-Za-z]{1,2}", name):
-        return False
+        return bool(re.fullmatch(r"[A-Z]{2}", name))
     if re.fullmatch(r"[A-Za-z]+", name) and name.islower():
         return False
     if len(re.findall(r"[\u4e00-\u9fffA-Za-z]", name)) < 2:
@@ -543,39 +596,56 @@ def _entity_evidence(evidence_id: str, entity_id: str, chunk, text: str, candida
 
 
 def _relation_candidate(text: str, left: GraphEntity, right: GraphEntity) -> RelationCandidate | None:
-    left_position = _find_entity_mention(text, left)
-    right_position = _find_entity_mention(text, right)
-    if left_position is None or right_position is None:
+    left_mentions = _find_entity_mentions(text, left)
+    right_mentions = _find_entity_mentions(text, right)
+    if not left_mentions or not right_mentions:
         return None
 
-    start = min(left_position[0], right_position[0])
-    end = max(left_position[0] + len(left_position[1]), right_position[0] + len(right_position[1]))
-    if end - start > 160:
-        return None
-    window = text[start:end]
-    lowered_window = window.lower()
-    for phrase, relation_type, confidence in RELATION_WORDS:
-        if phrase.lower() not in lowered_window:
+    candidates: list[tuple[int, int, int, RelationCandidate]] = []
+    for order, (phrase, relation_type, confidence) in enumerate(RELATION_WORDS):
+        relation_window = _best_relation_window(text, left_mentions, right_mentions, phrase)
+        if relation_window is None:
             continue
+        priority, distance, left_position, right_position, _ = relation_window
         left_before_right = left_position[0] <= right_position[0]
         source = left if left_before_right else right
         target = right if left_before_right else left
         source_name = left_position[1] if left_before_right else right_position[1]
         target_name = right_position[1] if left_before_right else left_position[1]
-        between = text[min(left_position[0], right_position[0]):max(left_position[0], right_position[0])]
-        if relation_type in {"RESPONSIBLE_FOR", "PRODUCES", "CONSUMES"} and any(hint in between for hint in REVERSE_HINTS):
+        between = _mention_gap(text, left_position, right_position)
+        if relation_type in {
+            "RESPONSIBLE_FOR",
+            "PRODUCES",
+            "CONSUMES",
+            "APPROVES",
+            "EXECUTES",
+            "TRIGGERS",
+            "RECORDS",
+            "STORES",
+            "ARCHIVES",
+            "REVOKES",
+        } and any(hint in between for hint in REVERSE_HINTS):
             source, target = target, source
             source_name, target_name = target_name, source_name
-        return RelationCandidate(
-            source_id=source.id,
-            target_id=target.id,
-            source_name=source_name,
-            target_name=target_name,
-            relation_type=relation_type,
-            phrase=phrase,
-            confidence=confidence,
+        candidates.append(
+            (
+                priority,
+                distance,
+                order,
+                RelationCandidate(
+                    source_id=source.id,
+                    target_id=target.id,
+                    source_name=source_name,
+                    target_name=target_name,
+                    relation_type=relation_type,
+                    phrase=phrase,
+                    confidence=confidence,
+                ),
+            )
         )
-    return None
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1], item[2]))[3]
 
 
 def _associated_relation_candidate(text: str, left: GraphEntity, right: GraphEntity) -> RelationCandidate | None:
@@ -599,13 +669,90 @@ def _associated_relation_candidate(text: str, left: GraphEntity, right: GraphEnt
 
 
 def _find_entity_mention(text: str, entity: GraphEntity) -> tuple[int, str] | None:
+    found = _find_entity_mentions(text, entity)
+    return found[0] if found else None
+
+
+def _find_entity_mentions(text: str, entity: GraphEntity) -> list[tuple[int, str]]:
     mentions = [entity.name, *(entity.aliases or [])]
     found: list[tuple[int, str]] = []
     for mention in mentions:
-        position = _find_name(text, mention)
-        if position >= 0:
+        for position in _find_name_positions(text, mention):
             found.append((position, mention))
-    return min(found, key=lambda item: item[0]) if found else None
+    return sorted(found, key=lambda item: (item[0], -len(item[1])))
+
+
+def _best_relation_window(
+    text: str,
+    left_mentions: list[tuple[int, str]],
+    right_mentions: list[tuple[int, str]],
+    phrase: str,
+) -> tuple[int, int, tuple[int, str], tuple[int, str], str] | None:
+    candidates: list[tuple[int, int, int, tuple[int, str], tuple[int, str], str]] = []
+    for left_position in left_mentions:
+        for right_position in right_mentions:
+            start = min(left_position[0], right_position[0])
+            end = max(left_position[0] + len(left_position[1]), right_position[0] + len(right_position[1]))
+            distance = end - start
+            if distance > 160:
+                continue
+            gap = _mention_gap(text, left_position, right_position)
+            if phrase.lower() in gap.lower():
+                window = text[start:end]
+                candidates.append((0, distance, _phrase_offset(gap, phrase), left_position, right_position, window))
+                continue
+            context_start = max(0, start - 24)
+            context_end = min(len(text), end + 24)
+            window = text[context_start:context_end]
+            phrase_position = _first_phrase_outside_mentions(text, phrase, context_start, context_end, left_position, right_position)
+            if phrase_position < 0:
+                continue
+            center = (start + end) // 2
+            candidates.append((1, distance, abs(phrase_position - center), left_position, right_position, window))
+    if not candidates:
+        return None
+    priority, distance, _, left_position, right_position, window = min(
+        candidates,
+        key=lambda item: (item[0], item[1], item[2], item[3][0], item[4][0]),
+    )
+    return priority, distance, left_position, right_position, window
+
+
+def _mention_gap(text: str, left_position: tuple[int, str], right_position: tuple[int, str]) -> str:
+    left_start = left_position[0]
+    left_end = left_start + len(left_position[1])
+    right_start = right_position[0]
+    right_end = right_start + len(right_position[1])
+    if left_start <= right_start:
+        return text[left_end:right_start]
+    return text[right_end:left_start]
+
+
+def _phrase_offset(text: str, phrase: str) -> int:
+    return text.lower().find(phrase.lower())
+
+
+def _first_phrase_outside_mentions(
+    text: str,
+    phrase: str,
+    start: int,
+    end: int,
+    left_position: tuple[int, str],
+    right_position: tuple[int, str],
+) -> int:
+    lowered_window = text[start:end].lower()
+    lowered_phrase = phrase.lower()
+    mention_ranges = [
+        (left_position[0], left_position[0] + len(left_position[1])),
+        (right_position[0], right_position[0] + len(right_position[1])),
+    ]
+    for match in re.finditer(re.escape(lowered_phrase), lowered_window):
+        absolute_start = start + match.start()
+        absolute_end = start + match.end()
+        if any(absolute_start < mention_end and absolute_end > mention_start for mention_start, mention_end in mention_ranges):
+            continue
+        return absolute_start
+    return -1
 
 
 def _relation_description(candidate: RelationCandidate, entity_map: dict[str, GraphEntity]) -> str:
@@ -688,6 +835,17 @@ def _find_name(text: str, name: str) -> int:
     if index >= 0:
         return index
     return text.lower().find(name.lower())
+
+
+def _find_name_positions(text: str, name: str) -> list[int]:
+    if not text or not name:
+        return []
+    positions = [match.start() for match in re.finditer(re.escape(name), text)]
+    if positions:
+        return positions
+    lowered_text = text.lower()
+    lowered_name = name.lower()
+    return [match.start() for match in re.finditer(re.escape(lowered_name), lowered_text)]
 
 
 def _build_communities(

@@ -1,0 +1,151 @@
+package org.javaup.ai.manage.service.impl;
+
+import org.javaup.ai.manage.data.SuperAgentDocument;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
+import org.javaup.ai.manage.model.graph.GraphRagEvaluationBaselineSuites;
+import org.javaup.ai.manage.model.graph.GraphRagEvaluationBatchReport;
+import org.javaup.ai.manage.model.graph.GraphRagEvaluationReport;
+import org.javaup.ai.manage.model.graph.GraphRagEvaluationSuite;
+import org.javaup.ai.manage.service.GraphRagEvaluationService;
+import org.javaup.enums.BusinessStatus;
+import org.javaup.enums.DocumentIndexStatusEnum;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class GraphRagEvaluationBaselineServiceImplTest {
+
+    @Test
+    void bindsO6BaselineSuitesToIndexedSampleDocuments() {
+        CapturingEvaluationService evaluationService = new CapturingEvaluationService();
+        GraphRagEvaluationBaselineServiceImpl service = new GraphRagEvaluationBaselineServiceImpl(
+            mapper(List.of(
+                document(9L, "旧生产规范", "生产环境发布与回滚操作规范.md", 19L, 1000L),
+                document(10L, "生产规范", "生产环境发布与回滚操作规范.md", 20L, 2000L),
+                document(11L, "客户数据分级与访问控制管理制度", "客户数据访问.md", 21L, 1500L),
+                unindexedDocument(12L, "客户数据分级与访问控制管理制度.md", "客户数据分级与访问控制管理制度.md")
+            )),
+            evaluationService
+        );
+
+        GraphRagEvaluationBatchReport report = service.evaluateO6LlmNerBaseline();
+
+        assertThat(report.getBatchId()).isEqualTo(GraphRagEvaluationBaselineSuites.O6_LLM_NER_BATCH_ID);
+        assertThat(evaluationService.capturedSuites).hasSize(4);
+        assertThat(evaluationService.capturedSuites)
+            .filteredOn(suite -> GraphRagEvaluationBaselineSuites.SOURCE_PRODUCTION_RELEASE.equals(suite.getSourceDocument()))
+            .allSatisfy(suite -> {
+                assertThat(suite.getDocumentId()).isEqualTo(10L);
+                assertThat(suite.getTaskId()).isEqualTo(20L);
+            });
+        assertThat(evaluationService.capturedSuites)
+            .filteredOn(suite -> GraphRagEvaluationBaselineSuites.SOURCE_CUSTOMER_DATA_ACCESS.equals(suite.getSourceDocument()))
+            .allSatisfy(suite -> {
+                assertThat(suite.getDocumentId()).isEqualTo(11L);
+                assertThat(suite.getTaskId()).isEqualTo(21L);
+            });
+    }
+
+    @Test
+    void missingSampleDocumentsStillProduceFailedSuitesInsteadOfSilentEmptyBatch() {
+        CapturingEvaluationService evaluationService = new CapturingEvaluationService();
+        GraphRagEvaluationBaselineServiceImpl service = new GraphRagEvaluationBaselineServiceImpl(
+            mapper(List.of()),
+            evaluationService
+        );
+
+        service.evaluateO6LlmNerBaseline();
+
+        assertThat(evaluationService.capturedSuites).hasSize(4);
+        assertThat(evaluationService.capturedSuites)
+            .allSatisfy(suite -> {
+                assertThat(suite.getDocumentId()).isNull();
+                assertThat(suite.getTaskId()).isNull();
+            });
+    }
+
+    private static SuperAgentDocument document(Long id,
+                                               String documentName,
+                                               String originalFileName,
+                                               Long lastIndexTaskId,
+                                               long editTime) {
+        SuperAgentDocument document = new SuperAgentDocument();
+        document.setId(id);
+        document.setDocumentName(documentName);
+        document.setOriginalFileName(originalFileName);
+        document.setStatus(BusinessStatus.YES.getCode());
+        document.setIndexStatus(DocumentIndexStatusEnum.BUILD_SUCCESS.getCode());
+        document.setLastIndexTaskId(lastIndexTaskId);
+        document.setEditTime(new Date(editTime));
+        return document;
+    }
+
+    private static SuperAgentDocument unindexedDocument(Long id, String documentName, String originalFileName) {
+        SuperAgentDocument document = document(id, documentName, originalFileName, null, 3000L);
+        document.setIndexStatus(DocumentIndexStatusEnum.BUILD_FAILED.getCode());
+        return document;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SuperAgentDocumentMapper mapper(List<SuperAgentDocument> documents) {
+        return (SuperAgentDocumentMapper) Proxy.newProxyInstance(
+            SuperAgentDocumentMapper.class.getClassLoader(),
+            new Class<?>[]{SuperAgentDocumentMapper.class},
+            (proxy, method, args) -> {
+                if ("selectList".equals(method.getName())) {
+                    return documents;
+                }
+                if ("toString".equals(method.getName())) {
+                    return "SuperAgentDocumentMapperProxy";
+                }
+                if ("hashCode".equals(method.getName())) {
+                    return System.identityHashCode(proxy);
+                }
+                if ("equals".equals(method.getName())) {
+                    return proxy == args[0];
+                }
+                return defaultValue(method.getReturnType());
+            }
+        );
+    }
+
+    private static Object defaultValue(Class<?> returnType) {
+        if (!returnType.isPrimitive()) {
+            return null;
+        }
+        if (returnType == boolean.class) {
+            return false;
+        }
+        if (returnType == void.class) {
+            return null;
+        }
+        return 0;
+    }
+
+    private static class CapturingEvaluationService implements GraphRagEvaluationService {
+
+        private List<GraphRagEvaluationSuite> capturedSuites = new ArrayList<>();
+
+        @Override
+        public GraphRagEvaluationReport evaluate(GraphRagEvaluationSuite suite) {
+            return null;
+        }
+
+        @Override
+        public GraphRagEvaluationBatchReport evaluateBatch(String batchId,
+                                                           String name,
+                                                           List<GraphRagEvaluationSuite> suites) {
+            this.capturedSuites = suites;
+            return GraphRagEvaluationBatchReport.builder()
+                .batchId(batchId)
+                .name(name)
+                .suiteCount((long) suites.size())
+                .build();
+        }
+    }
+}
