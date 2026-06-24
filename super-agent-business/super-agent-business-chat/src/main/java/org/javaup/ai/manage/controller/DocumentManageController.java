@@ -129,6 +129,12 @@ public class DocumentManageController {
         return ApiResponse.ok(graphRagEvaluationBaselineService.evaluateO6LlmNerBaseline());
     }
 
+    @Operation(summary = "执行 O6 GraphRAG 跨文档图谱 baseline 评测")
+    @PostMapping("/graph-rag/evaluation/o6/cross-document/run")
+    public ApiResponse<GraphRagEvaluationBatchReport> runO6GraphRagCrossDocumentBaseline() {
+        return ApiResponse.ok(graphRagEvaluationBaselineService.evaluateO6CrossDocumentBaseline());
+    }
+
     @Operation(summary = "查询任务执行日志")
     @PostMapping("/task/log/query")
     public ApiResponse<DocumentTaskLogQueryVo> queryTaskLogs(@Valid @RequestBody DocumentTaskLogQueryDto dto) {

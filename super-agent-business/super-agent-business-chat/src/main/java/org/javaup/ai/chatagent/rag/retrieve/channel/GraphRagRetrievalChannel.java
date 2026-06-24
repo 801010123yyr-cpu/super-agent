@@ -86,10 +86,18 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, StrUtil.blankToDefault(result.getQuoteText(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, result.getEntityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, StrUtil.blankToDefault(result.getEntityName(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY, StrUtil.blankToDefault(result.getCanonicalEntityKey(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, StrUtil.blankToDefault(result.getCanonicalEntityName(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT, result.getCanonicalEntityCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT, result.getCanonicalDocumentCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, result.getRelatedEntityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME, StrUtil.blankToDefault(result.getRelatedEntityName(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_ID, result.getRelationId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, StrUtil.blankToDefault(result.getRelationType(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, StrUtil.blankToDefault(result.getRelationGroupKey(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, result.getRelationGroupRelationCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, result.getRelationGroupEvidenceCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, result.getRelationGroupDocumentCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, StrUtil.blankToDefault(result.getGraphPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
@@ -119,6 +127,12 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         }
         if (result.getPageNo() != null) {
             builder.append("页码：").append(result.getPageNo()).append('\n');
+        }
+        if (result.getRelationGroupDocumentCount() != null && result.getRelationGroupDocumentCount() > 1) {
+            builder.append("跨文档关系组：")
+                .append(result.getRelationGroupDocumentCount()).append(" 份文档 / ")
+                .append(result.getRelationGroupEvidenceCount() == null ? "-" : result.getRelationGroupEvidenceCount())
+                .append(" 条证据支撑\n");
         }
         builder.append("原文证据：").append(StrUtil.blankToDefault(result.getQuoteText(), "")).append('\n');
         return builder.toString().trim();

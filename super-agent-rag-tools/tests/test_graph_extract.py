@@ -99,6 +99,146 @@ class GraphExtractTest(unittest.TestCase):
         }
         self.assertIn(("SuperAgent", "CALLS", "RagTools"), relation_pairs)
 
+    def test_extract_graph_handles_punctuated_alias_markers(self) -> None:
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=211,
+                chunks=[
+                    GraphChunk(
+                        chunkId=2101,
+                        chunkNo=1,
+                        title="系统名称",
+                        sectionPath="审计/系统名称",
+                        text=(
+                            "审计系统，又称 `AuditTrail`，是客户数据访问控制链路中的安全审计平台。"
+                            "业务人员在沟通中经常把 `AuditTrail` 简称为审计系统。"
+                        ),
+                        contentWithWeight=(
+                            "审计系统，又称 `AuditTrail`，是客户数据访问控制链路中的安全审计平台。"
+                            "业务人员在沟通中经常把 `AuditTrail` 简称为审计系统。"
+                        ),
+                    )
+                ],
+            )
+        )
+
+        audit_alias_entities = [
+            entity
+            for entity in response.entities
+            if (
+                entity.name == "AuditTrail" and "审计系统" in entity.aliases
+            ) or (
+                entity.name == "审计系统" and "AuditTrail" in entity.aliases
+            )
+        ]
+        self.assertTrue(audit_alias_entities)
+        self.assertFalse(any(entity.name == "为审计系统" for entity in response.entities))
+
+    def test_extract_graph_ignores_weighted_content_labels_and_embedded_questions(self) -> None:
+        text = (
+            "[TITLE] `AuditTrail` 需记录以下权限相关行为： "
+            "[SECTION] `AuditTrail` 需记录以下权限相关行为： "
+            "[CHUNK_TYPE] TEXT "
+            "[KEYWORDS] `AuditTrail` 需记录以下权限相关行为：；权限申请；权限审批；权限回收；临时权限延长 "
+            "[QUESTIONS] 关于`AuditTrail` 需记录以下权限相关行为：的核心内容是什么？；"
+            "`AuditTrail` 需记录以下权限相关行为：有哪些要求或注意事项？ "
+            "[CONTENT] section: `AuditTrail` 需记录以下权限相关行为：\n"
+            "- 权限申请。\n- 权限审批。\n- 权限回收。\n- 临时权限延长。"
+        )
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=212,
+                chunks=[
+                    GraphChunk(
+                        chunkId=2121,
+                        chunkNo=1,
+                        title="`AuditTrail` 需记录以下权限相关行为：",
+                        sectionPath="`AuditTrail` 需记录以下权限相关行为：",
+                        text=text,
+                        contentWithWeight=text,
+                    )
+                ],
+            )
+        )
+
+        entity_names = {entity.name for entity in response.entities}
+        self.assertIn("AuditTrail", entity_names)
+        self.assertIn("权限申请", entity_names)
+        self.assertTrue({"TITLE", "CONTENT", "KEYWORDS", "QUESTIONS", "CHUNK_TYPE", "TEXT"}.isdisjoint(entity_names))
+        self.assertFalse(any("哪些" in name or "什么" in name or name.startswith("以下") for name in entity_names))
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+        self.assertFalse(any("TITLE" in pair or "CONTENT" in pair or "QUESTIONS" in pair for pair in relation_pairs))
+
+    def test_extract_graph_captures_permission_related_recording_phrase_across_chunks(self) -> None:
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=213,
+                chunks=[
+                    GraphChunk(
+                        chunkId=2131,
+                        chunkNo=1,
+                        title="一、适用范围",
+                        sectionPath="一、适用范围",
+                        text=(
+                            "本文档规定 `AuditTrail` 在客户数据权限流转场景中的审计留痕要求。"
+                            "该规范适用于权限申请、权限审批、权限回收、临时权限延长和异常权限复核。"
+                        ),
+                        contentWithWeight=(
+                            "本文档规定 `AuditTrail` 在客户数据权限流转场景中的审计留痕要求。"
+                            "该规范适用于权限申请、权限审批、权限回收、临时权限延长和异常权限复核。"
+                        ),
+                    ),
+                    GraphChunk(
+                        chunkId=2132,
+                        chunkNo=2,
+                        title="`AuditTrail` 需记录以下权限相关行为：",
+                        sectionPath="`AuditTrail` 需记录以下权限相关行为：",
+                        text="`AuditTrail` 需记录以下权限相关行为：",
+                        contentWithWeight=(
+                            "[TITLE] `AuditTrail` 需记录以下权限相关行为： "
+                            "[SECTION] `AuditTrail` 需记录以下权限相关行为： "
+                            "[CHUNK_TYPE] TEXT [CONTENT] `AuditTrail` 需记录以下权限相关行为："
+                        ),
+                    ),
+                    GraphChunk(
+                        chunkId=2133,
+                        chunkNo=3,
+                        title="权限清单",
+                        sectionPath="`AuditTrail` 需记录以下权限相关行为：",
+                        text="- 权限申请。\n- 权限审批。\n- 权限回收。\n- 临时权限延长。",
+                        contentWithWeight="- 权限申请。\n- 权限审批。\n- 权限回收。\n- 临时权限延长。",
+                    ),
+                ],
+            )
+        )
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+        self.assertIn(("AuditTrail", "RECORDS", "权限审批"), relation_pairs)
+        self.assertIn(("AuditTrail", "RECORDS", "权限回收"), relation_pairs)
+        self.assertIn(("AuditTrail", "RECORDS", "临时权限延长"), relation_pairs)
+
     def test_extract_graph_captures_policy_action_relation_words(self) -> None:
         response = extract_graph(
             GraphExtractRequest(
@@ -138,6 +278,151 @@ class GraphExtractTest(unittest.TestCase):
         self.assertIn(("值班 SRE", "EXECUTES", "流量切换"), relation_pairs)
         self.assertIn(("信息安全部", "APPROVES", "高敏感数据"), relation_pairs)
         self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+
+    def test_extract_graph_captures_o6_structured_policy_rows(self) -> None:
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=23,
+                chunks=[
+                    GraphChunk(
+                        chunkId=4001,
+                        chunkNo=1,
+                        title="发布职责",
+                        sectionPath="发布回滚/角色职责",
+                        text=(
+                            "| 发布负责人 | 对应研发团队 | 整体协调发布流程、确认发布内容、触发回滚 |\n"
+                            "| 值班 SRE | SRE 团队 | 控制发布窗口、观察监控、执行流量切换 |\n"
+                            "| DBA | DBA 团队 | 审核和执行数据库脚本、保障数据恢复路径 |"
+                        ),
+                        contentWithWeight=(
+                            "| 发布负责人 | 对应研发团队 | 整体协调发布流程、确认发布内容、触发回滚 |\n"
+                            "| 值班 SRE | SRE 团队 | 控制发布窗口、观察监控、执行流量切换 |\n"
+                            "| DBA | DBA 团队 | 审核和执行数据库脚本、保障数据恢复路径 |"
+                        ),
+                    ),
+                    GraphChunk(
+                        chunkId=4002,
+                        chunkNo=2,
+                        title="数据分级",
+                        sectionPath="数据治理/数据分级",
+                        text="| L4 | 高敏感信息 | 身份证号、银行卡号、完整通话录音、原始会话日志、隐私标签数据 | 严格受控，禁止本地导出 |",
+                        contentWithWeight="| L4 | 高敏感信息 | 身份证号、银行卡号、完整通话录音、原始会话日志、隐私标签数据 | 严格受控，禁止本地导出 |",
+                    ),
+                    GraphChunk(
+                        chunkId=4003,
+                        chunkNo=3,
+                        title="数据审批",
+                        sectionPath="数据治理/L4",
+                        text="| L4 | 部门负责人 + 数据治理负责人 + 信息安全部三级审批 | 最长 15 天 |",
+                        contentWithWeight="| L4 | 部门负责人 + 数据治理负责人 + 信息安全部三级审批 | 最长 15 天 |",
+                    ),
+                    GraphChunk(
+                        chunkId=4004,
+                        chunkNo=4,
+                        title="审计留痕",
+                        sectionPath="数据治理/AuditTrail",
+                        text="`AuditTrail` 需记录以下行为：",
+                        contentWithWeight="`AuditTrail` 需记录以下行为：",
+                    ),
+                    GraphChunk(
+                        chunkId=4005,
+                        chunkNo=5,
+                        title="审计留痕",
+                        sectionPath="数据治理/AuditTrail",
+                        text="- 用户登录、认证失败、二次验证。\n- SQL 查询、日志检索、接口调用。",
+                        contentWithWeight="- 用户登录、认证失败、二次验证。\n- SQL 查询、日志检索、接口调用。",
+                    ),
+                    GraphChunk(
+                        chunkId=4006,
+                        chunkNo=6,
+                        title="审计留痕",
+                        sectionPath="数据治理/AuditTrail",
+                        text="- 权限申请、审批、回收、延长。\n- 文件下载、报表导出、共享链接生成。",
+                        contentWithWeight="- 权限申请、审批、回收、延长。\n- 文件下载、报表导出、共享链接生成。",
+                    ),
+                    GraphChunk(
+                        chunkId=4007,
+                        chunkNo=7,
+                        title="允许存储平台",
+                        sectionPath="数据治理/允许存储平台",
+                        text="客户数据原则上仅允许存放于公司批准的平台：",
+                        contentWithWeight="客户数据原则上仅允许存放于公司批准的平台：",
+                    ),
+                    GraphChunk(
+                        chunkId=4008,
+                        chunkNo=8,
+                        title="允许存储平台",
+                        sectionPath="数据治理/允许存储平台",
+                        text="- 加密文件库：`VaultDocs`\n- 受控分析环境：`DataCleanRoom`",
+                        contentWithWeight="- 加密文件库：`VaultDocs`\n- 受控分析环境：`DataCleanRoom`",
+                    ),
+                    GraphChunk(
+                        chunkId=4009,
+                        chunkNo=9,
+                        title="角色与职责矩阵",
+                        sectionPath="数据治理/角色与职责矩阵",
+                        text="| 系统管理员 | 配置权限组、保留操作日志、回收异常权限 | 权限变更记录 |",
+                        contentWithWeight="| 系统管理员 | 配置权限组、保留操作日志、回收异常权限 | 权限变更记录 |",
+                    ),
+                ],
+            )
+        )
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertIn(("发布负责人", "TRIGGERS", "回滚"), relation_pairs)
+        self.assertIn(("值班 SRE", "EXECUTES", "流量切换"), relation_pairs)
+        self.assertIn(("DBA", "EXECUTES", "数据库脚本"), relation_pairs)
+        self.assertIn(("L4 数据", "APPROVES", "信息安全部"), relation_pairs)
+        self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+        self.assertIn(("客户数据", "STORES", "VaultDocs"), relation_pairs)
+        self.assertIn(("客户数据", "STORES", "DataCleanRoom"), relation_pairs)
+        self.assertIn(("系统管理员", "REVOKES", "异常权限"), relation_pairs)
+
+        l4_data = self._entity_by_alias(response.entities, "高敏感信息")
+        self.assertEqual("L4 数据", l4_data.name)
+        self.assertIn("L4", l4_data.aliases)
+        dba = self._entity_by_alias(response.entities, "DBA 团队")
+        self.assertEqual("DBA", dba.name)
+        audit_trail_relation_ids = {
+            relation.id
+            for relation in response.relations
+            if (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            ) == ("AuditTrail", "RECORDS", "权限申请")
+        }
+        audit_quotes = [
+            evidence.quote_text
+            for evidence in response.evidences
+            if evidence.relation_id in audit_trail_relation_ids
+        ]
+        self.assertTrue(any("AuditTrail" in quote and "权限申请" in quote and "审批" in quote and "回收" in quote for quote in audit_quotes))
+
+        storage_relation_ids = {
+            relation.id
+            for relation in response.relations
+            if (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            ) == ("客户数据", "STORES", "DataCleanRoom")
+        }
+        storage_quotes = [
+            evidence.quote_text
+            for evidence in response.evidences
+            if evidence.relation_id in storage_relation_ids
+        ]
+        self.assertTrue(any("客户数据" in quote and "存放" in quote and "DataCleanRoom" in quote for quote in storage_quotes))
 
     def _entity_by_alias(self, entities, alias: str):
         for entity in entities:

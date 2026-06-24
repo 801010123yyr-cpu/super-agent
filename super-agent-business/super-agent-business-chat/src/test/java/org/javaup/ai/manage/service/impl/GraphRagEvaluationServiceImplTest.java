@@ -374,6 +374,20 @@ class GraphRagEvaluationServiceImplTest {
             "PROCESS",
             "{\"aliases\":[\"流量切回旧版本\"]}"
         );
+        SuperAgentKgEntity dba = entity(
+            1009L,
+            "DBA",
+            "dba",
+            "ROLE",
+            "{\"aliases\":[\"DBA 团队\"]}"
+        );
+        SuperAgentKgEntity databaseScript = entity(
+            1010L,
+            "数据库脚本",
+            "数据库脚本",
+            "CONCEPT",
+            "{\"aliases\":[\"数据库执行脚本\",\"回滚脚本\"]}"
+        );
         SuperAgentKgEntity l4Data = entity(
             1005L,
             "L4 数据",
@@ -402,18 +416,68 @@ class GraphRagEvaluationServiceImplTest {
             "PROCESS",
             "{\"aliases\":[\"审批\",\"回收\",\"延长\"]}"
         );
+        SuperAgentKgEntity systemAdmin = entity(
+            1011L,
+            "系统管理员",
+            "系统管理员",
+            "ROLE",
+            "{}"
+        );
+        SuperAgentKgEntity abnormalPermission = entity(
+            1012L,
+            "异常权限",
+            "异常权限",
+            "CONCEPT",
+            "{}"
+        );
+        SuperAgentKgEntity customerData = entity(
+            1013L,
+            "客户数据",
+            "客户数据",
+            "CONCEPT",
+            "{}"
+        );
+        SuperAgentKgEntity vaultDocs = entity(
+            1014L,
+            "VaultDocs",
+            "vaultdocs",
+            "SYSTEM",
+            "{\"aliases\":[\"加密文件库\"]}"
+        );
+        SuperAgentKgEntity dataCleanRoom = entity(
+            1015L,
+            "DataCleanRoom",
+            "datacleanroom",
+            "SYSTEM",
+            "{\"aliases\":[\"受控分析环境\"]}"
+        );
         SuperAgentKgRelation triggers = relation(2001L, 1001L, 1002L, "TRIGGERS");
         SuperAgentKgRelation executes = relation(2002L, 1003L, 1004L, "EXECUTES");
         SuperAgentKgRelation approves = relation(2003L, 1005L, 1006L, "APPROVES");
         SuperAgentKgRelation records = relation(2004L, 1007L, 1008L, "RECORDS");
+        SuperAgentKgRelation dbaExecutes = relation(2005L, 1009L, 1010L, "EXECUTES");
+        SuperAgentKgRelation adminRevokes = relation(2006L, 1011L, 1012L, "REVOKES");
+        SuperAgentKgRelation storesVaultDocs = relation(2007L, 1013L, 1014L, "STORES");
+        SuperAgentKgRelation storesDataCleanRoom = relation(2008L, 1013L, 1015L, "STORES");
         GraphRagEvaluationServiceImpl service = service(
-            List.of(releaseOwner, rollback, sre, trafficSwitch, l4Data, securityDept, auditTrail, permissionApply),
-            List.of(triggers, executes, approves, records),
+            List.of(
+                releaseOwner, rollback, sre, trafficSwitch, dba, databaseScript,
+                l4Data, securityDept, auditTrail, permissionApply,
+                systemAdmin, abnormalPermission, customerData, vaultDocs, dataCleanRoom
+            ),
+            List.of(
+                triggers, executes, approves, records,
+                dbaExecutes, adminRevokes, storesVaultDocs, storesDataCleanRoom
+            ),
             List.of(
                 evidence(3001L, null, 2001L, "发布负责人在触发强制回滚条件时必须立即发起回滚。"),
                 evidence(3002L, null, 2002L, "值班 SRE 控制发布窗口、观察监控、执行流量切换。"),
                 evidence(3003L, null, 2003L, "L4 权限申请需部门负责人、数据治理负责人和信息安全部三级审批。"),
-                evidence(3004L, null, 2004L, "AuditTrail 需记录权限申请、审批、回收、延长。")
+                evidence(3004L, null, 2004L, "AuditTrail 需记录权限申请、审批、回收、延长。"),
+                evidence(3005L, null, 2005L, "DBA 团队审核和执行数据库脚本、保障数据恢复路径。"),
+                evidence(3006L, null, 2006L, "系统管理员配置权限组、保留操作日志、回收异常权限。"),
+                evidence(3007L, null, 2007L, "客户数据原则上仅允许存放于公司批准的平台：加密文件库 VaultDocs。"),
+                evidence(3008L, null, 2008L, "客户数据原则上仅允许存放于公司批准的平台：受控分析环境 DataCleanRoom。")
             )
         );
 
@@ -423,8 +487,8 @@ class GraphRagEvaluationServiceImplTest {
             GraphRagEvaluationBaselineSuites.o6LlmNerBaseline(10L, 20L)
         );
 
-        assertThat(report.getSuiteCount()).isEqualTo(4L);
-        assertThat(report.getPassedSuiteCount()).isEqualTo(4L);
+        assertThat(report.getSuiteCount()).isEqualTo(8L);
+        assertThat(report.getPassedSuiteCount()).isEqualTo(8L);
         assertThat(report.getFailedSuiteCount()).isZero();
         assertThat(report.getPassRate()).isEqualTo(1D);
         assertThat(report.getMinSuiteRecall()).isEqualTo(1D);

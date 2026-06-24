@@ -163,6 +163,41 @@ function formatBboxPresence(reference) {
   return parts.join('，') || '无'
 }
 
+function formatGraphRagCanonical(reference) {
+  if (!reference || typeof reference !== 'object') {
+    return '-'
+  }
+  const canonicalName = String(reference.kgCanonicalEntityName || '').trim()
+  const canonicalKey = String(reference.kgCanonicalEntityKey || '').trim()
+  const entityName = String(reference.kgEntityName || '').trim()
+  const entityCount = reference.kgCanonicalEntityCount
+  const documentCount = reference.kgCanonicalDocumentCount
+  const relationGroupEvidenceCount = reference.kgRelationGroupEvidenceCount
+  const relationGroupDocumentCount = reference.kgRelationGroupDocumentCount
+  const graphPath = String(reference.kgGraphPath || '').trim()
+  const relationType = String(reference.kgRelationType || '').trim()
+  const parts = []
+  if (canonicalName || canonicalKey) {
+    parts.push(`canonical ${canonicalName || canonicalKey}`)
+  }
+  if (entityName && entityName !== canonicalName) {
+    parts.push(`命中 ${entityName}`)
+  }
+  if (entityCount != null || documentCount != null) {
+    parts.push(`实体 ${entityCount ?? '-'} / 文档 ${documentCount ?? '-'}`)
+  }
+  if (relationType) {
+    parts.push(`关系 ${relationType}`)
+  }
+  if (relationGroupEvidenceCount != null || relationGroupDocumentCount != null) {
+    parts.push(`关系组证据 ${relationGroupEvidenceCount ?? '-'} / 文档 ${relationGroupDocumentCount ?? '-'}`)
+  }
+  if (graphPath) {
+    parts.push(graphPath)
+  }
+  return parts.join(' | ') || '-'
+}
+
 export function buildTableEvidenceItems(references) {
   return asList(references)
     .filter(isTableReference)
@@ -965,7 +1000,8 @@ export function buildTraceStageInspector(stageTrace, exchange) {
           if (!item || typeof item !== 'object') {
             return ''
           }
-          return `[${item.referenceId || '-'}] ${item.documentName || '未命名引用'} ${item.sectionPath ? `| ${item.sectionPath}` : ''} ${item.channel ? `| ${formatChannelName(item.channel)}` : ''}`.trim()
+          const canonicalText = formatGraphRagCanonical(item)
+          return `[${item.referenceId || '-'}] ${item.documentName || '未命名引用'} ${item.sectionPath ? `| ${item.sectionPath}` : ''} ${item.channel ? `| ${formatChannelName(item.channel)}` : ''} ${canonicalText !== '-' ? `| ${canonicalText}` : ''}`.trim()
         }).filter(Boolean),
         ordered: false
       })
@@ -999,7 +1035,7 @@ export function buildTraceStageInspector(stageTrace, exchange) {
       })
       tableSections.push({
         label: '最终证据表',
-        columns: ['引用', '文档', '章节', '通道', '页码/位置'],
+        columns: ['引用', '文档', '章节', '通道', 'GraphRAG canonical', '页码/位置'],
         rows: snapshotList(snapshot, 'references').map((item) => {
           if (!item || typeof item !== 'object') {
             return null
@@ -1010,6 +1046,7 @@ export function buildTraceStageInspector(stageTrace, exchange) {
               item.documentName || '未命名引用',
               item.sectionPath || '未识别章节',
               formatChannelName(item.channel),
+              formatGraphRagCanonical(item),
               item.pageNo ? `第 ${item.pageNo} 页` : (item.pageRange || '-')
             ]
           }
@@ -1119,7 +1156,8 @@ export function buildTraceStageInspector(stageTrace, exchange) {
     .filter((section) => section.items.length > 0)
 
   return {
-    title: stageTrace.stageName,
+    title: stageTrace.stageName || stageTrace.stageCode || '未知阶段',
+    stageCode: stageTrace.stageCode || '',
     summary: stageTrace.summaryText || '',
     status: stageTrace.stageState,
     startTime: stageTrace.startTime,

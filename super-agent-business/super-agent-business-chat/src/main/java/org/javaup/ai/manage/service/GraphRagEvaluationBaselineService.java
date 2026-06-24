@@ -5,4 +5,6 @@ import org.javaup.ai.manage.model.graph.GraphRagEvaluationBatchReport;
 public interface GraphRagEvaluationBaselineService {
 
     GraphRagEvaluationBatchReport evaluateO6LlmNerBaseline();
+
+    GraphRagEvaluationBatchReport evaluateO6CrossDocumentBaseline();
 }

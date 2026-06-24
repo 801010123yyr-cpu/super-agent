@@ -76,10 +76,18 @@ public final class SearchReferenceMapper {
         reference.setTableEvidenceCellBboxJsons(asStringList(metadata.get(DocumentKnowledgeMetadataKeys.TABLE_EVIDENCE_CELL_BBOX_JSONS)));
         reference.setKgEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID)));
         reference.setKgEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME), ""));
+        reference.setKgCanonicalEntityKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY), ""));
+        reference.setKgCanonicalEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME), ""));
+        reference.setKgCanonicalEntityCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT)));
+        reference.setKgCanonicalDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT)));
         reference.setKgRelatedEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID)));
         reference.setKgRelatedEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME), ""));
         reference.setKgRelationId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID)));
         reference.setKgRelationType(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE), ""));
+        reference.setKgRelationGroupKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY), ""));
+        reference.setKgRelationGroupRelationCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT)));
+        reference.setKgRelationGroupEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT)));
+        reference.setKgRelationGroupDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT)));
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));

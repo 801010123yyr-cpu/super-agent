@@ -19,9 +19,25 @@ public class GraphRagSearchResult {
 
     private String entityName;
 
+    private String canonicalEntityKey;
+
+    private String canonicalEntityName;
+
+    private Integer canonicalEntityCount;
+
+    private Integer canonicalDocumentCount;
+
     private Long relationId;
 
     private String relationType;
+
+    private String relationGroupKey;
+
+    private Integer relationGroupRelationCount;
+
+    private Integer relationGroupEvidenceCount;
+
+    private Integer relationGroupDocumentCount;
 
     private Long relatedEntityId;
 

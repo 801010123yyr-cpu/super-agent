@@ -444,12 +444,7 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     private Document buildParentEvidenceDocument(SuperAgentDocumentParentBlock parentBlock,
                                                  List<Document> childDocuments,
                                                  int maxChars) {
-        Document bestChild = childDocuments.stream()
-            .max(Comparator.comparingDouble(document -> {
-                Double score = resolveScore(document);
-                return score == null ? 0D : score;
-            }))
-            .orElseThrow();
+        Document bestChild = selectBestChildForParentEvidence(childDocuments);
 
         double parentScore = aggregateParentScore(childDocuments);
         Map<String, Object> metadata = new LinkedHashMap<>(bestChild.getMetadata());
@@ -478,6 +473,44 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             .metadata(metadata)
             .score(parentScore)
             .build();
+    }
+
+    private Document selectBestChildForParentEvidence(List<Document> childDocuments) {
+        Document bestByScore = childDocuments.stream()
+            .max(Comparator.comparingDouble(document -> {
+                Double score = resolveScore(document);
+                return score == null ? 0D : score;
+            }))
+            .orElseThrow();
+        Double bestScore = resolveScore(bestByScore);
+        if (bestScore == null || bestScore <= 0D) {
+            return bestByScore;
+        }
+
+        Document bestRelationChild = childDocuments.stream()
+            .filter(document -> document != null && document.getMetadata() != null)
+            .filter(document -> document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null)
+            .max(Comparator.comparingDouble(document -> {
+                Double score = resolveScore(document);
+                double relationBonus = 0.22D;
+                double groupBonus = document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT) instanceof Number number
+                    ? Math.min(0.18D, Math.max(0D, number.doubleValue() - 1D) * 0.06D)
+                    : 0D;
+                return (score == null ? 0D : score) + relationBonus + groupBonus;
+            }))
+            .orElse(null);
+        if (bestRelationChild == null) {
+            return bestByScore;
+        }
+
+        Double relationScore = resolveScore(bestRelationChild);
+        if (relationScore == null) {
+            return bestByScore;
+        }
+        if (relationScore >= bestScore * 0.65D) {
+            return bestRelationChild;
+        }
+        return bestByScore;
     }
 
     private double aggregateParentScore(List<Document> childDocuments) {

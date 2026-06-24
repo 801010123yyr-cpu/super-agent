@@ -48,6 +48,7 @@
               <div class="flex items-center justify-between gap-3">
                 <div class="flex flex-wrap items-center gap-1.5">
                   <strong class="text-[13px] text-foreground">{{ trace.stageName }}</strong>
+                  <span v-if="trace.stageCode" class="inline-flex rounded bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--color-muted-strong)]">{{ trace.stageCode }}</span>
                   <span class="inline-flex rounded px-2 py-0.5 text-[11px] font-semibold" :class="statusBadgeClass(trace.stageState)">{{ formatStatusLabel(trace.stageState) }}</span>
                 </div>
                 <span class="whitespace-nowrap text-xs text-muted-foreground">{{ formatDateTime(trace.startTime) }}</span>
@@ -265,7 +266,10 @@
         <aside class="absolute bottom-0 right-0 top-0 flex w-[540px] max-w-[90vw] flex-col bg-card shadow-[-4px_0_24px_rgba(15,23,42,0.14)]" @click.stop>
           <div class="flex items-start justify-between gap-3 border-b border-border px-6 py-5">
             <div>
-              <h3 class="mt-1 text-base font-semibold text-foreground">{{ overlayInspector.title }}</h3>
+              <div class="mt-1 flex flex-wrap items-center gap-2">
+                <h3 class="m-0 text-base font-semibold text-foreground">{{ overlayInspector.title }}</h3>
+                <span v-if="overlayInspector.stageCode" class="inline-flex rounded bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] font-semibold text-[var(--color-muted-strong)]">{{ overlayInspector.stageCode }}</span>
+              </div>
               <p class="mt-0.5 text-[13px] text-[var(--color-muted-strong)]">{{ overlayInspector.summary || '这个阶段已经执行完成，下面是它记录下来的结构化细节。' }}</p>
             </div>
             <button class="shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="closeTraceDetail">关闭</button>
@@ -273,6 +277,7 @@
           <div class="flex-1 overflow-y-auto px-6 py-5">
             <div class="mb-4 flex flex-wrap gap-3 text-[13px] text-muted-foreground">
               <span>状态：{{ formatStatusLabel(overlayInspector.status) }}</span>
+              <span v-if="overlayInspector.stageCode">阶段代码：{{ overlayInspector.stageCode }}</span>
               <span>开始：{{ formatDateTime(overlayInspector.startTime) }}</span>
               <span>结束：{{ formatDateTime(overlayInspector.endTime) }}</span>
               <span>耗时：{{ overlayInspector.durationMs ? `${overlayInspector.durationMs} ms` : '无' }}</span>

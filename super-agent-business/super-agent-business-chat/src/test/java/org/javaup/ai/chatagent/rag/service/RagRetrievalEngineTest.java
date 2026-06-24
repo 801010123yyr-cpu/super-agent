@@ -132,6 +132,123 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void rerankFailureKeepsHybridCandidates() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(true);
+        properties.setMinVectorSimilarity(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        Document vectorDoc = document("vector-doc", "AuditTrail 需记录权限申请、权限审批、权限回收、临时权限延长。", 0.92D);
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorDoc))),
+                properties,
+                new RagRerankService(null, properties) {
+                    @Override
+                    public List<Document> rerank(String query, List<Document> candidates) {
+                        throw new IllegalStateException("rerank timeout");
+                    }
+                },
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("审计系统有哪些权限相关要求？")
+                .retrievalSubQuestions(List.of("审计系统有哪些权限相关要求？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).containsExactly("vector-doc");
+            assertThat(context.getUsedChannels()).containsExactly(RetrievalChannelEnum.VECTOR.getName());
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note).contains("rerank 失败或超时"));
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void graphRagCanonicalMetadataIsExposedInNotesAndReferences() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        metadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.88D);
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1001L);
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "O6跨文档图谱-审计证据规范A.md");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 2001L);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "AuditTrail");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY, "SYSTEM:audittrail");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, "审计系统");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "SYSTEM:audittrail->RECORDS->PROCESS:permission-apply");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 3);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "审计系统 -[ALIAS_OF]-> AuditTrail");
+        Document graphDoc = Document.builder()
+            .id("graphrag-1")
+            .text("AuditTrail 需记录权限申请、权限审批、权限回收、临时权限延长。")
+            .metadata(metadata)
+            .score(0.88D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(graphDoc))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("审计系统有哪些权限相关要求？")
+                .retrievalSubQuestions(List.of("审计系统有哪些权限相关要求？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note)
+                    .contains("GraphRAG canonical 观测")
+                    .contains("审计系统")
+                    .contains("entities=2, docs=2")
+                    .contains("relationGroup evidence=3, docs=2"));
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .hasSize(1)
+                .first()
+                .satisfies(reference -> {
+                    assertThat(reference.getKgCanonicalEntityKey()).isEqualTo("SYSTEM:audittrail");
+                    assertThat(reference.getKgCanonicalEntityName()).isEqualTo("审计系统");
+                    assertThat(reference.getKgCanonicalEntityCount()).isEqualTo(2);
+                    assertThat(reference.getKgCanonicalDocumentCount()).isEqualTo(2);
+                    assertThat(reference.getKgRelationGroupKey()).isEqualTo("SYSTEM:audittrail->RECORDS->PROCESS:permission-apply");
+                    assertThat(reference.getKgRelationGroupRelationCount()).isEqualTo(2);
+                    assertThat(reference.getKgRelationGroupEvidenceCount()).isEqualTo(3);
+                    assertThat(reference.getKgRelationGroupDocumentCount()).isEqualTo(2);
+                });
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);

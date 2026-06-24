@@ -163,11 +163,13 @@ public class RagRetrievalEngine {
             mergedCandidates,
             properties.getParentEvidenceMaxChars()
         );
-        List<Document> rerankedCandidates = applyRerank(subQuestion, parentCandidates, usedChannels);
+        List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, parentCandidates, usedChannels, notes);
 
         List<Document> finalDocuments = rerankedCandidates.stream()
             .limit(properties.getFinalTopK())
             .toList();
+
+        appendGraphRagCanonicalNotes(subQuestionIndex, subQuestion, finalDocuments, notes);
 
         notes.add("子问题" + subQuestionIndex + "检索完成："
             + summarizeChannelResults(channelResults)
@@ -551,15 +553,124 @@ public class RagRetrievalEngine {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
-    private List<Document> applyRerank(String subQuestion,
+    private List<Document> applyRerank(int subQuestionIndex,
+                                       String subQuestion,
                                        List<Document> candidates,
-                                       List<String> usedChannels) {
+                                       List<String> usedChannels,
+                                       List<String> notes) {
         if (!properties.isRerankEnabled() || candidates.isEmpty()) {
             return candidates;
         }
 
-        markUsedChannel(usedChannels, RetrievalChannelEnum.RERANK.getName());
-        return ragRerankService.rerank(subQuestion, candidates);
+        try {
+            List<Document> rerankedCandidates = ragRerankService.rerank(subQuestion, candidates);
+            markUsedChannel(usedChannels, RetrievalChannelEnum.RERANK.getName());
+            return rerankedCandidates;
+        }
+        catch (RuntimeException exception) {
+            Throwable rootCause = unwrapThrowable(exception);
+            log.warn("rerank 失败，保留 weighted hybrid 候选继续回答: subQuestionIndex={}, subQuestion='{}', candidateCount={}, exceptionType={}, message={}",
+                subQuestionIndex,
+                subQuestion,
+                candidates.size(),
+                rootCause == null ? "" : rootCause.getClass().getName(),
+                rootCause == null ? "" : rootCause.getMessage(),
+                exception);
+            notes.add("子问题" + subQuestionIndex + " rerank 失败或超时，已保留融合候选继续回答。");
+            return candidates;
+        }
+    }
+
+    private void appendGraphRagCanonicalNotes(int subQuestionIndex,
+                                              String subQuestion,
+                                              List<Document> finalDocuments,
+                                              List<String> notes) {
+        if (finalDocuments == null || finalDocuments.isEmpty()) {
+            return;
+        }
+        LinkedHashSet<String> observations = new LinkedHashSet<>();
+        for (Document document : finalDocuments) {
+            if (document == null || document.getMetadata() == null || !isGraphRagMetadata(document.getMetadata())) {
+                continue;
+            }
+            String entityName = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME));
+            String canonicalName = firstNonBlank(
+                safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME)),
+                entityName
+            );
+            String canonicalKey = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY));
+            Integer entityCount = integerMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT));
+            Integer documentCount = integerMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT));
+            Integer relationGroupEvidenceCount = integerMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT));
+            Integer relationGroupDocumentCount = integerMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT));
+            String graphPath = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH));
+            String documentName = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME));
+
+            if (canonicalName.isBlank() && canonicalKey.isBlank() && entityCount == null && documentCount == null) {
+                continue;
+            }
+
+            StringBuilder builder = new StringBuilder();
+            builder.append(firstNonBlank(canonicalName, canonicalKey, "unknown"));
+            if (!entityName.isBlank() && !entityName.equals(canonicalName)) {
+                builder.append("(命中实体=").append(entityName).append(')');
+            }
+            if (entityCount != null || documentCount != null) {
+                builder.append("(entities=").append(entityCount == null ? "-" : entityCount)
+                    .append(", docs=").append(documentCount == null ? "-" : documentCount).append(')');
+            }
+            if (relationGroupEvidenceCount != null || relationGroupDocumentCount != null) {
+                builder.append("(relationGroup evidence=")
+                    .append(relationGroupEvidenceCount == null ? "-" : relationGroupEvidenceCount)
+                    .append(", docs=")
+                    .append(relationGroupDocumentCount == null ? "-" : relationGroupDocumentCount)
+                    .append(')');
+            }
+            if (!graphPath.isBlank()) {
+                builder.append(" path=").append(graphPath);
+            }
+            if (!documentName.isBlank()) {
+                builder.append(" doc=").append(documentName);
+            }
+            observations.add(builder.toString());
+        }
+        if (observations.isEmpty()) {
+            return;
+        }
+        List<String> limited = observations.stream().limit(4).toList();
+        String summary = String.join("；", limited);
+        notes.add("子问题" + subQuestionIndex + " GraphRAG canonical 观测：" + summary);
+        log.info("GraphRAG canonical 观测: subQuestionIndex={}, subQuestion='{}', observations={}",
+            subQuestionIndex,
+            subQuestion,
+            summary);
+    }
+
+    private boolean isGraphRagMetadata(Map<String, Object> metadata) {
+        String channel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL));
+        String sourceType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_TYPE));
+        return RetrievalChannelEnum.GRAPH_RAG.getName().equals(channel)
+            || "GRAPH_RAG".equalsIgnoreCase(sourceType)
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID) != null
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private Integer integerMetadataValue(Object value) {
+        Double number = numericMetadataValue(value);
+        return number == null ? null : number.intValue();
     }
 
     private void assignReferenceIds(List<SubQuestionEvidence> evidenceList) {

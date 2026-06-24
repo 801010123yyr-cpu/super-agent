@@ -9,11 +9,21 @@ public final class GraphRagEvaluationBaselineSuites {
 
     public static final String O6_LLM_NER_BATCH_NAME = "O6 GraphRAG LLM/NER 真实文档 baseline";
 
+    public static final String O6_CROSS_DOCUMENT_BATCH_ID = "o6-cross-document-graph-baseline";
+
+    public static final String O6_CROSS_DOCUMENT_BATCH_NAME = "O6 GraphRAG 跨文档图谱 baseline";
+
     public static final String SOURCE_PRODUCTION_RELEASE =
         "需要的例子演示/生产环境发布与回滚操作规范.md";
 
     public static final String SOURCE_CUSTOMER_DATA_ACCESS =
         "需要的例子演示/客户数据分级与访问控制管理制度.md";
+
+    public static final String SOURCE_O6_AUDIT_EVIDENCE =
+        "需要的例子演示/O6跨文档图谱-审计证据规范A.md";
+
+    public static final String SOURCE_O6_AUDIT_ALIAS =
+        "需要的例子演示/O6跨文档图谱-审计系统别名说明B.md";
 
     private GraphRagEvaluationBaselineSuites() {
     }
@@ -26,8 +36,12 @@ public final class GraphRagEvaluationBaselineSuites {
         return List.of(
             productionOwnerTriggersRollback(documentId, taskId),
             productionSreExecutesTrafficSwitch(documentId, taskId),
+            productionDbaExecutesDatabaseScript(documentId, taskId),
             customerDataL4Approval(documentId, taskId),
-            customerDataAuditTrailRecordsPermissionFlow(documentId, taskId)
+            customerDataAuditTrailRecordsPermissionFlow(documentId, taskId),
+            customerDataAdminRevokesAbnormalPermission(documentId, taskId),
+            customerDataStoresInVaultDocs(documentId, taskId),
+            customerDataStoresInDataCleanRoom(documentId, taskId)
         );
     }
 
@@ -39,8 +53,12 @@ public final class GraphRagEvaluationBaselineSuites {
         return List.of(
             productionOwnerTriggersRollback(documentId(productionRelease), taskId(productionRelease)),
             productionSreExecutesTrafficSwitch(documentId(productionRelease), taskId(productionRelease)),
+            productionDbaExecutesDatabaseScript(documentId(productionRelease), taskId(productionRelease)),
             customerDataL4Approval(documentId(customerDataAccess), taskId(customerDataAccess)),
-            customerDataAuditTrailRecordsPermissionFlow(documentId(customerDataAccess), taskId(customerDataAccess))
+            customerDataAuditTrailRecordsPermissionFlow(documentId(customerDataAccess), taskId(customerDataAccess)),
+            customerDataAdminRevokesAbnormalPermission(documentId(customerDataAccess), taskId(customerDataAccess)),
+            customerDataStoresInVaultDocs(documentId(customerDataAccess), taskId(customerDataAccess)),
+            customerDataStoresInDataCleanRoom(documentId(customerDataAccess), taskId(customerDataAccess))
         );
     }
 
@@ -122,6 +140,37 @@ public final class GraphRagEvaluationBaselineSuites {
             .build();
     }
 
+    private static GraphRagEvaluationSuite productionDbaExecutesDatabaseScript(Long documentId, Long taskId) {
+        return GraphRagEvaluationSuite.builder()
+            .suiteId("o6-prod-release-dba-executes-database-script")
+            .name("DBA 执行数据库脚本")
+            .scenario("O6 制度文档角色职责抽取")
+            .question("DBA 在发布流程中负责执行什么脚本？")
+            .sourceDocument(SOURCE_PRODUCTION_RELEASE)
+            .documentId(documentId)
+            .taskId(taskId)
+            .passThreshold(0.82D)
+            .tags(List.of("real-document", "release", "role", "execute", "alias", "weak-evidence"))
+            .expectedEntities(List.of(
+                entity("DBA", List.of("DBA 团队"), List.of("DBA 团队")),
+                entity("数据库脚本", List.of("数据库执行脚本", "回滚脚本"), List.of())
+            ))
+            .expectedRelations(List.of(GraphRagEvaluationSuite.ExpectedRelation.builder()
+                .sourceName("DBA")
+                .targetName("数据库脚本")
+                .relationType("执行")
+                .relationTypeAliases(List.of("EXECUTES"))
+                .build()))
+            .expectedEvidences(List.of(GraphRagEvaluationSuite.ExpectedEvidence.builder()
+                .quoteKeywords(List.of("DBA", "执行", "数据库脚本"))
+                .sourceName("DBA")
+                .targetName("数据库脚本")
+                .relationType("执行")
+                .relationTypeAliases(List.of("EXECUTES"))
+                .build()))
+            .build();
+    }
+
     private static GraphRagEvaluationSuite customerDataL4Approval(Long documentId, Long taskId) {
         return GraphRagEvaluationSuite.builder()
             .suiteId("o6-customer-data-l4-approval")
@@ -180,6 +229,99 @@ public final class GraphRagEvaluationBaselineSuites {
                 .targetName("权限申请")
                 .relationType("记录")
                 .relationTypeAliases(List.of("RECORDS"))
+                .build()))
+            .build();
+    }
+
+    private static GraphRagEvaluationSuite customerDataAdminRevokesAbnormalPermission(Long documentId, Long taskId) {
+        return GraphRagEvaluationSuite.builder()
+            .suiteId("o6-customer-data-admin-revokes-abnormal-permission")
+            .name("系统管理员回收异常权限")
+            .scenario("O6 数据治理职责动作抽取")
+            .question("系统管理员需要回收什么权限？")
+            .sourceDocument(SOURCE_CUSTOMER_DATA_ACCESS)
+            .documentId(documentId)
+            .taskId(taskId)
+            .passThreshold(0.82D)
+            .tags(List.of("real-document", "security", "role", "revoke", "weak-evidence"))
+            .expectedEntities(List.of(
+                entity("系统管理员", List.of(), List.of()),
+                entity("异常权限", List.of(), List.of())
+            ))
+            .expectedRelations(List.of(GraphRagEvaluationSuite.ExpectedRelation.builder()
+                .sourceName("系统管理员")
+                .targetName("异常权限")
+                .relationType("回收")
+                .relationTypeAliases(List.of("REVOKES"))
+                .build()))
+            .expectedEvidences(List.of(GraphRagEvaluationSuite.ExpectedEvidence.builder()
+                .quoteKeywords(List.of("系统管理员", "回收", "异常权限"))
+                .sourceName("系统管理员")
+                .targetName("异常权限")
+                .relationType("回收")
+                .relationTypeAliases(List.of("REVOKES"))
+                .build()))
+            .build();
+    }
+
+    private static GraphRagEvaluationSuite customerDataStoresInVaultDocs(Long documentId, Long taskId) {
+        return GraphRagEvaluationSuite.builder()
+            .suiteId("o6-customer-data-stores-in-vaultdocs")
+            .name("客户数据允许存放于 VaultDocs")
+            .scenario("O6 平台清单型存放关系抽取")
+            .question("客户数据可以存放在哪些受控平台？")
+            .sourceDocument(SOURCE_CUSTOMER_DATA_ACCESS)
+            .documentId(documentId)
+            .taskId(taskId)
+            .passThreshold(0.82D)
+            .tags(List.of("real-document", "security", "system", "stores", "weak-evidence"))
+            .expectedEntities(List.of(
+                entity("客户数据", List.of(), List.of()),
+                entity("VaultDocs", List.of("加密文件库"), List.of())
+            ))
+            .expectedRelations(List.of(GraphRagEvaluationSuite.ExpectedRelation.builder()
+                .sourceName("客户数据")
+                .targetName("VaultDocs")
+                .relationType("存放")
+                .relationTypeAliases(List.of("STORES"))
+                .build()))
+            .expectedEvidences(List.of(GraphRagEvaluationSuite.ExpectedEvidence.builder()
+                .quoteKeywords(List.of("客户数据", "存放", "VaultDocs"))
+                .sourceName("客户数据")
+                .targetName("VaultDocs")
+                .relationType("存放")
+                .relationTypeAliases(List.of("STORES"))
+                .build()))
+            .build();
+    }
+
+    private static GraphRagEvaluationSuite customerDataStoresInDataCleanRoom(Long documentId, Long taskId) {
+        return GraphRagEvaluationSuite.builder()
+            .suiteId("o6-customer-data-stores-in-datacleanroom")
+            .name("客户数据允许存放于 DataCleanRoom")
+            .scenario("O6 平台清单型存放关系抽取")
+            .question("DataCleanRoom 和客户数据是什么存放关系？")
+            .sourceDocument(SOURCE_CUSTOMER_DATA_ACCESS)
+            .documentId(documentId)
+            .taskId(taskId)
+            .passThreshold(0.82D)
+            .tags(List.of("real-document", "security", "system", "stores", "weak-evidence"))
+            .expectedEntities(List.of(
+                entity("客户数据", List.of(), List.of()),
+                entity("DataCleanRoom", List.of("受控分析环境"), List.of())
+            ))
+            .expectedRelations(List.of(GraphRagEvaluationSuite.ExpectedRelation.builder()
+                .sourceName("客户数据")
+                .targetName("DataCleanRoom")
+                .relationType("存放")
+                .relationTypeAliases(List.of("STORES"))
+                .build()))
+            .expectedEvidences(List.of(GraphRagEvaluationSuite.ExpectedEvidence.builder()
+                .quoteKeywords(List.of("客户数据", "存放", "DataCleanRoom"))
+                .sourceName("客户数据")
+                .targetName("DataCleanRoom")
+                .relationType("存放")
+                .relationTypeAliases(List.of("STORES"))
                 .build()))
             .build();
     }

@@ -103,6 +103,14 @@ public class SearchReference {
 
     private String kgEntityName;
 
+    private String kgCanonicalEntityKey;
+
+    private String kgCanonicalEntityName;
+
+    private Integer kgCanonicalEntityCount;
+
+    private Integer kgCanonicalDocumentCount;
+
     private Long kgRelatedEntityId;
 
     private String kgRelatedEntityName;
@@ -110,6 +118,14 @@ public class SearchReference {
     private Long kgRelationId;
 
     private String kgRelationType;
+
+    private String kgRelationGroupKey;
+
+    private Integer kgRelationGroupRelationCount;
+
+    private Integer kgRelationGroupEvidenceCount;
+
+    private Integer kgRelationGroupDocumentCount;
 
     private Long kgEvidenceId;
 

@@ -214,6 +214,227 @@ class GraphRagSearchServiceImplTest {
     }
 
     @Test
+    void crossDocumentCanonicalEntityExpandsFrontierSeeds() {
+        SuperAgentKgEntity auditTrailInPolicy = entity(1001L, 10L, 20L, "AuditTrail", null, "SYSTEM", "审计记录系统。");
+        SuperAgentKgEntity permissionApply = entity(1002L, 10L, 20L, "权限申请", null, "PROCESS", "权限申请、审批、回收。");
+        SuperAgentKgEntity auditSystemInManual = entity(1101L, 11L, 21L, "审计系统", "AuditTrail", "SYSTEM", "用户手册里的审计系统。");
+        SuperAgentKgEntity permissionApplyInManual = entity(1102L, 11L, 21L, "权限申请", null, "PROCESS", "权限申请别名说明。");
+        SuperAgentKgRelation records = relation(2001L, 10L, 20L, 1001L, 1002L, "RECORDS", "AuditTrail 记录权限申请、审批、回收。", 0.9D);
+        SuperAgentKgRelation aliasRecords = relation(2101L, 11L, 21L, 1101L, 1102L, "RECORDS", "审计系统也叫 AuditTrail，记录权限申请。", 0.7D);
+        SuperAgentKgEvidence evidence = evidence(3001L, 10L, 20L, 4001L, 5001L, 2001L, null,
+            "AuditTrail 需记录权限申请、审批、回收和延长。", 9);
+        SuperAgentKgEvidence aliasEvidence = evidence(3101L, 11L, 21L, 4101L, 5101L, 2101L, null,
+            "审计系统也称 AuditTrail，用于统一记录权限申请。", 3);
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(auditTrailInPolicy, permissionApply, auditSystemInManual, permissionApplyInManual), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(records, aliasRecords), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(evidence, aliasEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper()
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统 有哪些要求？",
+            List.of(10L, 11L),
+            List.of(20L, 21L),
+            5,
+            2
+        );
+
+        assertThat(results).isNotEmpty();
+        GraphRagSearchResult result = results.stream()
+            .filter(item -> Long.valueOf(10L).equals(item.getDocumentId()))
+            .findFirst()
+            .orElseThrow();
+        assertThat(result.getRelationType()).isEqualTo("RECORDS");
+        assertThat(result.getCanonicalEntityName()).isIn("AuditTrail", "审计系统");
+        assertThat(result.getCanonicalEntityCount()).isEqualTo(2);
+        assertThat(result.getCanonicalDocumentCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupKey()).contains("RECORDS");
+        assertThat(result.getRelationGroupRelationCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupEvidenceCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupDocumentCount()).isEqualTo(2);
+        assertThat(result.getScore()).isGreaterThan(2.25D);
+        assertThat(results.get(0).getRelationGroupDocumentCount()).isEqualTo(2);
+    }
+
+    @Test
+    void crossDocumentCanonicalPrefersDistinctiveAliasAnchorOverLowDistinctivenessSeed() {
+        SuperAgentKgEntity auditTrailInPolicy = entity(1201L, 12L, 22L, "AuditTrail", null, "CONCEPT", "审计记录系统。");
+        SuperAgentKgEntity permissionApplyInPolicy = entity(1202L, 12L, 22L, "权限申请", null, "PROCESS", "权限申请、审批、回收。");
+        SuperAgentKgEntity scope = entity(1203L, 12L, 22L, "适用范围", null, "CONCEPT", "制度适用范围。");
+        SuperAgentKgEntity auditWord = entity(1204L, 12L, 22L, "审计", null, "CONCEPT", "审计泛词。");
+        SuperAgentKgEntity titleLabel = entity(1205L, 12L, 22L, "TITLE", null, "CONCEPT", "contentWithWeight 技术标签。");
+        SuperAgentKgEntity auditSystemInManual = entity(1301L, 13L, 23L, "审计系统", "AuditTrail", "SYSTEM", "业务别名称呼。");
+        SuperAgentKgEntity permissionInManual = entity(1302L, 13L, 23L, "权限", null, "CONCEPT", "权限词说明。");
+        SuperAgentKgEntity embeddedQuestion = entity(1303L, 13L, 23L, "审计系统有哪些权", null, "CONCEPT", "样例文档中的手动验证问题片段。");
+        embeddedQuestion.setMetadataJson("{\"candidateSources\":[\"metadata.question\"],\"confidence\":0.4}");
+        SuperAgentKgRelation records = relation(2201L, 12L, 22L, 1201L, 1202L, "RECORDS",
+            "AuditTrail 记录权限申请、审批和回收。", 0.9D);
+        SuperAgentKgRelation revokes = relation(2202L, 12L, 22L, 1302L, 1203L, "REVOKES",
+            "权限回收适用于制度范围。", 0.8D);
+        SuperAgentKgRelation badTitleRecords = relation(2203L, 12L, 22L, 1204L, 1205L, "RECORDS",
+            "审计记录要求被错误抽成 TITLE 技术标签。", 1.0D);
+        SuperAgentKgEvidence recordEvidence = evidence(3201L, 12L, 22L, 4201L, 5201L, 2201L, null,
+            "AuditTrail 需记录权限申请、审批、回收和临时权限延长。", 9);
+        SuperAgentKgEvidence revokeEvidence = evidence(3202L, 12L, 22L, 4202L, 5202L, 2202L, null,
+            "权限回收要求适用于客户数据权限流转场景。", 10);
+        SuperAgentKgEvidence badTitleEvidence = evidence(3203L, 12L, 22L, 4203L, 5203L, 2203L, null,
+            "审计记录要求包含 TITLE 技术标签。", 11);
+        SuperAgentKgEvidence questionEvidence = evidence(3301L, 13L, 23L, 4301L, 5301L, null, 1303L,
+            "用于手动验证时，可以提问：审计系统有哪些权限相关要求？", 3);
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class,
+                List.of(
+                    auditTrailInPolicy,
+                    permissionApplyInPolicy,
+                    scope,
+                    auditWord,
+                    titleLabel,
+                    auditSystemInManual,
+                    permissionInManual,
+                    embeddedQuestion
+                ),
+                null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(records, revokes, badTitleRecords), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(recordEvidence, revokeEvidence, badTitleEvidence, questionEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper()
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统有哪些权限相关要求？",
+            List.of(12L, 13L),
+            List.of(22L, 23L),
+            5,
+            2
+        );
+
+        assertThat(results).isNotEmpty();
+        assertThat(results.get(0).getRelationId()).isEqualTo(2201L);
+        GraphRagSearchResult result = results.get(0);
+        assertThat(result.getEntityName()).isEqualTo("AuditTrail");
+        assertThat(result.getCanonicalEntityName()).isIn("AuditTrail", "审计系统");
+        assertThat(result.getCanonicalEntityCount()).isEqualTo(2);
+        assertThat(result.getCanonicalDocumentCount()).isEqualTo(2);
+        assertThat(results)
+            .extracting(GraphRagSearchResult::getRelationId)
+            .doesNotContain(2203L);
+        assertThat(results)
+            .filteredOn(item -> "权限".equals(item.getCanonicalEntityName()))
+            .isEmpty();
+        assertThat(results)
+            .allSatisfy(item -> {
+                assertThat(item.getGraphPath()).doesNotContain("TITLE");
+                assertThat(item.getEntityName()).doesNotContain("哪些");
+            });
+    }
+
+    @Test
+    void crossDocumentAuditPermissionQuestionSurvivesLiveDataNoiseShape() {
+        SuperAgentKgEntity auditTrailInPolicy = entity(1401L, 14L, 24L, "AuditTrail", null, "CONCEPT", "审计记录系统。");
+        SuperAgentKgEntity permissionApply = entity(1402L, 14L, 24L, "权限申请", null, "CONCEPT", "权限申请。");
+        SuperAgentKgEntity permissionApprove = entity(1403L, 14L, 24L, "权限审批", null, "CONCEPT", "权限审批。");
+        SuperAgentKgEntity permissionRevoke = entity(1404L, 14L, 24L, "权限回收", null, "CONCEPT", "权限回收。");
+        SuperAgentKgEntity temporaryExtend = entity(1405L, 14L, 24L, "临时权限延长", null, "CONCEPT", "临时权限延长。");
+        SuperAgentKgEntity titleLabel = entity(1406L, 14L, 24L, "type: TITLE", null, "CONCEPT", "weighted content 技术标签。");
+        SuperAgentKgEntity genericContent = entity(1407L, 14L, 24L, "核心内容是", null, "CONCEPT", "自动问题派生片段。");
+        SuperAgentKgEntity partialPermission = entity(1408L, 14L, 24L, "以下权限相", null, "CONCEPT", "截断后的自动关键词。");
+        genericContent.setMetadataJson("{\"candidateSources\":[\"metadata.question\"],\"confidence\":0.4}");
+        partialPermission.setMetadataJson("{\"candidateSources\":[\"metadata.keyword\"],\"confidence\":0.4}");
+        SuperAgentKgEntity auditTrailInAliasDoc = entity(1501L, 15L, 25L, "AuditTrail", null, "CONCEPT", "业务人员口中的审计系统。");
+        auditTrailInAliasDoc.setMetadataJson(
+            "{\"aliases\":[\"TEXT 审计系统\",\"业务人员在沟通中\",\"审计系统\"],\"confidence\":0.92}"
+        );
+        SuperAgentKgEntity textAuditSystem = entity(1502L, 15L, 25L, "TEXT 审计系统", null, "SYSTEM", "weighted content 派生标签。");
+        textAuditSystem.setMetadataJson("{\"aliases\":[\"AuditTrail\",\"审计系统\"],\"confidence\":0.8}");
+
+        SuperAgentKgRelation recordsApply = relation(2401L, 14L, 24L, 1401L, 1402L, "RECORDS",
+            "AuditTrail 记录权限申请。", 0.83D);
+        SuperAgentKgRelation recordsApprove = relation(2402L, 14L, 24L, 1401L, 1403L, "RECORDS",
+            "AuditTrail 记录权限审批。", 0.83D);
+        SuperAgentKgRelation recordsRevoke = relation(2403L, 14L, 24L, 1401L, 1404L, "RECORDS",
+            "AuditTrail 记录权限回收。", 0.83D);
+        SuperAgentKgRelation recordsExtend = relation(2404L, 14L, 24L, 1401L, 1405L, "RECORDS",
+            "AuditTrail 记录临时权限延长。", 0.83D);
+        SuperAgentKgRelation badTitle = relation(2405L, 14L, 24L, 1401L, 1406L, "RECORDS",
+            "AuditTrail 被错误连到技术标题。", 0.83D);
+        SuperAgentKgRelation badContent = relation(2406L, 14L, 24L, 1407L, 1408L, "RECORDS",
+            "自动问题派生噪声。", 0.83D);
+        SuperAgentKgRelation badCoreContent = relation(2407L, 14L, 24L, 1401L, 1407L, "RECORDS",
+            "AuditTrail 被错误连到自动问题核心内容片段。", 0.83D);
+
+        String permissionQuote = "section: `AuditTrail` 需记录以下权限相关行为：type: TEXT - 权限申请。 - 权限审批。 - 权限回收。 - 临时权限延长。";
+        List<SuperAgentKgEvidence> evidences = List.of(
+            evidence(3401L, 14L, 24L, 4401L, 5401L, 2405L, null,
+                "[TITLE] `AuditTrail` 需记录以下权限相关行为：", 3),
+            evidence(3402L, 14L, 24L, 4402L, 5401L, 2401L, null, permissionQuote, 4),
+            evidence(3403L, 14L, 24L, 4402L, 5401L, 2402L, null, permissionQuote, 4),
+            evidence(3404L, 14L, 24L, 4402L, 5401L, 2403L, null, permissionQuote, 4),
+            evidence(3405L, 14L, 24L, 4402L, 5401L, 2404L, null, permissionQuote, 4),
+            evidence(3406L, 14L, 24L, 4402L, 5401L, 2406L, null,
+                "[QUESTIONS] 关于`AuditTrail` 需记录以下权限相关行为：的核心内容是什么？", 4),
+            evidence(3407L, 14L, 24L, 4401L, 5401L, 2407L, null,
+                "[TITLE] `AuditTrail` 需记录以下权限相关行为： [QUESTIONS] 关于核心内容是什么？", 3),
+            evidence(3501L, 15L, 25L, 4501L, 5501L, null, 1501L,
+                "业务人员在沟通中把 AuditTrail 称为审计系统。", 2),
+            evidence(3502L, 15L, 25L, 4501L, 5501L, null, 1502L,
+                "[CONTENT] section: 系统名称 type: TEXT 审计系统也称 AuditTrail。", 2)
+        );
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class,
+                List.of(
+                    auditTrailInPolicy,
+                    permissionApply,
+                    permissionApprove,
+                    permissionRevoke,
+                    temporaryExtend,
+                    titleLabel,
+                    genericContent,
+                    partialPermission,
+                    auditTrailInAliasDoc,
+                    textAuditSystem
+                ),
+                null),
+            mapper(SuperAgentKgRelationMapper.class,
+                List.of(recordsApply, recordsApprove, recordsRevoke, recordsExtend, badTitle, badContent, badCoreContent),
+                null),
+            mapper(SuperAgentKgEvidenceMapper.class, evidences, null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper()
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统有哪些权限相关要求？",
+            List.of(14L, 15L),
+            List.of(24L, 25L),
+            8,
+            2
+        );
+
+        assertThat(results).isNotEmpty();
+        assertThat(results.get(0).getRelationType()).isEqualTo("RECORDS");
+        assertThat(results.get(0).getEntityName()).isEqualTo("AuditTrail");
+        assertThat(results.get(0).getRelatedEntityName())
+            .isIn("权限申请", "权限审批", "权限回收", "临时权限延长");
+        assertThat(results.get(0).getCanonicalEntityName()).isEqualTo("AuditTrail");
+        assertThat(results.get(0).getCanonicalEntityCount()).isEqualTo(2);
+        assertThat(results.get(0).getCanonicalDocumentCount()).isEqualTo(2);
+        assertThat(results)
+            .extracting(GraphRagSearchResult::getRelationId)
+            .doesNotContain(2405L, 2406L, 2407L);
+        assertThat(results)
+            .allSatisfy(result -> {
+                assertThat(result.getGraphPath()).doesNotContain("TITLE");
+                assertThat(result.getGraphPath()).doesNotContain("核心内容是");
+                assertThat(result.getEntityName()).doesNotContain("TEXT");
+            });
+    }
+
+    @Test
     void controlledAdvisorCanSeedRelationWhenQuestionUsesImplicitGraphIntent() {
         SuperAgentKgEntity source = entity(1001L, 10L, 20L, "SuperAgent", "超级智能体", "SYSTEM", "负责调用编排与图谱构建。");
         SuperAgentKgEntity target = entity(1002L, 10L, 20L, "RagTools", null, "SYSTEM", "图谱抽取与重排工具。");

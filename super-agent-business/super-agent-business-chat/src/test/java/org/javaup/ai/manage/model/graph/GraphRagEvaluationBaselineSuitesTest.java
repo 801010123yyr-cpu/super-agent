@@ -13,7 +13,7 @@ class GraphRagEvaluationBaselineSuitesTest {
     void o6BaselineTemplatesCoverRealDocumentsAndEvaluationDimensions() {
         List<GraphRagEvaluationSuite> suites = GraphRagEvaluationBaselineSuites.o6LlmNerBaselineTemplates();
 
-        assertThat(suites).hasSize(4);
+        assertThat(suites).hasSize(8);
         assertThat(suites).extracting(GraphRagEvaluationSuite::getSourceDocument)
             .contains(
                 GraphRagEvaluationBaselineSuites.SOURCE_PRODUCTION_RELEASE,
@@ -33,11 +33,19 @@ class GraphRagEvaluationBaselineSuitesTest {
         assertThat(suites)
             .flatExtracting(GraphRagEvaluationSuite::getExpectedRelations)
             .extracting(GraphRagEvaluationSuite.ExpectedRelation::getRelationType)
-            .contains("触发", "执行", "审批", "记录");
+            .contains("触发", "执行", "审批", "记录", "回收", "存放");
         assertThat(suites)
             .flatExtracting(GraphRagEvaluationSuite::getExpectedEntities)
             .flatExtracting(GraphRagEvaluationSuite.ExpectedEntity::getMustHaveAliases)
-            .contains("SRE 团队", "高敏感信息");
+            .contains("SRE 团队", "DBA 团队", "高敏感信息");
+        assertThat(suites)
+            .extracting(GraphRagEvaluationSuite::getSuiteId)
+            .contains(
+                "o6-prod-release-dba-executes-database-script",
+                "o6-customer-data-admin-revokes-abnormal-permission",
+                "o6-customer-data-stores-in-vaultdocs",
+                "o6-customer-data-stores-in-datacleanroom"
+            );
     }
 
     @Test

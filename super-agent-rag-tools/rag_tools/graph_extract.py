@@ -50,6 +50,19 @@ CHINESE_STOPWORDS = {
     "说明",
     "信息",
     "功能",
+    "权限",
+    "要求",
+    "范围",
+    "适用范围",
+    "审计",
+    "标题",
+    "正文",
+    "行为",
+    "事项",
+    "注意事项",
+    "关于",
+    "以下权限相关行为",
+    "核心内容",
     "简称",
     "又称",
     "也称",
@@ -74,7 +87,18 @@ ENGLISH_STOPWORDS = {
     "this",
     "with",
     "your",
+    "chunk_type",
+    "content",
+    "ct",
+    "keywords",
+    "metadata",
+    "questions",
+    "section",
+    "text",
+    "title",
 }
+
+QUESTION_LIKE_MARKERS = ("哪些", "什么", "如何", "怎么", "是否", "有没有", "吗", "？", "?")
 
 RELATION_WORDS = [
     ("依赖", "DEPENDS_ON", 0.92),
@@ -133,6 +157,21 @@ class RelationCandidate:
     relation_type: str
     phrase: str
     confidence: float
+    quote_text: str = ""
+
+
+@dataclass
+class StructuredRelationCandidate:
+    source_name: str
+    target_name: str
+    relation_type: str
+    phrase: str
+    confidence: float
+    quote_text: str
+    source_aliases: set[str] = field(default_factory=set)
+    target_aliases: set[str] = field(default_factory=set)
+    source_mention: str = ""
+    target_mention: str = ""
 
 
 def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
@@ -144,6 +183,8 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
     chunk_entity_ids: dict[int, list[str]] = {}
     chunk_relation_ids: dict[int, list[str]] = {}
     entity_chunk_mentions: dict[str, Counter[int]] = defaultdict(Counter)
+    global_grade_aliases = _data_grade_aliases_from_chunks(request.chunks)
+    cross_chunk_structured_relations = _cross_chunk_structured_relation_candidates(request.chunks)
 
     for chunk in request.chunks:
         if chunk.chunk_id is None:
@@ -152,9 +193,8 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
         if not text:
             continue
 
-        candidates = _candidate_names(chunk, text)
-        entity_ids: list[str] = []
-        for candidate in candidates[:MAX_ENTITIES_PER_CHUNK]:
+        def upsert_entity_candidate(candidate: CandidateName) -> str:
+            nonlocal evidence_no
             entity_type = _classify_entity(candidate.name, chunk)
             variants = _entity_variants(candidate.name, candidate.aliases)
             entity_id = _resolve_entity_id(entity_type, variants, entity_alias_index)
@@ -188,23 +228,12 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
             evidences.append(evidence)
             if evidence.id not in entity.evidence_ids:
                 entity.evidence_ids.append(evidence.id)
-            entity_ids.append(entity_id)
+            return entity_id
 
-        chunk_entity_ids[chunk.chunk_id] = _unique(entity_ids)
-        relation_count = 0
-        associated_count = 0
-        for left_id, right_id in combinations(chunk_entity_ids[chunk.chunk_id], 2):
-            if relation_count >= MAX_RELATIONS_PER_CHUNK:
-                break
-            relation_candidate = _relation_candidate(text, entity_map[left_id], entity_map[right_id])
-            if relation_candidate is None:
-                if associated_count >= 4:
-                    continue
-                relation_candidate = _associated_relation_candidate(text, entity_map[left_id], entity_map[right_id])
-                if relation_candidate is None:
-                    continue
-                associated_count += 1
-
+        def upsert_relation_candidate(relation_candidate: RelationCandidate) -> bool:
+            nonlocal evidence_no
+            if relation_candidate.source_id == relation_candidate.target_id:
+                return False
             relation_id = _relation_id(
                 relation_candidate.source_id,
                 relation_candidate.target_id,
@@ -244,7 +273,60 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
             if evidence.id not in relation.evidence_ids:
                 relation.evidence_ids.append(evidence.id)
             chunk_relation_ids.setdefault(chunk.chunk_id, []).append(relation_id)
-            relation_count += 1
+            return True
+
+        structured_relations = _dedupe_structured_relations([
+            *_structured_relation_candidates(text, global_grade_aliases),
+            *cross_chunk_structured_relations.get(chunk.chunk_id, []),
+        ])
+        candidates = _candidate_names(chunk, text)
+        entity_ids: list[str] = []
+        for candidate in candidates[:MAX_ENTITIES_PER_CHUNK]:
+            entity_id = upsert_entity_candidate(candidate)
+            entity_ids.append(entity_id)
+
+        chunk_entity_ids[chunk.chunk_id] = _unique(entity_ids)
+        for structured_relation in structured_relations:
+            source_id = upsert_entity_candidate(CandidateName(
+                name=structured_relation.source_name,
+                score=16,
+                aliases=structured_relation.source_aliases,
+                sources={"structuredRelation.source"},
+            ))
+            target_id = upsert_entity_candidate(CandidateName(
+                name=structured_relation.target_name,
+                score=14,
+                aliases=structured_relation.target_aliases,
+                sources={"structuredRelation.target"},
+            ))
+            chunk_entity_ids[chunk.chunk_id] = _unique([*chunk_entity_ids[chunk.chunk_id], source_id, target_id])
+            upsert_relation_candidate(RelationCandidate(
+                source_id=source_id,
+                target_id=target_id,
+                source_name=structured_relation.source_mention or structured_relation.source_name,
+                target_name=structured_relation.target_mention or structured_relation.target_name,
+                relation_type=structured_relation.relation_type,
+                phrase=structured_relation.phrase,
+                confidence=structured_relation.confidence,
+                quote_text=structured_relation.quote_text,
+            ))
+
+        relation_count = len(chunk_relation_ids.get(chunk.chunk_id, []))
+        associated_count = 0
+        for left_id, right_id in combinations(chunk_entity_ids[chunk.chunk_id], 2):
+            if relation_count >= MAX_RELATIONS_PER_CHUNK:
+                break
+            relation_candidate = _relation_candidate(text, entity_map[left_id], entity_map[right_id])
+            if relation_candidate is None:
+                if associated_count >= 4:
+                    continue
+                relation_candidate = _associated_relation_candidate(text, entity_map[left_id], entity_map[right_id])
+            if relation_candidate is None:
+                continue
+            associated_count += 1
+
+            if upsert_relation_candidate(relation_candidate):
+                relation_count += 1
 
     communities = _build_communities(
         request,
@@ -265,6 +347,494 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
 
 def _chunk_text(chunk) -> str:
     return (chunk.content_with_weight or chunk.text or "").strip()
+
+
+def _structured_relation_candidates(
+    text: str,
+    global_grade_aliases: dict[str, set[str]] | None = None,
+) -> list[StructuredRelationCandidate]:
+    candidates: list[StructuredRelationCandidate] = []
+    table_rows = _markdown_table_rows(text)
+    grade_aliases = _data_grade_aliases(table_rows)
+    for grade, aliases in (global_grade_aliases or {}).items():
+        grade_aliases[grade].update(aliases)
+    for row_text, cells in table_rows:
+        candidates.extend(_structured_relations_from_table_row(row_text, cells, grade_aliases))
+    candidates.extend(_structured_relations_from_policy_text(text))
+    return _dedupe_structured_relations(candidates)
+
+
+def _markdown_table_rows(text: str) -> list[tuple[str, list[str]]]:
+    rows: list[tuple[str, list[str]]] = []
+    for line in (text or "").splitlines():
+        row_text = line.strip()
+        if "|" not in row_text:
+            continue
+        cells = [_clean_table_cell(cell) for cell in row_text.strip("|").split("|")]
+        cells = [cell for cell in cells if cell]
+        if len(cells) < 2:
+            continue
+        if all(re.fullmatch(r":?-{2,}:?", cell) for cell in cells):
+            continue
+        rows.append((row_text, cells))
+    return rows
+
+
+def _clean_table_cell(value: str) -> str:
+    return _clean_name(re.sub(r"`+", "", value or ""))
+
+
+def _data_grade_aliases(rows: list[tuple[str, list[str]]]) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = defaultdict(set)
+    for _, cells in rows:
+        if len(cells) < 2:
+            continue
+        grade = _data_grade(cells[0])
+        if not grade:
+            continue
+        aliases[grade].add(grade)
+        if any(marker in cells[1] for marker in ("敏感", "数据", "信息")):
+            aliases[grade].add(cells[1])
+    return aliases
+
+
+def _data_grade_aliases_from_chunks(chunks: list[Any]) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = defaultdict(set)
+    for chunk in chunks or []:
+        text = _chunk_text(chunk)
+        if not text:
+            continue
+        for _, cells in _markdown_table_rows(text):
+            if len(cells) < 2:
+                continue
+            grade = _data_grade(cells[0])
+            if not grade:
+                continue
+            aliases[grade].add(grade)
+            if any(marker in cells[1] for marker in ("敏感", "数据", "信息")):
+                aliases[grade].add(cells[1])
+    return aliases
+
+
+def _cross_chunk_structured_relation_candidates(
+    chunks: list[Any],
+) -> dict[int, list[StructuredRelationCandidate]]:
+    candidates_by_chunk_id: dict[int, list[StructuredRelationCandidate]] = defaultdict(list)
+    ordered_chunks = sorted(
+        [chunk for chunk in chunks or [] if chunk.chunk_id is not None and _chunk_text(chunk)],
+        key=lambda item: (
+            item.chunk_no if item.chunk_no is not None else 10**12,
+            item.chunk_id if item.chunk_id is not None else 10**12,
+        ),
+    )
+    for index, chunk in enumerate(ordered_chunks):
+        lines = _non_empty_lines(_chunk_text(chunk))
+        for line_index, line in enumerate(lines):
+            source_name = _recording_policy_source(line)
+            if source_name:
+                window_lines, line_chunk_ids = _following_policy_window(ordered_chunks, index, lines, line_index)
+                for item in _policy_list_items("\n".join(window_lines)):
+                    attach_chunk_id = _policy_item_chunk_id(item, window_lines, line_chunk_ids) or chunk.chunk_id
+                    candidates_by_chunk_id[attach_chunk_id].append(StructuredRelationCandidate(
+                        source_name=source_name,
+                        target_name=item,
+                        relation_type="RECORDS",
+                        phrase="记录",
+                        confidence=0.9,
+                        quote_text=_policy_recording_quote(source_name, window_lines, item),
+                        source_mention=source_name,
+                        target_mention=item,
+                    ))
+
+            storage_source = _storage_policy_source(line)
+            if storage_source:
+                window_lines, line_chunk_ids = _following_policy_window(ordered_chunks, index, lines, line_index)
+                for target in _storage_policy_targets(window_lines):
+                    attach_chunk_id = _policy_item_chunk_id(target, window_lines, line_chunk_ids) or chunk.chunk_id
+                    candidates_by_chunk_id[attach_chunk_id].append(StructuredRelationCandidate(
+                        source_name=storage_source,
+                        target_name=target,
+                        relation_type="STORES",
+                        phrase="存放",
+                        confidence=0.9,
+                        quote_text=_policy_list_quote(storage_source, window_lines, target),
+                        source_mention=storage_source,
+                        target_mention=target,
+                    ))
+
+    return {
+        chunk_id: _dedupe_structured_relations(candidates)
+        for chunk_id, candidates in candidates_by_chunk_id.items()
+    }
+
+
+def _structured_relations_from_table_row(
+    row_text: str,
+    cells: list[str],
+    grade_aliases: dict[str, set[str]] | None = None,
+) -> list[StructuredRelationCandidate]:
+    relations: list[StructuredRelationCandidate] = []
+    if not cells:
+        return relations
+
+    first_cell = cells[0]
+    row_joined = " | ".join(cells)
+    action_text = "、".join(cells[1:])
+    if _policy_actor_like(first_cell):
+        source_aliases = _policy_actor_aliases(cells)
+        for phrase, relation_type, confidence in _policy_action_words():
+            for target, target_aliases in _targets_after_policy_action(action_text, phrase, relation_type):
+                relations.append(StructuredRelationCandidate(
+                    source_name=first_cell,
+                    target_name=target,
+                    relation_type=relation_type,
+                    phrase=phrase,
+                    confidence=confidence,
+                    quote_text=row_text,
+                    source_aliases=source_aliases,
+                    target_aliases=target_aliases,
+                    source_mention=first_cell,
+                    target_mention=_target_mention_for_quote(target, target_aliases),
+                ))
+
+    grade = _data_grade(first_cell)
+    if grade and ("审批" in row_joined or "批准" in row_joined or "审核" in row_joined):
+        source_name = f"{grade} 数据"
+        source_aliases = set((grade_aliases or {}).get(grade, set())) or {grade}
+        if len(cells) >= 2 and any(marker in cells[1] for marker in ("敏感", "数据", "信息")):
+            source_aliases.add(cells[1])
+        for approver in _approval_targets(row_joined):
+            relations.append(StructuredRelationCandidate(
+                source_name=source_name,
+                target_name=approver,
+                relation_type="APPROVES",
+                phrase="审批",
+                confidence=0.9,
+                quote_text=row_text,
+                source_aliases=source_aliases,
+                source_mention=grade,
+                target_mention=approver,
+            ))
+
+    return relations
+
+
+def _non_empty_lines(text: str) -> list[str]:
+    return [line.strip() for line in (text or "").splitlines() if line.strip()]
+
+
+def _recording_policy_source(line: str) -> str:
+    match = re.search(
+        r"`?([A-Za-z][A-Za-z0-9._/-]{1,40})`?\s*(?:需|应|必须)?记录"
+        r"(?:以下权限相关行为|如下权限相关行为|以下行为|如下行为|权限相关行为)?[：:]",
+        line or "",
+    )
+    if not match:
+        return ""
+    return _clean_name(match.group(1))
+
+
+def _storage_policy_source(line: str) -> str:
+    match = re.search(
+        r"`?([\u4e00-\u9fffA-Za-z0-9_（）()·./\-\s]{2,30}?)`?\s*"
+        r"(?:原则上)?(?:仅|只)?允许(?:存放|存储|保存)于"
+        r"(?:公司)?(?:批准|指定|受控)?的?(?:平台|系统|环境|位置)?[：:]",
+        line or "",
+    )
+    if not match:
+        return ""
+    return _clean_name(match.group(1))
+
+
+def _following_policy_window(
+    ordered_chunks: list[Any],
+    chunk_index: int,
+    current_lines: list[str],
+    line_index: int,
+    max_lines: int = 10,
+    max_next_chunks: int = 5,
+) -> tuple[list[str], list[int]]:
+    chunk = ordered_chunks[chunk_index]
+    window_lines: list[str] = [current_lines[line_index], *current_lines[line_index + 1:]]
+    line_chunk_ids: list[int] = [chunk.chunk_id for _ in window_lines]
+    for next_chunk in ordered_chunks[chunk_index + 1:chunk_index + 1 + max_next_chunks]:
+        next_lines = _non_empty_lines(_chunk_text(next_chunk))
+        if not next_lines:
+            continue
+        if window_lines and _section_heading(next_lines[0]):
+            break
+        window_lines.extend(next_lines)
+        line_chunk_ids.extend([next_chunk.chunk_id for _ in next_lines])
+        if len(window_lines) >= max_lines:
+            break
+    return window_lines[:max_lines], line_chunk_ids[:max_lines]
+
+
+def _section_heading(line: str) -> bool:
+    return bool(re.match(r"^\s{0,3}#{1,6}\s+\S+", line or ""))
+
+
+def _policy_list_line(line: str) -> bool:
+    return bool(re.match(r"^\s*[-*]\s+\S+", line or ""))
+
+
+def _policy_recording_quote(source_name: str, lines: list[str], target_item: str = "") -> str:
+    return _policy_list_quote(source_name, lines, target_item)
+
+
+def _policy_list_quote(source_name: str, lines: list[str], target_item: str = "") -> str:
+    source_line = ""
+    target_line = ""
+    for line in lines:
+        if not source_line:
+            source_line = line
+        if target_item and target_item in line:
+            target_line = line
+            break
+    selected = [line for line in (source_line, target_line) if line]
+    if selected:
+        return "\n".join(selected)
+    return f"{source_name} {target_item}".strip()
+
+
+def _policy_item_chunk_id(item: str, lines: list[str], chunk_ids: list[int]) -> int | None:
+    if not item:
+        return None
+    for line, chunk_id in zip(lines, chunk_ids):
+        if item in line:
+            return chunk_id
+    return None
+
+
+def _structured_relations_from_policy_text(text: str) -> list[StructuredRelationCandidate]:
+    relations: list[StructuredRelationCandidate] = []
+    lines = _non_empty_lines(text)
+
+    for index, line in enumerate(lines):
+        source_name = _recording_policy_source(line)
+        if source_name:
+            following_text = "\n".join(lines[index:index + 8])
+            for item in _policy_list_items(following_text):
+                relations.append(StructuredRelationCandidate(
+                    source_name=source_name,
+                    target_name=item,
+                    relation_type="RECORDS",
+                    phrase="记录",
+                    confidence=0.9,
+                    quote_text=following_text,
+                    source_mention=source_name,
+                    target_mention=item,
+                ))
+
+        storage_source = _storage_policy_source(line)
+        if storage_source:
+            following_lines = lines[index:index + 8]
+            for target in _storage_policy_targets(following_lines):
+                relations.append(StructuredRelationCandidate(
+                    source_name=storage_source,
+                    target_name=target,
+                    relation_type="STORES",
+                    phrase="存放",
+                    confidence=0.9,
+                    quote_text=_policy_list_quote(storage_source, following_lines, target),
+                    source_mention=storage_source,
+                    target_mention=target,
+                ))
+
+    for sentence in re.split(r"(?<=[。！？；;])|\n", text or ""):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if "发布负责人" in sentence and ("触发回滚" in sentence or "发起回滚" in sentence):
+            relations.append(StructuredRelationCandidate(
+                source_name="发布负责人",
+                target_name="回滚",
+                relation_type="TRIGGERS",
+                phrase="触发" if "触发回滚" in sentence else "发起",
+                confidence=0.9,
+                quote_text=sentence,
+                source_mention="发布负责人",
+                target_mention="回滚",
+            ))
+        if "值班 SRE" in sentence and "执行流量切换" in sentence:
+            relations.append(StructuredRelationCandidate(
+                source_name="值班 SRE",
+                target_name="流量切换",
+                relation_type="EXECUTES",
+                phrase="执行",
+                confidence=0.9,
+                quote_text=sentence,
+                source_aliases={"SRE"},
+                source_mention="值班 SRE",
+                target_mention="流量切换",
+            ))
+        if "AuditTrail" in sentence and "记录" in sentence and "权限申请" in sentence:
+            relations.append(StructuredRelationCandidate(
+                source_name="AuditTrail",
+                target_name="权限申请",
+                relation_type="RECORDS",
+                phrase="记录",
+                confidence=0.9,
+                quote_text=sentence,
+                source_mention="AuditTrail",
+                target_mention="权限申请",
+            ))
+        if re.search(r"\bL[0-9]{1,2}\b", sentence) and "信息安全部" in sentence and any(word in sentence for word in ("审批", "批准", "审核")):
+            grade = re.search(r"\b(L[0-9]{1,2})\b", sentence).group(1)
+            aliases = {grade}
+            if "高敏感信息" in sentence:
+                aliases.add("高敏感信息")
+            if "高敏感数据" in sentence:
+                aliases.add("高敏感数据")
+            relations.append(StructuredRelationCandidate(
+                source_name=f"{grade} 数据",
+                target_name="信息安全部",
+                relation_type="APPROVES",
+                phrase="审批",
+                confidence=0.9,
+                quote_text=sentence,
+                source_aliases=aliases,
+                source_mention=grade,
+                target_mention="信息安全部",
+            ))
+    return relations
+
+
+def _policy_actor_like(value: str) -> bool:
+    return bool(re.search(r"(负责人|管理员|SRE|DBA|QA|DPO|团队|部门|委员会|Owner|Admin|Manager)$", value or "", re.IGNORECASE))
+
+
+def _policy_actor_aliases(cells: list[str]) -> set[str]:
+    aliases: set[str] = set()
+    if len(cells) >= 2 and _policy_actor_like(cells[1]):
+        aliases.add(cells[1])
+    first = cells[0] if cells else ""
+    if "SRE" in first:
+        aliases.add("SRE")
+    return aliases
+
+
+def _policy_action_words() -> list[tuple[str, str, float]]:
+    return [
+        ("触发", "TRIGGERS", 0.9),
+        ("发起", "TRIGGERS", 0.88),
+        ("执行", "EXECUTES", 0.9),
+        ("记录", "RECORDS", 0.88),
+        ("存放", "STORES", 0.86),
+        ("归档", "ARCHIVES", 0.86),
+        ("回收", "REVOKES", 0.84),
+    ]
+
+
+def _targets_after_policy_action(text: str, phrase: str, relation_type: str) -> list[tuple[str, set[str]]]:
+    targets: list[tuple[str, set[str]]] = []
+    for match in re.finditer(re.escape(phrase), text or ""):
+        tail = text[match.end():]
+        target_match = re.match(r"[\u4e00-\u9fffA-Za-z0-9_（）()·./\-\s]{2,32}", tail)
+        if not target_match:
+            continue
+        raw_target = re.split(r"[、,，；;。.!！?？|]", target_match.group(0).strip(), maxsplit=1)[0]
+        target, aliases = _canonical_policy_target(raw_target, relation_type)
+        if _valid_name(target):
+            targets.append((target, aliases))
+    return targets
+
+
+def _canonical_policy_target(value: str, relation_type: str) -> tuple[str, set[str]]:
+    cleaned = _clean_name(value)
+    cleaned = re.sub(r"^(其|对应|相关|以下|如下|的)+", "", cleaned).strip()
+    aliases: set[str] = set()
+    if "数据库脚本" in cleaned or "数据恢复脚本" in cleaned:
+        if cleaned != "数据库脚本":
+            aliases.add(cleaned)
+        return "数据库脚本", aliases
+    if "回滚" in cleaned:
+        if cleaned != "回滚":
+            aliases.add(cleaned)
+        return "回滚", aliases
+    if "流量切换" in cleaned or "流量切回" in cleaned:
+        if cleaned != "流量切换":
+            aliases.add(cleaned)
+        return "流量切换", aliases
+    if "权限申请" in cleaned:
+        if cleaned != "权限申请":
+            aliases.add(cleaned)
+        return "权限申请", aliases
+    if relation_type == "RECORDS":
+        cleaned = re.split(r"(?:和|与|及|以及)", cleaned, maxsplit=1)[0].strip()
+    return cleaned, aliases
+
+
+def _target_mention_for_quote(target: str, aliases: set[str]) -> str:
+    return sorted(aliases, key=len, reverse=True)[0] if aliases else target
+
+
+def _data_grade(value: str) -> str:
+    match = re.fullmatch(r"(L[0-9]{1,2})", (value or "").strip(), re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _approval_targets(text: str) -> list[str]:
+    targets = []
+    for name in ("信息安全部", "数据治理负责人", "部门负责人"):
+        if name in text:
+            targets.append(name)
+    return targets
+
+
+def _policy_list_items(text: str) -> list[str]:
+    items = []
+    lines = [
+        line
+        for line in (text or "").splitlines()
+        if _policy_list_line(line)
+    ]
+    if not lines:
+        lines = (text or "").splitlines()
+    for line in (text or "").splitlines():
+        if lines and line not in lines:
+            continue
+        cleaned = re.sub(r"^\s*[-*]\s*", "", line).strip()
+        if not cleaned or _recording_policy_source(cleaned) or _section_heading(cleaned):
+            continue
+        for item in re.split(r"[、,，；;。.!！?？]+", cleaned):
+            item = _clean_name(item)
+            if _valid_name(item) and item not in {"审批", "回收", "延长", "以下行为"} and item not in items:
+                items.append(item)
+    return items[:16]
+
+
+def _storage_policy_targets(lines: list[str]) -> list[str]:
+    targets: list[str] = []
+    for line in lines or []:
+        if _storage_policy_source(line):
+            continue
+        for item in re.findall(r"`([^`]{2,60})`", line or ""):
+            cleaned = _clean_name(item)
+            if _valid_name(cleaned) and cleaned not in targets:
+                targets.append(cleaned)
+        if "`" in (line or ""):
+            continue
+        match = re.search(r"[：:]\s*([\u4e00-\u9fffA-Za-z0-9_（）()·./\-\s]{2,40})", line or "")
+        if match:
+            cleaned = _clean_name(match.group(1))
+            if _valid_name(cleaned) and cleaned not in targets:
+                targets.append(cleaned)
+    return targets[:16]
+
+
+def _dedupe_structured_relations(candidates: list[StructuredRelationCandidate]) -> list[StructuredRelationCandidate]:
+    deduped: dict[tuple[str, str, str], StructuredRelationCandidate] = {}
+    for candidate in candidates:
+        key = (
+            _normalize_entity(candidate.source_name),
+            candidate.relation_type,
+            _normalize_entity(candidate.target_name),
+        )
+        existing = deduped.get(key)
+        if existing is None or candidate.confidence > existing.confidence:
+            deduped[key] = candidate
+    return list(deduped.values())
 
 
 def _candidate_names(chunk, text: str) -> list[CandidateName]:
@@ -364,9 +934,12 @@ def _alias_pairs(text: str) -> list[tuple[str, str]]:
             pairs.append((primary, alias))
     explicit_patterns = [
         re.compile(
-            r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{1,40})"
-            r"(?:简称|缩写为|英文名为|英文名称为|又称|也称|别名为)"
+            r"`?([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{1,40})`?"
+            r"[\s,，、;；:：]*"
+            r"(?:简称为|缩写为|英文名为|英文名称为|又称|也称|别名为|简称|缩写|别名)"
+            r"[\s`\"']*"
             r"([A-Za-z][A-Za-z0-9_.\-]{1,20}|[\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{2,24})"
+            r"[`\"']*"
         ),
         re.compile(
             r"([A-Za-z][A-Za-z0-9_.\-]{1,20}|[\u4e00-\u9fffA-Za-z0-9_.·/\-\s]{2,24})"
@@ -408,7 +981,7 @@ def _split_chinese_phrase(phrase: str) -> list[str]:
     if 2 <= len(normalized) <= 12:
         parts.append(normalized)
     for item in re.split(
-        r"(?:的|和|与|及|或|并|在|对|通过|根据|用于|可以|需要|进行|实现|提供|支持|包括|包含|属于|作为|由|向|从|到|将|把|及其|以及|审批|批准|审核|执行|触发|发起|记录|存放|归档|回收|简称|又称|也称|别名为|英文名|英文名称|缩写为|完成)",
+        r"(?:的|和|与|及|或|并|在|对|通过|根据|用于|可以|需要|进行|实现|提供|支持|包括|包含|属于|作为|由|向|从|到|将|把|及其|以及|审批|批准|审核|执行|触发|发起|记录|存放|归档|回收|简称为|缩写为|简称|又称|也称|别名为|英文名|英文名称|完成)",
         normalized,
     ):
         item = item.strip()
@@ -433,8 +1006,14 @@ def _valid_name(name: str) -> bool:
     lowered = name.lower()
     if lowered in ENGLISH_STOPWORDS or name in CHINESE_STOPWORDS:
         return False
+    if any(marker in name for marker in QUESTION_LIKE_MARKERS):
+        return False
+    if re.match(r"^(以下|如下|上述|相关).{0,12}(行为|要求|内容|事项)$", name):
+        return False
     if any(marker in name for marker in ("简称", "又称", "也称", "别名", "英文名", "英文名称", "缩写")):
         return False
+    if name in {"权限审批", "权限回收"}:
+        return True
     if lowered in {word for word, _, _ in RELATION_WORDS}:
         return False
     for word, _, _ in RELATION_WORDS:
@@ -444,6 +1023,8 @@ def _valid_name(name: str) -> bool:
             return False
     if re.fullmatch(r"[0-9._/-]+", name):
         return False
+    if re.fullmatch(r"L[0-9]{1,2}", name, re.IGNORECASE):
+        return True
     if re.fullmatch(r"[A-Za-z]{1,2}", name):
         return bool(re.fullmatch(r"[A-Z]{2}", name))
     if re.fullmatch(r"[A-Za-z]+", name) and name.islower():
@@ -553,11 +1134,19 @@ def _valid_aliases(aliases: set[str] | list[str], primary_name: str) -> set[str]
 def _better_entity_name(candidate_name: str, current_name: str) -> bool:
     if not current_name:
         return True
+    if _is_data_grade_entity(candidate_name) and not _is_data_grade_entity(current_name):
+        return True
+    if _is_data_grade_entity(current_name) and not _is_data_grade_entity(candidate_name):
+        return False
     if _is_acronym(current_name) and not _is_acronym(candidate_name):
         return True
     if not _is_acronym(current_name) and _is_acronym(candidate_name):
         return False
     return len(candidate_name) > len(current_name) and len(candidate_name) <= 32
+
+
+def _is_data_grade_entity(name: str) -> bool:
+    return bool(re.fullmatch(r"L[0-9]{1,2}\s*(?:数据|信息)", name or "", re.IGNORECASE))
 
 
 def _is_acronym(name: str) -> bool:
@@ -789,7 +1378,7 @@ def _relation_evidence(
         relationId=relation_id,
         chunkId=chunk.chunk_id,
         parentBlockId=chunk.parent_block_id,
-        quoteText=_quote(text, [source_name, target_name, candidate.phrase]),
+        quoteText=_relation_quote(text, source_name, target_name, candidate),
         pageNo=chunk.page_no,
         pageRange=chunk.page_range,
         bboxJson=chunk.bbox_json,
@@ -804,6 +1393,16 @@ def _relation_evidence(
             "confidence": candidate.confidence,
         },
     )
+
+
+def _relation_quote(text: str, source_name: str, target_name: str, candidate: RelationCandidate) -> str:
+    if candidate.quote_text:
+        return _limit_quote(candidate.quote_text)
+    return _quote(text, [source_name, target_name, candidate.phrase])
+
+
+def _limit_quote(quote_text: str) -> str:
+    return re.sub(r"\s+", " ", quote_text or "").strip()[:MAX_QUOTE_LENGTH]
 
 
 def _relation_weight(relation_type: str, confidence: float) -> float:
