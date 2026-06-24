@@ -61,6 +61,12 @@ public class GraphRagEvaluationReport {
     private Double overallRecall;
 
     @Builder.Default
+    private List<String> observedExtractorSources = new ArrayList<>();
+
+    @Builder.Default
+    private List<ExtractorSourceStat> extractorSourceStats = new ArrayList<>();
+
+    @Builder.Default
     private List<EntityResult> entityResults = new ArrayList<>();
 
     @Builder.Default
@@ -99,6 +105,8 @@ public class GraphRagEvaluationReport {
             .relationRecall(0D)
             .evidenceRecall(0D)
             .overallRecall(0D)
+            .observedExtractorSources(List.of())
+            .extractorSourceStats(List.of())
             .entityResults(List.of())
             .relationResults(List.of())
             .evidenceResults(List.of())
@@ -125,6 +133,12 @@ public class GraphRagEvaluationReport {
 
         @Builder.Default
         private List<String> missingAliases = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> actualCandidateSources = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> actualExtractorSources = new ArrayList<>();
 
         private String reason;
     }
@@ -154,6 +168,12 @@ public class GraphRagEvaluationReport {
         private Long actualTargetEntityId;
 
         private String actualTargetName;
+
+        @Builder.Default
+        private List<String> actualCandidateSources = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> actualExtractorSources = new ArrayList<>();
 
         private String reason;
     }
@@ -197,6 +217,28 @@ public class GraphRagEvaluationReport {
 
         private String actualSectionPath;
 
+        @Builder.Default
+        private List<String> actualExtractorSources = new ArrayList<>();
+
+        private String actualSourceType;
+
         private String reason;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ExtractorSourceStat {
+
+        private String source;
+
+        private Long entityCount;
+
+        private Long relationCount;
+
+        private Long evidenceCount;
+
+        private Long totalCount;
     }
 }

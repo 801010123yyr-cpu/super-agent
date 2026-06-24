@@ -1,4 +1,5 @@
 import hashlib
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -19,6 +20,24 @@ from rag_tools.schemas.graph_extract import (
 MAX_ENTITIES_PER_CHUNK = 16
 MAX_RELATIONS_PER_CHUNK = 12
 MAX_QUOTE_LENGTH = 260
+EXTRACTOR_RULE = "rule"
+EXTRACTOR_NER = "ner"
+NER_MODEL_ENV_ENABLED = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_ENABLED"
+NER_MODEL_ENV_PROVIDER = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_PROVIDER"
+NER_MODEL_ENV_NAME = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_NAME"
+NER_MODEL_ENV_DEVICE = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_DEVICE"
+NER_MODEL_ENV_AUTO_DOWNLOAD = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_AUTO_DOWNLOAD"
+NER_MODEL_ENV_MAX_CHARS = "SUPER_AGENT_GRAPH_RAG_NER_MODEL_MAX_CHARS"
+NER_MODEL_DEFAULT_PROVIDER = "transformers"
+NER_MODEL_DEFAULT_MAX_CHARS = 8000
+
+_SPACY_NLP = None
+_SPACY_LOAD_ATTEMPTED = False
+_SPACY_MODEL_NAME = ""
+_NER_MODEL_PIPELINE = None
+_NER_MODEL_LOAD_ATTEMPTED = False
+_NER_MODEL_STATUS: dict[str, Any] | None = None
+_NER_MODEL_CONFIG_KEY: tuple[Any, ...] | None = None
 
 CHINESE_STOPWORDS = {
     "可以",
@@ -158,6 +177,7 @@ class RelationCandidate:
     phrase: str
     confidence: float
     quote_text: str = ""
+    sources: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -172,6 +192,7 @@ class StructuredRelationCandidate:
     target_aliases: set[str] = field(default_factory=set)
     source_mention: str = ""
     target_mention: str = ""
+    sources: set[str] = field(default_factory=lambda: {"rule.structuredRelation"})
 
 
 def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
@@ -192,6 +213,7 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
         text = _chunk_text(chunk)
         if not text:
             continue
+        evidence_text = _chunk_evidence_text(chunk)
 
         def upsert_entity_candidate(candidate: CandidateName) -> str:
             nonlocal evidence_no
@@ -223,11 +245,12 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
                 entity.source_chunk_ids.append(chunk.chunk_id)
             entity_chunk_mentions[entity_id][chunk.chunk_id] += 1
 
-            evidence = _entity_evidence(f"EV{evidence_no}", entity_id, chunk, text, candidate)
-            evidence_no += 1
-            evidences.append(evidence)
-            if evidence.id not in entity.evidence_ids:
-                entity.evidence_ids.append(evidence.id)
+            evidence = _entity_evidence(f"EV{evidence_no}", entity_id, chunk, evidence_text, candidate)
+            if evidence is not None:
+                evidence_no += 1
+                evidences.append(evidence)
+                if evidence.id not in entity.evidence_ids:
+                    entity.evidence_ids.append(evidence.id)
             return entity_id
 
         def upsert_relation_candidate(relation_candidate: RelationCandidate) -> bool:
@@ -263,7 +286,7 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
                 f"EV{evidence_no}",
                 relation_id,
                 chunk,
-                text,
+                evidence_text,
                 relation_candidate.source_name,
                 relation_candidate.target_name,
                 relation_candidate,
@@ -276,10 +299,10 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
             return True
 
         structured_relations = _dedupe_structured_relations([
-            *_structured_relation_candidates(text, global_grade_aliases),
+            *_structured_relation_candidates(evidence_text, global_grade_aliases),
             *cross_chunk_structured_relations.get(chunk.chunk_id, []),
         ])
-        candidates = _candidate_names(chunk, text)
+        candidates = _candidate_names(chunk, evidence_text)
         entity_ids: list[str] = []
         for candidate in candidates[:MAX_ENTITIES_PER_CHUNK]:
             entity_id = upsert_entity_candidate(candidate)
@@ -291,13 +314,13 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
                 name=structured_relation.source_name,
                 score=16,
                 aliases=structured_relation.source_aliases,
-                sources={"structuredRelation.source"},
+                sources={"rule.structuredRelation.source"},
             ))
             target_id = upsert_entity_candidate(CandidateName(
                 name=structured_relation.target_name,
                 score=14,
                 aliases=structured_relation.target_aliases,
-                sources={"structuredRelation.target"},
+                sources={"rule.structuredRelation.target"},
             ))
             chunk_entity_ids[chunk.chunk_id] = _unique([*chunk_entity_ids[chunk.chunk_id], source_id, target_id])
             upsert_relation_candidate(RelationCandidate(
@@ -309,6 +332,7 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
                 phrase=structured_relation.phrase,
                 confidence=structured_relation.confidence,
                 quote_text=structured_relation.quote_text,
+                sources=structured_relation.sources,
             ))
 
         relation_count = len(chunk_relation_ids.get(chunk.chunk_id, []))
@@ -316,11 +340,11 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
         for left_id, right_id in combinations(chunk_entity_ids[chunk.chunk_id], 2):
             if relation_count >= MAX_RELATIONS_PER_CHUNK:
                 break
-            relation_candidate = _relation_candidate(text, entity_map[left_id], entity_map[right_id])
+            relation_candidate = _relation_candidate(evidence_text, entity_map[left_id], entity_map[right_id])
             if relation_candidate is None:
                 if associated_count >= 4:
                     continue
-                relation_candidate = _associated_relation_candidate(text, entity_map[left_id], entity_map[right_id])
+                relation_candidate = _associated_relation_candidate(evidence_text, entity_map[left_id], entity_map[right_id])
             if relation_candidate is None:
                 continue
             associated_count += 1
@@ -328,6 +352,8 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
             if upsert_relation_candidate(relation_candidate):
                 relation_count += 1
 
+    entities = _sort_entities(entity_map.values())
+    relations = _sort_relations(relation_map.values())
     communities = _build_communities(
         request,
         entity_map,
@@ -338,15 +364,43 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
         entity_chunk_mentions,
     )
     return GraphExtractResponse(
-        entities=_sort_entities(entity_map.values()),
-        relations=_sort_relations(relation_map.values()),
+        entities=entities,
+        relations=relations,
         evidences=evidences,
         communities=communities,
+        metadata=_extract_metadata(entities, relations, evidences),
     )
 
 
 def _chunk_text(chunk) -> str:
     return (chunk.content_with_weight or chunk.text or "").strip()
+
+
+def _chunk_evidence_text(chunk) -> str:
+    text = (chunk.text or "").strip()
+    if text and not _metadata_weighted_text(text):
+        return text
+    weighted = (chunk.content_with_weight or "").strip()
+    if not weighted:
+        return text
+    content = _content_segment_from_weighted_text(weighted)
+    return content or text or weighted
+
+
+def _metadata_weighted_text(text: str) -> bool:
+    return bool(re.search(r"\[(?:TITLE|SECTION|CHUNK_TYPE|KEYWORDS|QUESTIONS|CONTENT|TEXT)\]", text or "", re.IGNORECASE))
+
+
+def _content_segment_from_weighted_text(text: str) -> str:
+    if not text:
+        return ""
+    match = re.search(r"\[CONTENT\]\s*(.*)$", text, re.IGNORECASE | re.DOTALL)
+    if not match:
+        return ""
+    content = match.group(1)
+    content = re.split(r"\[(?:TITLE|SECTION|CHUNK_TYPE|KEYWORDS|QUESTIONS|TEXT)\]", content, maxsplit=1, flags=re.IGNORECASE)[0]
+    content = re.sub(r"^\s*section\s*:\s*", "", content.strip(), flags=re.IGNORECASE)
+    return content.strip()
 
 
 def _structured_relation_candidates(
@@ -401,7 +455,7 @@ def _data_grade_aliases(rows: list[tuple[str, list[str]]]) -> dict[str, set[str]
 def _data_grade_aliases_from_chunks(chunks: list[Any]) -> dict[str, set[str]]:
     aliases: dict[str, set[str]] = defaultdict(set)
     for chunk in chunks or []:
-        text = _chunk_text(chunk)
+        text = _chunk_evidence_text(chunk)
         if not text:
             continue
         for _, cells in _markdown_table_rows(text):
@@ -428,7 +482,7 @@ def _cross_chunk_structured_relation_candidates(
         ),
     )
     for index, chunk in enumerate(ordered_chunks):
-        lines = _non_empty_lines(_chunk_text(chunk))
+        lines = _non_empty_lines(_chunk_evidence_text(chunk))
         for line_index, line in enumerate(lines):
             source_name = _recording_policy_source(line)
             if source_name:
@@ -558,7 +612,7 @@ def _following_policy_window(
     window_lines: list[str] = [current_lines[line_index], *current_lines[line_index + 1:]]
     line_chunk_ids: list[int] = [chunk.chunk_id for _ in window_lines]
     for next_chunk in ordered_chunks[chunk_index + 1:chunk_index + 1 + max_next_chunks]:
-        next_lines = _non_empty_lines(_chunk_text(next_chunk))
+        next_lines = _non_empty_lines(_chunk_evidence_text(next_chunk))
         if not next_lines:
             continue
         if window_lines and _section_heading(next_lines[0]):
@@ -880,6 +934,18 @@ def _candidate_names(chunk, text: str) -> list[CandidateName]:
         if any(char.isupper() for char in term) or re.search(r"[0-9._/-]", term):
             add(term, 4, "englishToken")
 
+    for candidate in _ner_candidate_names(chunk, text):
+        cleaned = _clean_name(candidate.name)
+        if not _valid_name(cleaned):
+            continue
+        merged = candidates.setdefault(cleaned, CandidateName(name=cleaned))
+        merged.score += candidate.score
+        merged.sources.update(candidate.sources or {EXTRACTOR_NER})
+        for alias in candidate.aliases:
+            alias_cleaned = _clean_name(alias)
+            if _valid_name(alias_cleaned) and _normalize_entity(alias_cleaned) != _normalize_entity(cleaned):
+                merged.aliases.add(alias_cleaned)
+
     for candidate in list(candidates.values()):
         acronym = _english_acronym(candidate.name)
         if acronym:
@@ -889,6 +955,278 @@ def _candidate_names(chunk, text: str) -> list[CandidateName]:
         candidates.values(),
         key=lambda item: (-item.score, -len(item.aliases), -_candidate_name_priority(item), item.name.lower()),
     )
+
+
+def _ner_candidate_names(chunk, text: str) -> list[CandidateName]:
+    candidates: dict[str, CandidateName] = {}
+
+    def add(name: str, score: float, source: str, aliases: set[str] | None = None) -> None:
+        cleaned = _clean_name(name)
+        if not _valid_name(cleaned):
+            return
+        candidate = candidates.setdefault(cleaned, CandidateName(name=cleaned))
+        candidate.score += score
+        candidate.sources.add(source)
+        for alias in aliases or set():
+            alias_cleaned = _clean_name(alias)
+            if _valid_name(alias_cleaned) and _normalize_entity(alias_cleaned) != _normalize_entity(cleaned):
+                candidate.aliases.add(alias_cleaned)
+
+    for name, source in _spacy_ner_terms(text):
+        add(name, 9, source)
+
+    for name in _pattern_ner_terms(text):
+        add(name, 7, "ner.pattern")
+
+    for name in _role_ner_terms(text + "\n" + (chunk.title or "") + "\n" + (chunk.section_path or "")):
+        add(name, 8, "ner.role")
+
+    for name, source in _model_ner_terms(text):
+        add(name, 10, source)
+
+    return sorted(candidates.values(), key=lambda item: (-item.score, -len(item.name), item.name.lower()))
+
+
+def _spacy_ner_terms(text: str) -> list[tuple[str, str]]:
+    global _SPACY_NLP, _SPACY_LOAD_ATTEMPTED, _SPACY_MODEL_NAME
+    if not text or not re.search(r"[A-Za-z]", text):
+        return []
+    if _SPACY_LOAD_ATTEMPTED and _SPACY_NLP is None:
+        return []
+    if _SPACY_NLP is not None:
+        nlp = _SPACY_NLP
+    else:
+        _SPACY_LOAD_ATTEMPTED = True
+        nlp = None
+        try:
+            import spacy
+        except ImportError:
+            return []
+        for model_name in ("en_core_web_sm", "en_core_web_md"):
+            try:
+                nlp = spacy.load(model_name)
+                _SPACY_NLP = nlp
+                _SPACY_MODEL_NAME = model_name
+                break
+            except OSError:
+                continue
+    if nlp is None:
+        return []
+    terms: list[tuple[str, str]] = []
+    for entity in nlp(text[:8000]).ents:
+        if entity.label_ in {"ORDINAL", "CARDINAL", "DATE", "TIME", "MONEY", "PERCENT", "QUANTITY"}:
+            continue
+        terms.append((entity.text, f"ner.spacy.{entity.label_.lower()}"))
+    return terms
+
+
+def _model_ner_terms(text: str) -> list[tuple[str, str]]:
+    pipeline = _ensure_ner_model_pipeline()
+    if pipeline is None:
+        return []
+    max_chars = _ner_model_max_chars()
+    try:
+        raw_entities = pipeline((text or "")[:max_chars])
+    except Exception as exception:
+        _set_ner_model_status("unavailable", f"inference failed: {exception}", loaded=False)
+        return []
+
+    terms: list[tuple[str, str]] = []
+    for item in raw_entities or []:
+        if not isinstance(item, dict):
+            continue
+        name = _model_ner_entity_text(item)
+        label = _model_ner_entity_label(item)
+        if not name:
+            continue
+        source = f"ner.model.{_ner_model_provider()}"
+        if label:
+            source = f"{source}.{label}"
+        terms.append((name, source))
+    return terms[:80]
+
+
+def _ensure_ner_model_pipeline():
+    global _NER_MODEL_PIPELINE, _NER_MODEL_LOAD_ATTEMPTED, _NER_MODEL_STATUS, _NER_MODEL_CONFIG_KEY
+    config_key = _ner_model_config_key()
+    if _NER_MODEL_CONFIG_KEY != config_key:
+        _NER_MODEL_PIPELINE = None
+        _NER_MODEL_LOAD_ATTEMPTED = False
+        _NER_MODEL_STATUS = None
+        _NER_MODEL_CONFIG_KEY = config_key
+
+    enabled = _env_bool(NER_MODEL_ENV_ENABLED, False)
+    provider = _ner_model_provider()
+    model_name = _ner_model_name()
+    if not enabled:
+        _set_ner_model_status("disabled", "", loaded=False)
+        return None
+    if provider != NER_MODEL_DEFAULT_PROVIDER:
+        _set_ner_model_status("unavailable", f"unsupported provider: {provider}", loaded=False)
+        return None
+    if not model_name:
+        _set_ner_model_status("unavailable", f"{NER_MODEL_ENV_NAME} is required when model NER is enabled", loaded=False)
+        return None
+    if _NER_MODEL_PIPELINE is not None:
+        return _NER_MODEL_PIPELINE
+    if _NER_MODEL_LOAD_ATTEMPTED:
+        return None
+
+    _NER_MODEL_LOAD_ATTEMPTED = True
+    auto_download = _env_bool(NER_MODEL_ENV_AUTO_DOWNLOAD, False)
+    try:
+        _NER_MODEL_PIPELINE = _load_ner_model_pipeline(model_name, auto_download, _ner_model_device())
+        _set_ner_model_status("loaded", "", loaded=True)
+        return _NER_MODEL_PIPELINE
+    except ImportError:
+        _set_ner_model_status("unavailable", "transformers is not installed", loaded=False)
+        return None
+    except Exception as exception:
+        _set_ner_model_status("unavailable", str(exception), loaded=False)
+        return None
+
+
+def _load_ner_model_pipeline(model_name: str, auto_download: bool, device: int):
+    from transformers import AutoModelForTokenClassification, AutoTokenizer, pipeline
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=not auto_download)
+    model = AutoModelForTokenClassification.from_pretrained(model_name, local_files_only=not auto_download)
+    return pipeline(
+        "token-classification",
+        model=model,
+        tokenizer=tokenizer,
+        aggregation_strategy="simple",
+        device=device,
+    )
+
+
+def _model_ner_entity_text(item: dict[str, Any]) -> str:
+    for key in ("word", "text", "entity"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return _clean_model_ner_word(value)
+    return ""
+
+
+def _model_ner_entity_label(item: dict[str, Any]) -> str:
+    value = item.get("entity_group") or item.get("entity")
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
+
+
+def _clean_model_ner_word(value: str) -> str:
+    cleaned = (value or "").replace("##", "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return _clean_name(cleaned)
+
+
+def _ner_model_config_key() -> tuple[Any, ...]:
+    return (
+        _env_bool(NER_MODEL_ENV_ENABLED, False),
+        _ner_model_provider(),
+        _ner_model_name(),
+        _ner_model_device(),
+        _env_bool(NER_MODEL_ENV_AUTO_DOWNLOAD, False),
+        _ner_model_max_chars(),
+    )
+
+
+def _ner_model_provider() -> str:
+    return os.getenv(NER_MODEL_ENV_PROVIDER, NER_MODEL_DEFAULT_PROVIDER).strip().lower() or NER_MODEL_DEFAULT_PROVIDER
+
+
+def _ner_model_name() -> str:
+    return os.getenv(NER_MODEL_ENV_NAME, "").strip()
+
+
+def _ner_model_device() -> int:
+    raw_value = os.getenv(NER_MODEL_ENV_DEVICE, "-1").strip()
+    try:
+        return int(raw_value)
+    except ValueError:
+        return -1
+
+
+def _ner_model_max_chars() -> int:
+    raw_value = os.getenv(NER_MODEL_ENV_MAX_CHARS, str(NER_MODEL_DEFAULT_MAX_CHARS)).strip()
+    try:
+        return max(256, min(20000, int(raw_value)))
+    except ValueError:
+        return NER_MODEL_DEFAULT_MAX_CHARS
+
+
+def _set_ner_model_status(status: str, reason: str = "", loaded: bool = False) -> None:
+    global _NER_MODEL_STATUS
+    _NER_MODEL_STATUS = {
+        "name": "ner.model",
+        "enabled": _env_bool(NER_MODEL_ENV_ENABLED, False),
+        "status": status,
+        "provider": _ner_model_provider(),
+        "modelName": _ner_model_name(),
+        "device": _ner_model_device(),
+        "autoDownload": _env_bool(NER_MODEL_ENV_AUTO_DOWNLOAD, False),
+        "loaded": loaded,
+    }
+    if reason:
+        _NER_MODEL_STATUS["reason"] = _compact_reason(reason)
+
+
+def _ner_model_layer_status() -> dict[str, Any]:
+    _ensure_ner_model_pipeline()
+    return dict(_NER_MODEL_STATUS or {
+        "name": "ner.model",
+        "enabled": False,
+        "status": "disabled",
+        "provider": _ner_model_provider(),
+        "modelName": _ner_model_name(),
+        "loaded": False,
+    })
+
+
+def _compact_reason(reason: str) -> str:
+    return re.sub(r"\s+", " ", reason or "").strip()[:500]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _pattern_ner_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    patterns = [
+        r"`([A-Za-z][A-Za-z0-9._/-]{1,40})`",
+        r"\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*){1,}\b",
+        r"\b[A-Z]{2,}(?:[A-Z0-9._/-]{0,20})\b",
+        r"\b[A-Za-z][A-Za-z0-9._/-]{1,24}(?:Service|Server|Client|Gateway|Engine|API|SDK|DB|SQL)\b",
+        r"\bL[0-9]{1,2}\s*(?:数据|信息)?\b",
+        r"[\u4e00-\u9fffA-Za-z0-9_（）()·./-]{2,24}(?:系统|平台|服务|模块|组件|接口|API|SDK|引擎|链路|流程|策略|规范|制度|文档|库|环境)",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text or "", re.IGNORECASE):
+            value = match.group(1) if match.lastindex else match.group(0)
+            cleaned = _clean_name(value)
+            if _valid_name(cleaned) and cleaned not in terms:
+                terms.append(cleaned)
+    return terms[:40]
+
+
+def _role_ner_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    for match in re.finditer(
+        r"[\u4e00-\u9fffA-Za-z0-9_（）()·./\-\s]{1,24}"
+        r"(?:负责人|管理员|SRE|DBA|DPO|QA|Owner|Admin|Manager|团队|部门|委员会)",
+        text or "",
+        re.IGNORECASE,
+    ):
+        cleaned = _clean_name(match.group(0))
+        cleaned = re.sub(r"^(对应|相关|其|由|和|与|及|以及)\s*", "", cleaned).strip()
+        if _valid_name(cleaned) and cleaned not in terms:
+            terms.append(cleaned)
+    return terms[:40]
 
 
 def _metadata_terms(metadata: dict[str, Any] | None, *keys: str) -> list[str]:
@@ -1106,6 +1444,7 @@ def _merge_entity_candidate(entity: GraphEntity, candidate: CandidateName, entit
     sources = set(metadata.get("candidateSources") or [])
     sources.update(candidate.sources)
     metadata["candidateSources"] = sorted(sources)
+    metadata["extractorSources"] = _extractor_sources_from_candidate_sources(sources)
 
     aliases = set(entity.aliases or [])
     aliases.update(candidate.aliases)
@@ -1129,6 +1468,29 @@ def _valid_aliases(aliases: set[str] | list[str], primary_name: str) -> set[str]
         for alias in aliases or []
         if _valid_name(alias) and _normalize_entity(alias) != primary
     }
+
+
+def _extractor_sources_from_candidate_sources(candidate_sources: set[str] | list[str]) -> list[str]:
+    extractor_sources: set[str] = set()
+    for source in candidate_sources or []:
+        normalized = str(source or "").strip().lower()
+        if not normalized:
+            continue
+        if normalized.startswith("ner"):
+            extractor_sources.add(EXTRACTOR_NER)
+        elif "llm" in normalized:
+            extractor_sources.add("llm-advisor")
+        else:
+            extractor_sources.add(EXTRACTOR_RULE)
+    return sorted(extractor_sources or {EXTRACTOR_RULE})
+
+
+def _primary_extractor_source(candidate_sources: set[str] | list[str]) -> str:
+    extractor_sources = _extractor_sources_from_candidate_sources(candidate_sources)
+    for preferred in (EXTRACTOR_NER, "llm-advisor", EXTRACTOR_RULE):
+        if preferred in extractor_sources:
+            return preferred
+    return extractor_sources[0] if extractor_sources else EXTRACTOR_RULE
 
 
 def _better_entity_name(candidate_name: str, current_name: str) -> bool:
@@ -1161,13 +1523,16 @@ def _english_acronym(name: str) -> str:
     return acronym if 2 <= len(acronym) <= 10 else ""
 
 
-def _entity_evidence(evidence_id: str, entity_id: str, chunk, text: str, candidate: CandidateName) -> GraphEvidence:
+def _entity_evidence(evidence_id: str, entity_id: str, chunk, text: str, candidate: CandidateName) -> GraphEvidence | None:
+    quote_text = _quote(text, [candidate.name, *sorted(candidate.aliases)], fallback=False)
+    if not quote_text:
+        return None
     return GraphEvidence(
         id=evidence_id,
         entityId=entity_id,
         chunkId=chunk.chunk_id,
         parentBlockId=chunk.parent_block_id,
-        quoteText=_quote(text, [candidate.name, *sorted(candidate.aliases)]),
+        quoteText=quote_text,
         pageNo=chunk.page_no,
         pageRange=chunk.page_range,
         bboxJson=chunk.bbox_json,
@@ -1180,6 +1545,9 @@ def _entity_evidence(evidence_id: str, entity_id: str, chunk, text: str, candida
             "candidateAliases": sorted(candidate.aliases),
             "candidateScore": round(candidate.score, 4),
             "candidateSources": sorted(candidate.sources),
+            "extractorSources": _extractor_sources_from_candidate_sources(candidate.sources),
+            "sourceType": _primary_extractor_source(candidate.sources),
+            "grounded": True,
         },
     )
 
@@ -1229,6 +1597,7 @@ def _relation_candidate(text: str, left: GraphEntity, right: GraphEntity) -> Rel
                     relation_type=relation_type,
                     phrase=phrase,
                     confidence=confidence,
+                    sources={"rule.relationWord"},
                 ),
             )
         )
@@ -1254,6 +1623,7 @@ def _associated_relation_candidate(text: str, left: GraphEntity, right: GraphEnt
         relation_type="ASSOCIATED_WITH",
         phrase="co_occurrence",
         confidence=0.45,
+        sources={"rule.coOccurrence"},
     )
 
 
@@ -1361,6 +1731,10 @@ def _merge_relation_candidate(relation: GraphRelation, candidate: RelationCandid
         source_chunk_ids.add(chunk.chunk_id)
     metadata["sourceChunkIds"] = sorted(source_chunk_ids)
     metadata["confidence"] = max(float(metadata.get("confidence") or 0.0), candidate.confidence)
+    sources = set(metadata.get("candidateSources") or [])
+    sources.update(candidate.sources or {EXTRACTOR_RULE})
+    metadata["candidateSources"] = sorted(sources)
+    metadata["extractorSources"] = _extractor_sources_from_candidate_sources(sources)
     relation.metadata = metadata
 
 
@@ -1391,6 +1765,9 @@ def _relation_evidence(
             "targetName": target_name,
             "relationPhrase": candidate.phrase,
             "confidence": candidate.confidence,
+            "candidateSources": sorted(candidate.sources or {EXTRACTOR_RULE}),
+            "extractorSources": _extractor_sources_from_candidate_sources(candidate.sources or {EXTRACTOR_RULE}),
+            "sourceType": _primary_extractor_source(candidate.sources or {EXTRACTOR_RULE}),
         },
     )
 
@@ -1413,14 +1790,14 @@ def _relation_weight(relation_type: str, confidence: float) -> float:
     return round(min(0.92, 0.65 + confidence * 0.2), 4)
 
 
-def _quote(text: str, names: list[str]) -> str:
+def _quote(text: str, names: list[str], fallback: bool = True) -> str:
     compact = re.sub(r"\s+", " ", text or "").strip()
     if not compact:
         return ""
     positions = [_find_name(compact, name) for name in names if name]
     positions = [position for position in positions if position >= 0]
     if not positions:
-        return compact[:MAX_QUOTE_LENGTH]
+        return compact[:MAX_QUOTE_LENGTH] if fallback else ""
     center = min(positions)
     start = max(0, center - 90)
     end = min(len(compact), center + MAX_QUOTE_LENGTH)
@@ -1680,3 +2057,91 @@ def _sort_relations(relations) -> list[GraphRelation]:
             relation.target_entity_id,
         ),
     )
+
+
+def _extract_metadata(
+    entities: list[GraphEntity],
+    relations: list[GraphRelation],
+    evidences: list[GraphEvidence],
+) -> dict[str, Any]:
+    return {
+        "extractorLayers": _extractor_layers(),
+        "extractorSourceCounts": _extractor_source_counts(entities, relations, evidences),
+        "candidateSourceCounts": _candidate_source_counts(entities, relations, evidences),
+    }
+
+
+def _extractor_layers() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "rule",
+            "enabled": True,
+            "status": "ready",
+        },
+        {
+            "name": "ner.lightweight",
+            "enabled": True,
+            "status": "ready",
+            "sources": ["ner.pattern", "ner.role"],
+        },
+        _spacy_layer_status(),
+        _ner_model_layer_status(),
+    ]
+
+
+def _spacy_layer_status() -> dict[str, Any]:
+    if _SPACY_NLP is not None:
+        return {
+            "name": "ner.spacy",
+            "enabled": True,
+            "status": "loaded",
+            "modelName": _SPACY_MODEL_NAME,
+        }
+    if _SPACY_LOAD_ATTEMPTED:
+        return {
+            "name": "ner.spacy",
+            "enabled": True,
+            "status": "unavailable",
+            "reason": "spaCy model not installed",
+        }
+    return {
+        "name": "ner.spacy",
+        "enabled": True,
+        "status": "not_used",
+        "reason": "no English-like text triggered spaCy probing",
+    }
+
+
+def _extractor_source_counts(
+    entities: list[GraphEntity],
+    relations: list[GraphRelation],
+    evidences: list[GraphEvidence],
+) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in [*entities, *relations, *evidences]:
+        for source in _metadata_list(item.metadata, "extractorSources"):
+            counter[source] += 1
+    return dict(sorted(counter.items()))
+
+
+def _candidate_source_counts(
+    entities: list[GraphEntity],
+    relations: list[GraphRelation],
+    evidences: list[GraphEvidence],
+) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in [*entities, *relations, *evidences]:
+        for source in _metadata_list(item.metadata, "candidateSources"):
+            counter[source] += 1
+    return dict(sorted(counter.items()))
+
+
+def _metadata_list(metadata: dict[str, Any] | None, key: str) -> list[str]:
+    if not metadata:
+        return []
+    value = metadata.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []

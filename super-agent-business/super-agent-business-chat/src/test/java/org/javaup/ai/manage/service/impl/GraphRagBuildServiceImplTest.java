@@ -84,6 +84,8 @@ class GraphRagBuildServiceImplTest {
         Map<String, Object> metadata = objectMapper.readValue(mergedEntity.getMetadataJson(), Map.class);
         assertThat(metadata.get("sourceEntityIds")).isEqualTo(List.of("E1", "E2"));
         assertThat(String.valueOf(metadata.get("aliases"))).contains("超级智能体");
+        assertThat(String.valueOf(metadata.get("candidateSources"))).contains("textPhrase", "ner.pattern");
+        assertThat(String.valueOf(metadata.get("extractorSources"))).contains("rule", "ner");
         assertThat(metadata)
             .containsEntry("rankAlgorithm", "java.pagerank.v1")
             .containsKeys("pagerank", "rankBoost", "rankPosition", "degree", "weightedDegree");
@@ -94,11 +96,16 @@ class GraphRagBuildServiceImplTest {
         assertThat(mergedRelation.getRelationType()).isEqualTo("CALLS");
         Map<String, Object> relationMetadata = objectMapper.readValue(mergedRelation.getMetadataJson(), Map.class);
         assertThat(relationMetadata.get("sourceRelationIds")).isEqualTo(List.of("R1", "R2"));
+        assertThat(String.valueOf(relationMetadata.get("candidateSources"))).contains("rule.relationWord");
+        assertThat(String.valueOf(relationMetadata.get("extractorSources"))).contains("rule");
         assertThat(relationMetadata)
             .containsEntry("rankAlgorithm", "java.pagerank.v1")
             .containsKeys("rankBoost", "sourceEntityRankBoost", "targetEntityRankBoost", "relationWeightBoost");
 
         assertThat(evidenceCollector.items()).hasSize(4);
+        SuperAgentKgEvidence firstEvidence = evidenceCollector.items(SuperAgentKgEvidence.class).get(0);
+        Map<String, Object> evidenceMetadata = objectMapper.readValue(firstEvidence.getMetadataJson(), Map.class);
+        assertThat(String.valueOf(evidenceMetadata.get("extractorSources"))).contains("rule", "ner");
         assertThat(communityCollector.items()).hasSize(1);
         SuperAgentKgCommunity community = communityCollector.items(SuperAgentKgCommunity.class).get(0);
         List<?> entityIds = objectMapper.readValue(community.getEntityIdsJson(), List.class);
@@ -143,6 +150,36 @@ class GraphRagBuildServiceImplTest {
         assertThat(leaseManager.renewCount()).isEqualTo(1);
         assertThat(leaseManager.releaseCount()).isEqualTo(1);
         assertThat(checkpointService.events()).contains("retry:EXTRACTING:1", "success:2");
+    }
+
+    @Test
+    void extractedCheckpointIncludesPythonExtractorMetadata() {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        RecordingCheckpointService checkpointService = new RecordingCheckpointService();
+
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            new StaticRagToolsClient(graphResponse()),
+            new ObjectMapper(),
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            checkpointService
+        );
+
+        service.rebuildDocumentGraph(10L, 20L, List.of(orderPaymentChunk(101L)));
+
+        Map<String, Object> extractedDetail = checkpointService.detail("EXTRACTED");
+        assertThat(extractedDetail).containsKeys("entityCount", "relationCount", "evidenceCount", "communityCount", "extractorMetadata");
+        assertThat(String.valueOf(extractedDetail.get("extractorMetadata")))
+            .contains("extractorLayers")
+            .contains("ner.model")
+            .contains("extractorSourceCounts");
     }
 
     @Test
@@ -626,6 +663,13 @@ class GraphRagBuildServiceImplTest {
             evidence("EV4", "", "R2", 102L, 202L, "超级智能体调用 RagTools。")
         ));
         response.setCommunities(List.of(community()));
+        response.setMetadata(Map.of(
+            "extractorLayers", List.of(
+                Map.of("name", "rule", "enabled", true, "status", "ready"),
+                Map.of("name", "ner.model", "enabled", false, "status", "disabled")
+            ),
+            "extractorSourceCounts", Map.of("rule", 4, "ner", 2)
+        ));
         return response;
     }
 
@@ -672,7 +716,12 @@ class GraphRagBuildServiceImplTest {
         entity.setConfidence(0.92D);
         entity.setSourceChunkIds(new ArrayList<>(sourceChunkIds));
         entity.setEvidenceIds(new ArrayList<>(evidenceIds));
-        entity.setMetadata(Map.of("mentionCount", 1, "candidateScore", 10D, "candidateSources", List.of("test")));
+        entity.setMetadata(Map.of(
+            "mentionCount", 1,
+            "candidateScore", 10D,
+            "candidateSources", List.of("textPhrase", "ner.pattern"),
+            "extractorSources", List.of("rule", "ner")
+        ));
         return entity;
     }
 
@@ -689,7 +738,11 @@ class GraphRagBuildServiceImplTest {
         relation.setDescription(sourceEntityId + " " + relationType + " " + targetEntityId);
         relation.setWeight(0.9D);
         relation.setEvidenceIds(new ArrayList<>(evidenceIds));
-        relation.setMetadata(Map.of("confidence", 0.9D));
+        relation.setMetadata(Map.of(
+            "confidence", 0.9D,
+            "candidateSources", List.of("rule.relationWord"),
+            "extractorSources", List.of("rule")
+        ));
         return relation;
     }
 
@@ -708,7 +761,11 @@ class GraphRagBuildServiceImplTest {
         evidence.setQuoteText(quoteText);
         evidence.setPageNo(1);
         evidence.setSectionPath("架构/GraphRAG");
-        evidence.setMetadata(Map.of("source", "test"));
+        evidence.setMetadata(Map.of(
+            "source", "test",
+            "sourceType", "ner",
+            "extractorSources", List.of("rule", "ner")
+        ));
         return evidence;
     }
 
@@ -911,6 +968,7 @@ class GraphRagBuildServiceImplTest {
     private static final class RecordingCheckpointService implements GraphRagBuildCheckpointService {
 
         private final List<String> events = new ArrayList<>();
+        private final Map<String, Map<String, Object>> details = new java.util.LinkedHashMap<>();
 
         @Override
         public void markRunning(Long documentId,
@@ -920,6 +978,7 @@ class GraphRagBuildServiceImplTest {
                                 int maxAttempts,
                                 Map<String, Object> detail) {
             events.add("running:" + stage + ":" + attempt);
+            details.put(stage, detail);
         }
 
         @Override
@@ -964,6 +1023,10 @@ class GraphRagBuildServiceImplTest {
 
         private List<String> events() {
             return events;
+        }
+
+        private Map<String, Object> detail(String stage) {
+            return details.getOrDefault(stage, Map.of());
         }
     }
 

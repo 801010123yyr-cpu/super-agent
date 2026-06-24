@@ -92,3 +92,4 @@ class GraphExtractResponse(BaseModel):
     relations: list[GraphRelation] = Field(default_factory=list)
     evidences: list[GraphEvidence] = Field(default_factory=list)
     communities: list[GraphCommunity] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)

@@ -254,22 +254,12 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 response = applyGraphExtractionAdvice(documentId, taskId, request, response);
 
                 stage = "EXTRACTED";
-                checkpointService.markRunning(documentId, taskId, stage, attempt, maxAttempts, metadata(
-                    "entityCount", size(response.getEntities()),
-                    "relationCount", size(response.getRelations()),
-                    "evidenceCount", size(response.getEvidences()),
-                    "communityCount", size(response.getCommunities())
-                ));
+                checkpointService.markRunning(documentId, taskId, stage, attempt, maxAttempts, extractionCheckpointMetadata(response));
 
                 renewLeaseOrFail(leaseKey, ownerToken, leaseTtl);
 
                 stage = "PERSISTING";
-                checkpointService.markRunning(documentId, taskId, stage, attempt, maxAttempts, metadata(
-                    "entityCount", size(response.getEntities()),
-                    "relationCount", size(response.getRelations()),
-                    "evidenceCount", size(response.getEvidences()),
-                    "communityCount", size(response.getCommunities())
-                ));
+                checkpointService.markRunning(documentId, taskId, stage, attempt, maxAttempts, extractionCheckpointMetadata(response));
 
                 GraphRagBuildResult result = replaceGraph(documentId, taskId, response);
                 checkpointService.markSuccess(documentId, taskId, result, attempt, maxAttempts);
@@ -312,6 +302,16 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 .communityCount(preparedGraph.communities().size())
                 .build();
         });
+    }
+
+    private Map<String, Object> extractionCheckpointMetadata(RagToolsGraphExtractResponse response) {
+        return metadata(
+            "entityCount", size(response == null ? null : response.getEntities()),
+            "relationCount", size(response == null ? null : response.getRelations()),
+            "evidenceCount", size(response == null ? null : response.getEvidences()),
+            "communityCount", size(response == null ? null : response.getCommunities()),
+            "extractorMetadata", response == null ? null : response.getMetadata()
+        );
     }
 
     private PreparedGraph prepareGraph(Long documentId,
@@ -1068,6 +1068,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 "aliases", accumulator.aliases,
                 "sourceMetadata", accumulator.sourceMetadata,
                 "candidateSources", accumulator.candidateSources,
+                "extractorSources", accumulator.extractorSources,
                 "mentionCount", accumulator.mentionCount,
                 "candidateScore", accumulator.candidateScore,
                 "confidence", accumulator.confidence,
@@ -1141,6 +1142,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 "targetEntityIds", accumulator.targetEntityIds,
                 "evidenceIds", accumulator.evidenceIds,
                 "sourceMetadata", accumulator.sourceMetadata,
+                "candidateSources", accumulator.candidateSources,
+                "extractorSources", accumulator.extractorSources,
                 "confidence", accumulator.confidence
             )));
             relation.setStatus(BusinessStatus.YES.getCode());
@@ -1424,7 +1427,9 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 "sourceEvidenceId", extracted.getId(),
                 "sourceEntityId", extracted.getEntityId(),
                 "sourceRelationId", extracted.getRelationId(),
-                "sourceMetadata", extracted.getMetadata()
+                "sourceMetadata", extracted.getMetadata(),
+                "extractorSources", toStringList(extracted.getMetadata() == null ? null : extracted.getMetadata().get("extractorSources")),
+                "sourceType", extracted.getMetadata() == null ? null : extracted.getMetadata().get("sourceType")
             )));
             evidence.setStatus(BusinessStatus.YES.getCode());
             evidencesById.put(evidenceId, evidence);
@@ -2239,6 +2244,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         private final Set<String> evidenceIds = new LinkedHashSet<>();
         private final Set<String> aliases = new LinkedHashSet<>();
         private final Set<String> candidateSources = new LinkedHashSet<>();
+        private final Set<String> extractorSources = new LinkedHashSet<>();
         private final Set<String> entityResolutionSourceEntityIds = new LinkedHashSet<>();
         private final List<Map<String, Object>> sourceMetadata = new ArrayList<>();
         private final Set<String> variants = new LinkedHashSet<>();
@@ -2295,6 +2301,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 mentionCount += toInt(metadata.get("mentionCount"), 1);
                 candidateScore += toDouble(metadata.get("candidateScore"), 0D);
                 candidateSources.addAll(toStringList(metadata.get("candidateSources")));
+                extractorSources.addAll(toStringList(metadata.get("extractorSources")));
+                extractorSources.addAll(toStringList(metadata.get("sourceType")));
             }
             if (mentionCount <= 0) {
                 mentionCount = 1;
@@ -2323,6 +2331,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         private final Set<String> sourceEntityIds = new LinkedHashSet<>();
         private final Set<String> targetEntityIds = new LinkedHashSet<>();
         private final Set<String> evidenceIds = new LinkedHashSet<>();
+        private final Set<String> candidateSources = new LinkedHashSet<>();
+        private final Set<String> extractorSources = new LinkedHashSet<>();
         private final List<Map<String, Object>> sourceMetadata = new ArrayList<>();
         private String description = "";
         private double weight;
@@ -2348,6 +2358,9 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             Map<String, Object> metadata = copyMetadata(extracted.getMetadata());
             if (metadata != null) {
                 sourceMetadata.add(metadata);
+                candidateSources.addAll(toStringList(metadata.get("candidateSources")));
+                extractorSources.addAll(toStringList(metadata.get("extractorSources")));
+                extractorSources.addAll(toStringList(metadata.get("sourceType")));
             }
         }
     }

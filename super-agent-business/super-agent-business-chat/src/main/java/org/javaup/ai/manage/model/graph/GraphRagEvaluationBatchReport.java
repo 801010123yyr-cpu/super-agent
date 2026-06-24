@@ -111,5 +111,17 @@ public class GraphRagEvaluationBatchReport {
         private String evaluationLevel;
 
         private String reason;
+
+        @Builder.Default
+        private List<String> observedExtractorSources = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> missingEntityNames = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> missingRelationNames = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> missingEvidenceHints = new ArrayList<>();
     }
 }

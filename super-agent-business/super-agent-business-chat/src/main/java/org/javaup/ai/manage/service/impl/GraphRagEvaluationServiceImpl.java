@@ -105,6 +105,7 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         Map<Long, SuperAgentKgRelation> relationById = relations.stream()
             .filter(relation -> relation != null && relation.getId() != null)
             .collect(Collectors.toMap(SuperAgentKgRelation::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
+        SourceObservation sourceObservation = observeExtractorSources(entities, relations, evidences);
 
         List<GraphRagEvaluationReport.EntityResult> entityResults = expectedEntities.stream()
             .map(expected -> evaluateEntity(expected, entities))
@@ -151,6 +152,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .relationRecall(relationRecall)
             .evidenceRecall(evidenceRecall)
             .overallRecall(overallRecall)
+            .observedExtractorSources(sourceObservation.sources())
+            .extractorSourceStats(sourceObservation.stats())
             .entityResults(entityResults)
             .relationResults(relationResults)
             .evidenceResults(evidenceResults)
@@ -283,6 +286,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .relationRecall(0D)
             .evidenceRecall(0D)
             .overallRecall(0D)
+            .observedExtractorSources(List.of())
+            .extractorSourceStats(List.of())
             .entityResults(expectedEntities.stream()
                 .map(expected -> GraphRagEvaluationReport.EntityResult.builder()
                     .expectedName(expected == null ? null : expected.getName())
@@ -343,6 +348,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                         .actualEntityId(entity.getId())
                         .actualName(entity.getName())
                         .missingAliases(missingAliases)
+                        .actualCandidateSources(candidateSources(entity))
+                        .actualExtractorSources(extractorSources(entity))
                         .reason("实体名称命中，但缺少必须别名：" + String.join("、", missingAliases))
                         .build();
                 }
@@ -354,6 +361,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                     .actualEntityId(entity.getId())
                     .actualName(entity.getName())
                     .missingAliases(List.of())
+                    .actualCandidateSources(candidateSources(entity))
+                    .actualExtractorSources(extractorSources(entity))
                     .reason("实体名称、别名和必须别名命中。")
                     .build();
             }
@@ -396,6 +405,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .actualSourceName(source == null ? null : source.getName())
             .actualTargetEntityId(relation.getTargetEntityId())
             .actualTargetName(target == null ? null : target.getName())
+            .actualCandidateSources(candidateSources(relation))
+            .actualExtractorSources(extractorSources(relation))
             .reason(relationMatch.reason())
             .build();
     }
@@ -453,6 +464,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                 .actualPageNo(evidence.getPageNo())
                 .actualPageRange(evidence.getPageRange())
                 .actualSectionPath(evidence.getSectionPath())
+                .actualExtractorSources(extractorSources(evidence))
+                .actualSourceType(sourceType(evidence))
                 .reason("证据 quoteText/关键词和约束命中。")
                 .build();
         }
@@ -492,6 +505,10 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                 .overallRecall(report.getOverallRecall())
                 .evaluationLevel(report.getEvaluationLevel())
                 .reason(firstMissReason(report))
+                .observedExtractorSources(safeList(report.getObservedExtractorSources()))
+                .missingEntityNames(missingEntityNames(report))
+                .missingRelationNames(missingRelationNames(report))
+                .missingEvidenceHints(missingEvidenceHints(report))
                 .build())
             .toList();
     }
@@ -518,6 +535,51 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             }
         }
         return "综合召回低于通过阈值。";
+    }
+
+    private List<String> missingEntityNames(GraphRagEvaluationReport report) {
+        return safeList(report == null ? null : report.getEntityResults()).stream()
+            .filter(result -> required(result.getRequired()) && !Boolean.TRUE.equals(result.getMatched()))
+            .map(result -> StrUtil.blankToDefault(result.getExpectedName(), "-"))
+            .toList();
+    }
+
+    private List<String> missingRelationNames(GraphRagEvaluationReport report) {
+        return safeList(report == null ? null : report.getRelationResults()).stream()
+            .filter(result -> required(result.getRequired()) && !Boolean.TRUE.equals(result.getMatched()))
+            .map(result -> StrUtil.blankToDefault(result.getExpectedSourceName(), "-")
+                + " -> " + StrUtil.blankToDefault(result.getExpectedTargetName(), "-")
+                + relationTypeHint(result.getExpectedRelationType()))
+            .toList();
+    }
+
+    private String relationTypeHint(String relationType) {
+        return StrUtil.isBlank(relationType) ? "" : " (" + relationType + ")";
+    }
+
+    private List<String> missingEvidenceHints(GraphRagEvaluationReport report) {
+        return safeList(report == null ? null : report.getEvidenceResults()).stream()
+            .filter(result -> required(result.getRequired()) && !Boolean.TRUE.equals(result.getMatched()))
+            .map(this::evidenceHint)
+            .toList();
+    }
+
+    private String evidenceHint(GraphRagEvaluationReport.EvidenceResult result) {
+        if (result == null) {
+            return "-";
+        }
+        if (StrUtil.isNotBlank(result.getExpectedQuoteText())) {
+            return result.getExpectedQuoteText();
+        }
+        if (!safeList(result.getExpectedQuoteKeywords()).isEmpty()) {
+            return String.join(" / ", safeList(result.getExpectedQuoteKeywords()));
+        }
+        if (StrUtil.isNotBlank(result.getExpectedEntityName())) {
+            return result.getExpectedEntityName();
+        }
+        return StrUtil.blankToDefault(result.getExpectedSourceName(), "-")
+            + " -> " + StrUtil.blankToDefault(result.getExpectedTargetName(), "-")
+            + relationTypeHint(result.getExpectedRelationType());
     }
 
     private String batchSummary(String level,
@@ -672,6 +734,118 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         }
         addNormalized(names, stringValue(metadata.get("entityResolutionCanonicalName")));
         return names;
+    }
+
+    private SourceObservation observeExtractorSources(List<SuperAgentKgEntity> entities,
+                                                      List<SuperAgentKgRelation> relations,
+                                                      List<SuperAgentKgEvidence> evidences) {
+        LinkedHashMap<String, long[]> counts = new LinkedHashMap<>();
+        for (SuperAgentKgEntity entity : safeList(entities)) {
+            incrementSourceCount(counts, extractorSourcesOrUnknown(entity), 0);
+        }
+        for (SuperAgentKgRelation relation : safeList(relations)) {
+            incrementSourceCount(counts, extractorSourcesOrUnknown(relation), 1);
+        }
+        for (SuperAgentKgEvidence evidence : safeList(evidences)) {
+            incrementSourceCount(counts, extractorSourcesOrUnknown(evidence), 2);
+        }
+        List<GraphRagEvaluationReport.ExtractorSourceStat> stats = counts.entrySet().stream()
+            .map(entry -> GraphRagEvaluationReport.ExtractorSourceStat.builder()
+                .source(entry.getKey())
+                .entityCount(entry.getValue()[0])
+                .relationCount(entry.getValue()[1])
+                .evidenceCount(entry.getValue()[2])
+                .totalCount(entry.getValue()[0] + entry.getValue()[1] + entry.getValue()[2])
+                .build())
+            .toList();
+        List<String> sources = stats.stream()
+            .map(GraphRagEvaluationReport.ExtractorSourceStat::getSource)
+            .toList();
+        return new SourceObservation(sources, stats);
+    }
+
+    private void incrementSourceCount(Map<String, long[]> counts, List<String> sources, int index) {
+        for (String source : safeList(sources)) {
+            if (StrUtil.isBlank(source)) {
+                continue;
+            }
+            counts.computeIfAbsent(source, ignored -> new long[3])[index]++;
+        }
+    }
+
+    private List<String> extractorSourcesOrUnknown(SuperAgentKgEntity entity) {
+        List<String> sources = extractorSources(entity);
+        return sources.isEmpty() ? List.of("unknown") : sources;
+    }
+
+    private List<String> extractorSourcesOrUnknown(SuperAgentKgRelation relation) {
+        List<String> sources = extractorSources(relation);
+        return sources.isEmpty() ? List.of("unknown") : sources;
+    }
+
+    private List<String> extractorSourcesOrUnknown(SuperAgentKgEvidence evidence) {
+        List<String> sources = extractorSources(evidence);
+        return sources.isEmpty() ? List.of("unknown") : sources;
+    }
+
+    private List<String> candidateSources(SuperAgentKgEntity entity) {
+        return candidateSources(readMap(entity == null ? null : entity.getMetadataJson()));
+    }
+
+    private List<String> candidateSources(SuperAgentKgRelation relation) {
+        return candidateSources(readMap(relation == null ? null : relation.getMetadataJson()));
+    }
+
+    private List<String> candidateSources(Map<String, Object> metadata) {
+        LinkedHashSet<String> sources = new LinkedHashSet<>();
+        addSourceValues(sources, metadata.get("candidateSources"));
+        addNestedSourceMetadata(sources, metadata.get("sourceMetadata"), "candidateSources");
+        return List.copyOf(sources);
+    }
+
+    private List<String> extractorSources(SuperAgentKgEntity entity) {
+        return extractorSources(readMap(entity == null ? null : entity.getMetadataJson()));
+    }
+
+    private List<String> extractorSources(SuperAgentKgRelation relation) {
+        return extractorSources(readMap(relation == null ? null : relation.getMetadataJson()));
+    }
+
+    private List<String> extractorSources(SuperAgentKgEvidence evidence) {
+        return extractorSources(readMap(evidence == null ? null : evidence.getMetadataJson()));
+    }
+
+    private List<String> extractorSources(Map<String, Object> metadata) {
+        LinkedHashSet<String> sources = new LinkedHashSet<>();
+        addSourceValues(sources, metadata.get("extractorSources"));
+        addSourceValues(sources, metadata.get("sourceType"));
+        addNestedSourceMetadata(sources, metadata.get("sourceMetadata"), "extractorSources");
+        addNestedSourceMetadata(sources, metadata.get("sourceMetadata"), "sourceType");
+        return List.copyOf(sources);
+    }
+
+    private String sourceType(SuperAgentKgEvidence evidence) {
+        return stringValue(readMap(evidence == null ? null : evidence.getMetadataJson()).get("sourceType"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void addNestedSourceMetadata(Set<String> sources, Object value, String key) {
+        if (value instanceof List<?> items) {
+            for (Object item : items) {
+                if (item instanceof Map<?, ?> map) {
+                    addSourceValues(sources, ((Map<String, Object>) map).get(key));
+                }
+            }
+        }
+    }
+
+    private void addSourceValues(Set<String> sources, Object value) {
+        for (String source : readStringList(value)) {
+            String normalized = StrUtil.blankToDefault(source, "").trim();
+            if (StrUtil.isNotBlank(normalized)) {
+                sources.add(normalized);
+            }
+        }
     }
 
     private boolean intersects(Set<String> left, Set<String> right) {
@@ -999,5 +1173,9 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
     }
 
     private record RelationMatch(SuperAgentKgRelation relation, String reason) {
+    }
+
+    private record SourceObservation(List<String> sources,
+                                     List<GraphRagEvaluationReport.ExtractorSourceStat> stats) {
     }
 }

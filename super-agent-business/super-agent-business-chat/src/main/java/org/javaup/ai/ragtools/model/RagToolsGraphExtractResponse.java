@@ -21,6 +21,8 @@ public class RagToolsGraphExtractResponse {
 
     private List<Community> communities = new ArrayList<>();
 
+    private Map<String, Object> metadata;
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

@@ -30,7 +30,7 @@ class GraphRagEvaluationServiceImplTest {
             "OrderService",
             "orderservice",
             "SYSTEM",
-            "{\"aliases\":[\"订单服务\"],\"rankBoost\":0.9}"
+            "{\"aliases\":[\"订单服务\"],\"rankBoost\":0.9,\"candidateSources\":[\"textPhrase\"],\"extractorSources\":[\"rule\",\"ner\"]}"
         );
         SuperAgentKgEntity paymentService = entity(
             1002L,
@@ -40,7 +40,9 @@ class GraphRagEvaluationServiceImplTest {
             "{\"aliases\":[\"支付服务\"]}"
         );
         SuperAgentKgRelation relation = relation(2001L, 1001L, 1002L, "CALLS");
+        relation.setMetadataJson("{\"candidateSources\":[\"rule.relationWord\"],\"extractorSources\":[\"rule\"]}");
         SuperAgentKgEvidence evidence = evidence(3001L, null, 2001L, "OrderService 调用 PaymentService 完成支付。");
+        evidence.setMetadataJson("{\"extractorSources\":[\"rule\",\"ner\"],\"sourceType\":\"rule\"}");
         GraphRagEvaluationServiceImpl service = service(
             List.of(orderService, paymentService),
             List.of(relation),
@@ -83,6 +85,15 @@ class GraphRagEvaluationServiceImplTest {
         assertThat(report.getEvidenceResults().get(0).getActualEvidenceId()).isEqualTo(3001L);
         assertThat(report.getQualityReport()).isNotNull();
         assertThat(report.getQualityReport().getQualityLevel()).isEqualTo(GraphRagQualityReport.LEVEL_STRONG);
+        assertThat(report.getObservedExtractorSources()).contains("rule", "ner", "unknown");
+        assertThat(report.getExtractorSourceStats()).extracting(GraphRagEvaluationReport.ExtractorSourceStat::getSource)
+            .contains("rule", "ner", "unknown");
+        assertThat(report.getEntityResults().get(0).getActualCandidateSources()).containsExactly("textPhrase");
+        assertThat(report.getEntityResults().get(0).getActualExtractorSources()).containsExactly("rule", "ner");
+        assertThat(report.getRelationResults().get(0).getActualCandidateSources()).containsExactly("rule.relationWord");
+        assertThat(report.getRelationResults().get(0).getActualExtractorSources()).containsExactly("rule");
+        assertThat(report.getEvidenceResults().get(0).getActualExtractorSources()).containsExactly("rule", "ner");
+        assertThat(report.getEvidenceResults().get(0).getActualSourceType()).isEqualTo("rule");
     }
 
     @Test
@@ -240,6 +251,10 @@ class GraphRagEvaluationServiceImplTest {
         assertThat(report.getFailedSuites()).hasSize(1);
         assertThat(report.getFailedSuites().get(0).getSuiteId()).isEqualTo("graph-miss");
         assertThat(report.getFailedSuites().get(0).getReason()).contains("实体未命中");
+        assertThat(report.getFailedSuites().get(0).getObservedExtractorSources()).contains("unknown");
+        assertThat(report.getFailedSuites().get(0).getMissingEntityNames()).containsExactly("InventoryService");
+        assertThat(report.getFailedSuites().get(0).getMissingRelationNames()).isEmpty();
+        assertThat(report.getFailedSuites().get(0).getMissingEvidenceHints()).isEmpty();
     }
 
     @Test

@@ -1,10 +1,27 @@
 import unittest
+from unittest.mock import patch
 
+import rag_tools.graph_extract as graph_extract
 from rag_tools.graph_extract import extract_graph
 from rag_tools.schemas.graph_extract import GraphChunk, GraphExtractRequest
 
 
 class GraphExtractTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._env_patch = patch.dict(
+            "os.environ",
+            {"SUPER_AGENT_GRAPH_RAG_NER_MODEL_ENABLED": "false"},
+            clear=False,
+        )
+        self._env_patch.start()
+
+    def tearDown(self) -> None:
+        self._env_patch.stop()
+        graph_extract._NER_MODEL_PIPELINE = None
+        graph_extract._NER_MODEL_LOAD_ATTEMPTED = False
+        graph_extract._NER_MODEL_STATUS = None
+        graph_extract._NER_MODEL_CONFIG_KEY = None
+
     def test_extract_graph_merges_aliases_and_builds_relation_community(self) -> None:
         response = extract_graph(
             GraphExtractRequest(
@@ -180,6 +197,99 @@ class GraphExtractTest(unittest.TestCase):
         }
         self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
         self.assertFalse(any("TITLE" in pair or "CONTENT" in pair or "QUESTIONS" in pair for pair in relation_pairs))
+        self.assertFalse(any("[QUESTIONS]" in evidence.quote_text or "核心内容是什么" in evidence.quote_text for evidence in response.evidences))
+        self.assertTrue(all(evidence.metadata.get("extractorSources") for evidence in response.evidences))
+
+    def test_extract_graph_marks_ner_sources_and_keeps_evidence_grounded(self) -> None:
+        with patch.dict("os.environ", {"SUPER_AGENT_GRAPH_RAG_NER_MODEL_ENABLED": "false"}, clear=False):
+            response = extract_graph(
+                GraphExtractRequest(
+                    documentId=10,
+                    taskId=214,
+                    chunks=[
+                        GraphChunk(
+                            chunkId=2141,
+                            chunkNo=1,
+                            title="组件职责",
+                            sectionPath="平台/组件职责",
+                            text="BillingGateway 调用 OrderService。支付负责人负责发布审批。",
+                            contentWithWeight=(
+                                "[TITLE] 组件职责 [QUESTIONS] BillingGateway 有哪些职责？ "
+                                "[CONTENT] BillingGateway 调用 OrderService。支付负责人负责发布审批。"
+                            ),
+                        )
+                    ],
+                )
+            )
+
+        billing_gateway = next(entity for entity in response.entities if entity.name == "BillingGateway")
+        order_service = next(entity for entity in response.entities if entity.name == "OrderService")
+        payment_owner = next(entity for entity in response.entities if entity.name == "支付负责人")
+        self.assertIn("ner", billing_gateway.metadata.get("extractorSources"))
+        self.assertIn("ner", order_service.metadata.get("extractorSources"))
+        self.assertIn("ner", payment_owner.metadata.get("extractorSources"))
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertIn(("BillingGateway", "CALLS", "OrderService"), relation_pairs)
+        self.assertTrue(all("[TITLE]" not in evidence.quote_text and "[QUESTIONS]" not in evidence.quote_text for evidence in response.evidences))
+        self.assertTrue(all(evidence.metadata.get("sourceType") in {"rule", "ner"} for evidence in response.evidences))
+        self.assertIn("extractorLayers", response.metadata)
+        self.assertIn("extractorSourceCounts", response.metadata)
+        self.assertTrue(any(layer.get("name") == "ner.model" and layer.get("status") == "disabled" for layer in response.metadata.get("extractorLayers")))
+
+    def test_extract_graph_uses_configurable_model_ner_candidates_when_enabled(self) -> None:
+        class FakeNerPipeline:
+            def __call__(self, text: str):
+                return [
+                    {"word": "新风控平台", "entity_group": "ORG"},
+                    {"word": "RiskGateway", "entity_group": "SYSTEM"},
+                ]
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SUPER_AGENT_GRAPH_RAG_NER_MODEL_ENABLED": "true",
+                "SUPER_AGENT_GRAPH_RAG_NER_MODEL_NAME": "local-test-ner",
+            },
+            clear=False,
+        ), patch.object(graph_extract, "_load_ner_model_pipeline", return_value=FakeNerPipeline()):
+            response = extract_graph(
+                GraphExtractRequest(
+                    documentId=10,
+                    taskId=215,
+                    chunks=[
+                        GraphChunk(
+                            chunkId=2151,
+                            chunkNo=1,
+                            title="风控链路",
+                            sectionPath="平台/风控链路",
+                            text="新风控平台调用 RiskGateway 完成交易风控。",
+                            contentWithWeight="新风控平台调用 RiskGateway 完成交易风控。",
+                        )
+                    ],
+                )
+            )
+
+        platform = next(entity for entity in response.entities if entity.name == "新风控平台")
+        gateway = next(entity for entity in response.entities if entity.name == "RiskGateway")
+        self.assertIn("ner.model.transformers.org", platform.metadata.get("candidateSources"))
+        self.assertIn("ner.model.transformers.system", gateway.metadata.get("candidateSources"))
+        self.assertIn("ner", platform.metadata.get("extractorSources"))
+        self.assertIn("ner", gateway.metadata.get("extractorSources"))
+        self.assertTrue(any(evidence.entity_id == platform.id and evidence.quote_text for evidence in response.evidences))
+
+        model_layer = next(layer for layer in response.metadata.get("extractorLayers") if layer.get("name") == "ner.model")
+        self.assertEqual("loaded", model_layer.get("status"))
+        self.assertEqual("local-test-ner", model_layer.get("modelName"))
+        self.assertGreaterEqual(response.metadata.get("candidateSourceCounts", {}).get("ner.model.transformers.org", 0), 1)
 
     def test_extract_graph_captures_permission_related_recording_phrase_across_chunks(self) -> None:
         response = extract_graph(
