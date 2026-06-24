@@ -34,7 +34,13 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
             objectMapper
         );
 
-        service.markRunning(10L, 20L, "EXTRACTING", 1, 2, Map.of("chunkCount", 3));
+        service.markRunning(10L, 20L, "EXTRACTING", 1, 2, Map.of(
+            "chunkCount", 3,
+            "extractorMetadata", Map.of(
+                "extractorSourceCounts", Map.of("rule", 12, "ner", 4),
+                "extractorLayers", List.of(Map.of("name", "ner.model", "status", "disabled"))
+            )
+        ));
 
         Map<String, Object> runningExtJson = objectMapper.readValue(task.getExtJson(), MAP_TYPE);
         assertThat(runningExtJson).containsEntry("graph_index_status", "SUCCESS");
@@ -63,6 +69,9 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
             .containsEntry("relationCount", 5)
             .containsEntry("evidenceCount", 6)
             .containsEntry("communityCount", 7);
+        assertThat(String.valueOf(successState.get("extractorMetadata")))
+            .contains("extractorSourceCounts")
+            .contains("ner.model");
         assertThat(logService.logs()).hasSize(2);
     }
 

@@ -727,6 +727,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         merged.setRelations(mergeList(baseResponse.getRelations(), validation.relations()));
         merged.setEvidences(mergeList(baseResponse.getEvidences(), validation.evidences()));
         merged.setCommunities(baseResponse.getCommunities() == null ? new ArrayList<>() : new ArrayList<>(baseResponse.getCommunities()));
+        merged.setMetadata(baseResponse.getMetadata());
         return merged;
     }
 

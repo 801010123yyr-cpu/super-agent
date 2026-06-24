@@ -76,7 +76,7 @@ public class DocumentGraphRagBuildCheckpointServiceImpl implements GraphRagBuild
                 state.put("evidenceCount", result.getEvidenceCount());
                 state.put("communityCount", result.getCommunityCount());
             }
-            updateTaskExtJson(taskId, state);
+            updateTaskExtJson(taskId, state, true);
             saveLog(documentId, taskId, DocumentTaskEventTypeEnum.COMPLETE, DocumentLogLevelEnum.INFO,
                 "GraphRAG 构建完成。", state);
         }
@@ -164,6 +164,12 @@ public class DocumentGraphRagBuildCheckpointServiceImpl implements GraphRagBuild
     }
 
     private void updateTaskExtJson(Long taskId, Map<String, Object> graphRagState) throws JsonProcessingException {
+        updateTaskExtJson(taskId, graphRagState, false);
+    }
+
+    private void updateTaskExtJson(Long taskId,
+                                   Map<String, Object> graphRagState,
+                                   boolean preservePreviousDetail) throws JsonProcessingException {
         if (taskId == null) {
             return;
         }
@@ -172,11 +178,30 @@ public class DocumentGraphRagBuildCheckpointServiceImpl implements GraphRagBuild
             return;
         }
         Map<String, Object> extJson = readExtJson(task.getExtJson());
-        extJson.put(ROOT_KEY, graphRagState);
+        extJson.put(ROOT_KEY, mergePreviousGraphRagState(extJson, graphRagState, preservePreviousDetail));
         SuperAgentDocumentTask update = new SuperAgentDocumentTask();
         update.setExtJson(objectMapper.writeValueAsString(extJson));
         taskMapper.update(update, new LambdaUpdateWrapper<SuperAgentDocumentTask>()
             .eq(SuperAgentDocumentTask::getId, taskId));
+    }
+
+    private Map<String, Object> mergePreviousGraphRagState(Map<String, Object> extJson,
+                                                           Map<String, Object> graphRagState,
+                                                           boolean preservePreviousDetail) {
+        if (!preservePreviousDetail) {
+            return graphRagState;
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        Object previous = extJson.get(ROOT_KEY);
+        if (previous instanceof Map<?, ?> previousState) {
+            previousState.forEach((key, value) -> {
+                if (key instanceof String keyText) {
+                    merged.put(keyText, value);
+                }
+            });
+        }
+        merged.putAll(graphRagState);
+        return merged;
     }
 
     private Map<String, Object> readExtJson(String extJson) {

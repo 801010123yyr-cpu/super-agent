@@ -422,6 +422,12 @@ class GraphRagBuildServiceImplTest {
         InsertCollector evidenceCollector = new InsertCollector();
         InsertCollector communityCollector = new InsertCollector();
         ObjectMapper objectMapper = new ObjectMapper();
+        RecordingCheckpointService checkpointService = new RecordingCheckpointService();
+        RagToolsGraphExtractResponse pythonResponse = new RagToolsGraphExtractResponse();
+        pythonResponse.setMetadata(Map.of(
+            "extractorLayers", List.of(Map.of("name", "ner.model", "status", "disabled")),
+            "extractorSourceCounts", Map.of("rule", 4, "ner", 2)
+        ));
         RecordingGraphExtractionAdvisor extractionAdvisor = new RecordingGraphExtractionAdvisor(context -> GraphRagExtractionAdvice.builder()
             .graphable(true)
             .entities(List.of(
@@ -489,11 +495,11 @@ class GraphRagBuildServiceImplTest {
             relationCollector,
             evidenceCollector,
             communityCollector,
-            new StaticRagToolsClient(new RagToolsGraphExtractResponse()),
+            new StaticRagToolsClient(pythonResponse),
             objectMapper,
             properties(2, 0L),
             new TestRedisLeaseManager(true),
-            new RecordingCheckpointService(),
+            checkpointService,
             extractionAdvisor,
             null,
             null
@@ -514,6 +520,10 @@ class GraphRagBuildServiceImplTest {
         SuperAgentKgRelation relation = relationCollector.items(SuperAgentKgRelation.class).get(0);
         Map<String, Object> relationMetadata = objectMapper.readValue(relation.getMetadataJson(), Map.class);
         assertThat(String.valueOf(relationMetadata.get("sourceMetadata"))).contains("llm.controlled.extract.v1");
+        assertThat(String.valueOf(checkpointService.detail("EXTRACTED").get("extractorMetadata")))
+            .contains("extractorLayers")
+            .contains("ner.model")
+            .contains("extractorSourceCounts");
     }
 
     @Test
