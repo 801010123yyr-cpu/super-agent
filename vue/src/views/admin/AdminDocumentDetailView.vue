@@ -308,7 +308,7 @@
               </div>
             </div>
             <div v-if="chunkDisplayMode === 'grouped'" class="flex flex-col gap-3">
-              <article v-for="group in chunkGroupedRecords" :key="`parent-group-${group.parentBlockId||group.parentBlockNo}`" class="rounded-lg border border-border bg-card overflow-hidden">
+              <article v-for="group in chunkGroupedRecords" :key="`parent-group-${group.parentBlockId||group.parentBlockNo}`" class="rounded-lg border border-border bg-primary/[0.04] overflow-hidden">
                 <div class="flex items-start justify-between gap-3 p-4 max-md:flex-col">
                   <div><strong class="block text-sm text-foreground">父块 P#{{ group.parentBlockNo || '-' }}</strong><p class="mt-0.5 text-xs text-muted-foreground">{{ group.sectionPath || '未识别章节' }}</p></div>
                   <div class="flex flex-wrap items-center gap-2">
@@ -318,20 +318,35 @@
                   </div>
                 </div>
                 <template v-if="!isChunkGroupCollapsed(group.groupKey)">
-                  <div class="flex flex-wrap gap-2 border-t border-border bg-secondary p-3">
+                  <div class="flex flex-wrap gap-2 border-t border-border bg-primary/[0.03] p-3">
                     <button v-for="item in group.items" :key="`group-track-${item.chunkId}`" class="flex flex-col items-center rounded-lg border border-border bg-card px-3 py-2 text-center text-xs hover:border-primary/20" type="button" @click="openChunkDetail(item.chunkId)"><strong class="text-foreground">#{{ item.chunkNo||'-' }}</strong><span class="text-muted-foreground">{{ formatCount(item.tokenCount) }} T</span></button>
                   </div>
                   <div class="overflow-x-auto">
-                    <table class="w-full min-w-[640px] border-collapse text-sm">
-                      <thead><tr class="border-t border-border bg-secondary"><th v-for="h in chunkTableHeads" :key="h" class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">{{ h }}</th></tr></thead>
+                    <table class="w-full min-w-[640px] border-collapse text-sm table-fixed">
+                      <colgroup>
+                        <col style="width:130px">
+                        <col style="width:200px">
+                        <col style="width:120px">
+                        <col style="width:68px">
+                        <col style="width:68px">
+                        <col>
+                      </colgroup>
+                      <thead><tr class="border-t border-border bg-primary/[0.03]">
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">Chunk</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">章节 / 标识</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">来源 / 状态</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">字符</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">Token</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-muted-foreground">内容预览</th>
+                      </tr></thead>
                       <tbody>
-                        <tr v-for="item in group.items" :key="`group-row-${item.chunkId}`" class="cursor-pointer border-t border-border transition-colors hover:bg-primary/[0.03]" @click="openChunkDetail(item.chunkId)">
+                        <tr v-for="item in group.items" :key="`group-row-${item.chunkId}`" class="cursor-pointer border-t border-border bg-primary/[0.03] transition-colors hover:bg-primary/[0.06]" @click="openChunkDetail(item.chunkId)">
                           <td class="p-4"><strong class="block text-[13px] text-foreground">子块 C#{{ item.chunkNo }}</strong><span class="text-xs text-muted-foreground">{{ buildChunkRelationText(item) }}</span></td>
                           <td class="p-4"><strong class="block text-[13px] text-foreground">{{ item.sectionPath||'未识别章节' }}</strong><span class="text-xs text-muted-foreground">P#{{ item.parentBlockNo||'-' }} · 共 {{ item.parentChildCount||0 }} 子块</span></td>
-                          <td class="p-4"><div class="flex flex-col gap-1"><span class="inline-flex rounded-full bg-foreground/[0.06] px-2.5 py-1 text-xs text-foreground">{{ item.sourceTypeName||'未知来源' }}</span><span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold" :class="chunkChipClass(normalizeCode(item.vectorStatus)||'0')">{{ item.vectorStatusName||'未知状态' }}</span></div></td>
+                          <td class="px-3 py-4"><div class="flex flex-col gap-0.5"><span class="truncate text-xs text-muted-foreground">{{ item.sourceTypeName||'-' }}</span><div class="flex items-center gap-1"><component :is="chunkStatusIcon(normalizeCode(item.vectorStatus)||'0')" class="h-3.5 w-3.5 shrink-0" :class="chunkStatusTextClass(normalizeCode(item.vectorStatus)||'0')" /><span class="text-xs font-medium" :class="chunkStatusTextClass(normalizeCode(item.vectorStatus)||'0')">{{ item.vectorStatusName||'-' }}</span></div></div></td>
                           <td class="p-4 text-sm font-semibold text-foreground">{{ formatCount(item.charCount) }}</td>
                           <td class="p-4 text-sm font-semibold text-foreground">{{ formatCount(item.tokenCount) }}</td>
-                          <td class="p-4"><p class="line-clamp-3 text-[13px] text-foreground">{{ item.chunkText }}</p></td>
+                          <td class="p-4"><p class="line-clamp-2 text-[13px] text-foreground">{{ item.chunkText }}</p></td>
                         </tr>
                       </tbody>
                     </table>
@@ -340,13 +355,28 @@
               </article>
             </div>
             <div v-else class="overflow-x-auto rounded-lg border border-border">
-              <table class="w-full min-w-[640px] border-collapse text-sm">
-                <thead><tr class="bg-secondary"><th v-for="h in chunkTableHeads" :key="h" class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">{{ h }}</th></tr></thead>
+              <table class="w-full min-w-[640px] border-collapse text-sm table-fixed">
+                <colgroup>
+                  <col style="width:130px">
+                  <col style="width:200px">
+                  <col style="width:120px">
+                  <col style="width:68px">
+                  <col style="width:68px">
+                  <col>
+                </colgroup>
+                <thead><tr class="bg-primary/[0.03]">
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">Chunk</th>
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">章节 / 标识</th>
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">来源 / 状态</th>
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">字符</th>
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">Token</th>
+                  <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">内容预览</th>
+                </tr></thead>
                 <tbody>
-                  <tr v-for="item in chunkRecords" :key="item.chunkId" class="cursor-pointer border-b border-border transition-colors hover:bg-primary/[0.03] last:border-0" @click="openChunkDetail(item.chunkId)">
+                  <tr v-for="item in chunkRecords" :key="item.chunkId" class="cursor-pointer border-b border-border bg-primary/[0.03] transition-colors hover:bg-primary/[0.06] last:border-0" @click="openChunkDetail(item.chunkId)">
                     <td class="p-4"><strong class="block text-[13px] text-foreground">子块 C#{{ item.chunkNo }}</strong><span class="text-xs text-muted-foreground">{{ buildChunkRelationText(item) }}</span></td>
                     <td class="p-4"><strong class="block text-[13px] text-foreground">{{ item.sectionPath||'未识别章节' }}</strong><span class="text-xs text-muted-foreground">P#{{ item.parentBlockNo||'-' }} · 共 {{ item.parentChildCount||0 }} 子块</span></td>
-                    <td class="p-4"><div class="flex flex-col gap-1"><span class="inline-flex rounded-full bg-foreground/[0.06] px-2.5 py-1 text-xs text-foreground">{{ item.sourceTypeName||'未知来源' }}</span><span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold" :class="chunkChipClass(normalizeCode(item.vectorStatus)||'0')">{{ item.vectorStatusName||'未知状态' }}</span></div></td>
+                    <td class="px-3 py-4"><div class="flex flex-col gap-0.5"><span class="truncate text-xs text-muted-foreground">{{ item.sourceTypeName||'-' }}</span><div class="flex items-center gap-1"><component :is="chunkStatusIcon(normalizeCode(item.vectorStatus)||'0')" class="h-3.5 w-3.5 shrink-0" :class="chunkStatusTextClass(normalizeCode(item.vectorStatus)||'0')" /><span class="truncate text-xs font-medium" :class="chunkStatusTextClass(normalizeCode(item.vectorStatus)||'0')">{{ item.vectorStatusName||'-' }}</span></div></div></td>
                     <td class="p-4 text-sm font-semibold text-foreground">{{ formatCount(item.charCount) }}</td>
                     <td class="p-4 text-sm font-semibold text-foreground">{{ formatCount(item.tokenCount) }}</td>
                     <td class="p-4"><p class="line-clamp-3 text-[13px] text-foreground">{{ item.chunkText }}</p></td>
@@ -527,7 +557,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, XMarkIcon, DocumentTextIcon, ClockIcon, ExclamationCircleIcon } from '@heroicons/vue/24/outline'
 import { APIError, manageApi } from '../../api/api'
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge.vue'
 import { formatCount, formatDateTime, hasCode, normalizeCode } from '../../utils/manageFormat'
@@ -2284,6 +2314,14 @@ function chunkChipClass(code) {
   if (code === '2') return 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
   if (code === '3') return 'bg-destructive/10 text-destructive'
   return 'bg-foreground/[0.06] text-muted-foreground'
+}
+function chunkStatusIcon(code) {
+  if (code === '3') return ExclamationCircleIcon
+  return ClockIcon
+}
+function chunkStatusTextClass(code) {
+  if (code === '3') return 'text-[#2f7d62]'
+  return 'text-muted-foreground'
 }
 </script>
 
