@@ -1,9 +1,11 @@
 package org.javaup.ai.manage.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.javaup.ai.manage.data.SuperAgentDocumentTask;
 import org.javaup.ai.manage.data.SuperAgentKgEntity;
 import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
@@ -46,7 +48,8 @@ class GraphRagEvaluationServiceImplTest {
         GraphRagEvaluationServiceImpl service = service(
             List.of(orderService, paymentService),
             List.of(relation),
-            List.of(evidence)
+            List.of(evidence),
+            "{\"graphRagBuild\":{\"extractorMetadata\":{\"llmExtractionAdvisor\":{\"strategy\":\"llm.controlled.extract.v1\",\"enabled\":true,\"called\":true,\"status\":\"accepted\",\"acceptedEntityCount\":2,\"acceptedRelationCount\":1,\"acceptedEvidenceCount\":3}}}}"
         );
 
         GraphRagEvaluationSuite suite = GraphRagEvaluationSuite.builder()
@@ -94,6 +97,14 @@ class GraphRagEvaluationServiceImplTest {
         assertThat(report.getRelationResults().get(0).getActualExtractorSources()).containsExactly("rule");
         assertThat(report.getEvidenceResults().get(0).getActualExtractorSources()).containsExactly("rule", "ner");
         assertThat(report.getEvidenceResults().get(0).getActualSourceType()).isEqualTo("rule");
+        assertThat(report.getLlmExtractionAdvisor())
+            .containsEntry("strategy", "llm.controlled.extract.v1")
+            .containsEntry("status", "accepted")
+            .containsEntry("acceptedEntityCount", 2);
+
+        GraphRagEvaluationBatchReport batchReport = service.evaluateBatch("o6-llm", "O6 LLM advisor", List.of(suite));
+        assertThat(batchReport.getLlmExtractionAdvisorStatusCounts()).containsEntry("accepted", 1L);
+        assertThat(batchReport.getLlmExtractionAdvisorRejectedReasons()).isEmpty();
     }
 
     @Test
@@ -130,6 +141,54 @@ class GraphRagEvaluationServiceImplTest {
         assertThat(report.getEntityResults().get(0).getMatched()).isFalse();
         assertThat(report.getRelationResults().get(0).getReason()).contains("终点实体");
         assertThat(report.getEvidenceResults().get(0).getMatched()).isFalse();
+    }
+
+    @Test
+    void forbiddenStrongRelationFailsSuiteEvenWhenRecallMatches() {
+        SuperAgentKgEntity platform = entity(1001L, "智能客服平台", "智能客服平台", "SYSTEM", "{}");
+        SuperAgentKgEntity gitlab = entity(1002L, "GitLab", "gitlab", "SYSTEM", "{}");
+        SuperAgentKgRelation weakEvidencePromotedToStrong = relation(2001L, 1001L, 1002L, "DEPENDS_ON");
+        weakEvidencePromotedToStrong.setMetadataJson("{\"extractorSources\":[\"llm.controlled.extract.v1\"],\"sourceMetadata\":[{\"supportMode\":\"LIST_MEMBERSHIP\",\"requestedRelationType\":\"DEPENDS_ON\",\"effectiveRelationType\":\"DEPENDS_ON\"}]}");
+        GraphRagEvaluationServiceImpl service = service(
+            List.of(platform, gitlab),
+            List.of(weakEvidencePromotedToStrong),
+            List.of()
+        );
+
+        GraphRagEvaluationSuite suite = GraphRagEvaluationSuite.builder()
+            .suiteId("o6-forbidden-strong-relation")
+            .documentId(10L)
+            .taskId(20L)
+            .expectedEntities(List.of(
+                GraphRagEvaluationSuite.ExpectedEntity.builder().name("智能客服平台").build(),
+                GraphRagEvaluationSuite.ExpectedEntity.builder().name("GitLab").build()
+            ))
+            .forbiddenRelations(List.of(GraphRagEvaluationSuite.ForbiddenRelation.builder()
+                .sourceName("智能客服平台")
+                .targetName("GitLab")
+                .relationType("DEPENDS_ON")
+                .reason("清单型弱证据不允许升级为 DEPENDS_ON。")
+                .build()))
+            .build();
+
+        GraphRagEvaluationReport report = service.evaluate(suite);
+
+        assertThat(report.getOverallRecall()).isEqualTo(1D);
+        assertThat(report.getRelationPrecision()).isZero();
+        assertThat(report.getForbiddenRelationCount()).isEqualTo(1L);
+        assertThat(report.getViolatedForbiddenRelationCount()).isEqualTo(1L);
+        assertThat(report.getForbiddenRelationResults().get(0).getViolated()).isTrue();
+        assertThat(report.getPassed()).isFalse();
+        assertThat(report.getEvaluationLevel()).isEqualTo(GraphRagQualityReport.LEVEL_WEAK);
+
+        GraphRagEvaluationBatchReport batchReport = service.evaluateBatch("o6", "O6", List.of(suite));
+        assertThat(batchReport.getPassedSuiteCount()).isZero();
+        assertThat(batchReport.getFailedSuiteCount()).isEqualTo(1L);
+        assertThat(batchReport.getViolatedForbiddenRelationCount()).isEqualTo(1L);
+        assertThat(batchReport.getRelationPrecision()).isZero();
+        assertThat(batchReport.getFailedSuites().get(0).getReason()).contains("禁止关系误命中");
+        assertThat(batchReport.getFailedSuites().get(0).getForbiddenRelationViolations())
+            .containsExactly("智能客服平台 -> GitLab (DEPENDS_ON)");
     }
 
     @Test
@@ -255,6 +314,7 @@ class GraphRagEvaluationServiceImplTest {
         assertThat(report.getFailedSuites().get(0).getMissingEntityNames()).containsExactly("InventoryService");
         assertThat(report.getFailedSuites().get(0).getMissingRelationNames()).isEmpty();
         assertThat(report.getFailedSuites().get(0).getMissingEvidenceHints()).isEmpty();
+        assertThat(report.getLlmExtractionAdvisorStatusCounts()).isEmpty();
     }
 
     @Test
@@ -523,7 +583,15 @@ class GraphRagEvaluationServiceImplTest {
     private static GraphRagEvaluationServiceImpl service(List<SuperAgentKgEntity> entities,
                                                          List<SuperAgentKgRelation> relations,
                                                          List<SuperAgentKgEvidence> evidences) {
+        return service(entities, relations, evidences, null);
+    }
+
+    private static GraphRagEvaluationServiceImpl service(List<SuperAgentKgEntity> entities,
+                                                         List<SuperAgentKgRelation> relations,
+                                                         List<SuperAgentKgEvidence> evidences,
+                                                         String taskExtJson) {
         return new GraphRagEvaluationServiceImpl(
+            taskMapper(taskExtJson),
             mapper(SuperAgentKgEntityMapper.class, entities),
             mapper(SuperAgentKgRelationMapper.class, relations),
             mapper(SuperAgentKgEvidenceMapper.class, evidences),
@@ -608,6 +676,32 @@ class GraphRagEvaluationServiceImplTest {
                 }
                 if ("toString".equals(method.getName())) {
                     return mapperType.getSimpleName() + "Proxy";
+                }
+                if ("hashCode".equals(method.getName())) {
+                    return System.identityHashCode(proxy);
+                }
+                if ("equals".equals(method.getName())) {
+                    return proxy == args[0];
+                }
+                return defaultValue(method.getReturnType());
+            }
+        );
+    }
+
+    private static SuperAgentDocumentTaskMapper taskMapper(String taskExtJson) {
+        SuperAgentDocumentTask task = new SuperAgentDocumentTask();
+        task.setId(20L);
+        task.setDocumentId(10L);
+        task.setExtJson(taskExtJson);
+        return (SuperAgentDocumentTaskMapper) Proxy.newProxyInstance(
+            SuperAgentDocumentTaskMapper.class.getClassLoader(),
+            new Class<?>[]{SuperAgentDocumentTaskMapper.class},
+            (proxy, method, args) -> {
+                if ("selectById".equals(method.getName())) {
+                    return taskExtJson == null ? null : task;
+                }
+                if ("toString".equals(method.getName())) {
+                    return "SuperAgentDocumentTaskMapperProxy";
                 }
                 if ("hashCode".equals(method.getName())) {
                     return System.identityHashCode(proxy);

@@ -68,6 +68,12 @@ public class GraphRagExtractionAdvice {
 
         private String relationType;
 
+        private String supportMode;
+
+        private String predicateQuoteText;
+
+        private String relationTypeReason;
+
         private String description;
 
         private Double weight;

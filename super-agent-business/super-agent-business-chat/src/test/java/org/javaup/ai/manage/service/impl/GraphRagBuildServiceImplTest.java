@@ -179,7 +179,9 @@ class GraphRagBuildServiceImplTest {
         assertThat(String.valueOf(extractedDetail.get("extractorMetadata")))
             .contains("extractorLayers")
             .contains("ner.model")
-            .contains("extractorSourceCounts");
+            .contains("extractorSourceCounts")
+            .contains("llmExtractionAdvisor")
+            .contains("disabled");
     }
 
     @Test
@@ -458,6 +460,9 @@ class GraphRagBuildServiceImplTest {
                     .sourceEntityId("E1")
                     .targetEntityId("E2")
                     .relationType("CALLS")
+                    .supportMode("EXPLICIT_ACTION")
+                    .predicateQuoteText("调用")
+                    .relationTypeReason("原文明确说明 OrderService 调用 PaymentService。")
                     .description("OrderService 调用 PaymentService。")
                     .weight(0.93D)
                     .confidence(0.94D)
@@ -520,10 +525,102 @@ class GraphRagBuildServiceImplTest {
         SuperAgentKgRelation relation = relationCollector.items(SuperAgentKgRelation.class).get(0);
         Map<String, Object> relationMetadata = objectMapper.readValue(relation.getMetadataJson(), Map.class);
         assertThat(String.valueOf(relationMetadata.get("sourceMetadata"))).contains("llm.controlled.extract.v1");
+        assertThat(String.valueOf(relationMetadata.get("sourceMetadata")))
+            .contains("accepted_strong")
+            .contains("EXPLICIT_ACTION")
+            .contains("CALLS");
         assertThat(String.valueOf(checkpointService.detail("EXTRACTED").get("extractorMetadata")))
             .contains("extractorLayers")
             .contains("ner.model")
             .contains("extractorSourceCounts");
+        Map<String, Object> extractorMetadata = (Map<String, Object>) checkpointService.detail("EXTRACTED").get("extractorMetadata");
+        Map<String, Object> advisorMetadata = (Map<String, Object>) extractorMetadata.get("llmExtractionAdvisor");
+        assertThat(advisorMetadata)
+            .containsEntry("strategy", "llm.controlled.extract.v1")
+            .containsEntry("status", "accepted")
+            .containsEntry("acceptedEntityCount", 2)
+            .containsEntry("acceptedRelationCount", 1)
+            .containsEntry("acceptedEvidenceCount", 3);
+    }
+
+    @Test
+    void controlledGraphExtractionAdvisorDowngradesWeakSupportStrongRelation() throws Exception {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        ObjectMapper objectMapper = new ObjectMapper();
+        RecordingCheckpointService checkpointService = new RecordingCheckpointService();
+        RecordingGraphExtractionAdvisor extractionAdvisor = new RecordingGraphExtractionAdvisor(context -> GraphRagExtractionAdvice.builder()
+            .graphable(true)
+            .entities(List.of(
+                GraphRagExtractionAdvice.EntityItem.builder()
+                    .id("E1")
+                    .name("智能客服平台")
+                    .normalizedName("智能客服平台")
+                    .entityType("SYSTEM")
+                    .confidence(0.93D)
+                    .sourceChunkIds(List.of(104L))
+                    .build(),
+                GraphRagExtractionAdvice.EntityItem.builder()
+                    .id("E2")
+                    .name("GitLab")
+                    .normalizedName("gitlab")
+                    .entityType("SYSTEM")
+                    .confidence(0.92D)
+                    .sourceChunkIds(List.of(104L))
+                    .build()
+            ))
+            .relations(List.of(GraphRagExtractionAdvice.RelationItem.builder()
+                .id("R1")
+                .sourceEntityId("E1")
+                .targetEntityId("E2")
+                .relationType("DEPENDS_ON")
+                .supportMode("LIST_MEMBERSHIP")
+                .predicateQuoteText("核心平台")
+                .relationTypeReason("二者出现在同一核心平台清单中。")
+                .description("智能客服平台与 GitLab 出现在同一核心平台清单。")
+                .weight(0.82D)
+                .confidence(0.91D)
+                .build()))
+            .evidences(List.of(GraphRagExtractionAdvice.EvidenceItem.builder()
+                .id("EV1")
+                .relationId("R1")
+                .chunkId(104L)
+                .quoteText("适用系统：智能客服平台。核心平台：GitLab。")
+                .confidence(0.9D)
+                .build()))
+            .confidence(0.92D)
+            .reason("chunk 中存在清单型弱关联")
+            .build());
+
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            new StaticRagToolsClient(new RagToolsGraphExtractResponse()),
+            objectMapper,
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            checkpointService,
+            extractionAdvisor,
+            null,
+            null
+        );
+
+        GraphRagBuildResult result = service.rebuildDocumentGraph(10L, 20L, List.of(platformListChunk(104L)));
+
+        assertThat(result.getRelationCount()).isEqualTo(1);
+        SuperAgentKgRelation relation = relationCollector.items(SuperAgentKgRelation.class).get(0);
+        assertThat(relation.getRelationType()).isEqualTo("ASSOCIATED_WITH");
+        Map<String, Object> relationMetadata = objectMapper.readValue(relation.getMetadataJson(), Map.class);
+        assertThat(String.valueOf(relationMetadata.get("sourceMetadata")))
+            .contains("requestedRelationType=DEPENDS_ON")
+            .contains("effectiveRelationType=ASSOCIATED_WITH")
+            .contains("supportMode=LIST_MEMBERSHIP")
+            .contains("downgraded_weak_support");
+        assertThat(evidenceCollector.items(SuperAgentKgEvidence.class)).hasSize(1);
     }
 
     @Test
@@ -532,6 +629,7 @@ class GraphRagBuildServiceImplTest {
         InsertCollector relationCollector = new InsertCollector();
         InsertCollector evidenceCollector = new InsertCollector();
         InsertCollector communityCollector = new InsertCollector();
+        RecordingCheckpointService checkpointService = new RecordingCheckpointService();
         RecordingGraphExtractionAdvisor extractionAdvisor = new RecordingGraphExtractionAdvisor(context -> GraphRagExtractionAdvice.builder()
             .graphable(true)
             .entities(List.of(
@@ -557,7 +655,7 @@ class GraphRagBuildServiceImplTest {
             new ObjectMapper(),
             properties(2, 0L),
             new TestRedisLeaseManager(true),
-            new RecordingCheckpointService(),
+            checkpointService,
             extractionAdvisor,
             null,
             null
@@ -570,6 +668,11 @@ class GraphRagBuildServiceImplTest {
         assertThat(result.getEvidenceCount()).isZero();
         assertThat(extractionAdvisor.callCount()).isEqualTo(1);
         assertThat(entityCollector.items()).isEmpty();
+        Map<String, Object> extractorMetadata = (Map<String, Object>) checkpointService.detail("EXTRACTED").get("extractorMetadata");
+        Map<String, Object> advisorMetadata = (Map<String, Object>) extractorMetadata.get("llmExtractionAdvisor");
+        assertThat(advisorMetadata)
+            .containsEntry("status", "rejected")
+            .containsEntry("rejectedReason", "NO_VALID_ENTITY");
     }
 
     private static GraphRagBuildServiceImpl service(InsertCollector entityCollector,
@@ -815,6 +918,15 @@ class GraphRagBuildServiceImplTest {
         chunk.setParentBlockId(203L);
         chunk.setChunkText("OrderService 调用 PaymentService 完成支付。");
         chunk.setContentWithWeight("OrderService 调用 PaymentService 完成支付。");
+        return chunk;
+    }
+
+    private static SuperAgentDocumentChunk platformListChunk(Long id) {
+        SuperAgentDocumentChunk chunk = new SuperAgentDocumentChunk();
+        chunk.setId(id);
+        chunk.setParentBlockId(204L);
+        chunk.setChunkText("适用系统：智能客服平台。核心平台：GitLab。");
+        chunk.setContentWithWeight("适用系统：智能客服平台。核心平台：GitLab。");
         return chunk;
     }
 

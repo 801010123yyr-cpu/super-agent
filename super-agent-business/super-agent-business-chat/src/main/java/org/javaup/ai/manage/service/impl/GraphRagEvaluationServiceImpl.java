@@ -4,9 +4,11 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.javaup.ai.manage.data.SuperAgentDocumentTask;
 import org.javaup.ai.manage.data.SuperAgentKgEntity;
 import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
@@ -41,6 +43,14 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
 
     private static final double DEFAULT_PASS_THRESHOLD = 0.85D;
 
+    private static final String GRAPH_RAG_BUILD_KEY = "graphRagBuild";
+
+    private static final String EXTRACTOR_METADATA_KEY = "extractorMetadata";
+
+    private static final String LLM_EXTRACTION_ADVISOR_KEY = "llmExtractionAdvisor";
+
+    private final SuperAgentDocumentTaskMapper taskMapper;
+
     private final SuperAgentKgEntityMapper entityMapper;
 
     private final SuperAgentKgRelationMapper relationMapper;
@@ -51,11 +61,13 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
 
     private final ObjectMapper objectMapper;
 
-    public GraphRagEvaluationServiceImpl(SuperAgentKgEntityMapper entityMapper,
+    public GraphRagEvaluationServiceImpl(SuperAgentDocumentTaskMapper taskMapper,
+                                         SuperAgentKgEntityMapper entityMapper,
                                          SuperAgentKgRelationMapper relationMapper,
                                          SuperAgentKgEvidenceMapper evidenceMapper,
                                          GraphRagQualityService qualityService,
                                          ObjectMapper objectMapper) {
+        this.taskMapper = taskMapper;
         this.entityMapper = entityMapper;
         this.relationMapper = relationMapper;
         this.evidenceMapper = evidenceMapper;
@@ -73,12 +85,14 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         Long taskId = suite == null ? null : suite.getTaskId();
         List<GraphRagEvaluationSuite.ExpectedEntity> expectedEntities = safeList(suite.getExpectedEntities());
         List<GraphRagEvaluationSuite.ExpectedRelation> expectedRelations = safeList(suite.getExpectedRelations());
+        List<GraphRagEvaluationSuite.ForbiddenRelation> forbiddenRelations = safeList(suite.getForbiddenRelations());
         List<GraphRagEvaluationSuite.ExpectedEvidence> expectedEvidences = safeList(suite.getExpectedEvidences());
         long expectedEntityCount = requiredCount(expectedEntities);
         long expectedRelationCount = requiredCount(expectedRelations);
+        long forbiddenRelationCount = forbiddenRelations.size();
         long expectedEvidenceCount = requiredCount(expectedEvidences);
         GraphRagQualityReport qualityReport = qualityService.evaluate(documentId, taskId);
-        if (expectedEntityCount + expectedRelationCount + expectedEvidenceCount == 0L) {
+        if (expectedEntityCount + expectedRelationCount + forbiddenRelationCount + expectedEvidenceCount == 0L) {
             return emptyReport(suite, documentId, taskId, qualityReport);
         }
         if (documentId == null || taskId == null) {
@@ -89,9 +103,11 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                 qualityReport,
                 expectedEntities,
                 expectedRelations,
+                forbiddenRelations,
                 expectedEvidences,
                 expectedEntityCount,
                 expectedRelationCount,
+                forbiddenRelationCount,
                 expectedEvidenceCount
             );
         }
@@ -99,6 +115,7 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         List<SuperAgentKgEntity> entities = activeEntities(documentId, taskId);
         List<SuperAgentKgRelation> relations = activeRelations(documentId, taskId);
         List<SuperAgentKgEvidence> evidences = activeEvidences(documentId, taskId);
+        Map<String, Object> llmExtractionAdvisor = llmExtractionAdvisorObservation(taskId);
         Map<Long, SuperAgentKgEntity> entityById = entities.stream()
             .filter(entity -> entity != null && entity.getId() != null)
             .collect(Collectors.toMap(SuperAgentKgEntity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
@@ -113,20 +130,30 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         List<GraphRagEvaluationReport.RelationResult> relationResults = expectedRelations.stream()
             .map(expected -> evaluateRelation(expected, entities, relations, entityById))
             .toList();
+        List<GraphRagEvaluationReport.ForbiddenRelationResult> forbiddenRelationResults = forbiddenRelations.stream()
+            .map(forbidden -> evaluateForbiddenRelation(forbidden, entities, relations, entityById))
+            .toList();
         List<GraphRagEvaluationReport.EvidenceResult> evidenceResults = expectedEvidences.stream()
             .map(expected -> evaluateEvidence(expected, entities, relations, evidences, entityById, relationById))
             .toList();
 
         long matchedEntityCount = matchedRequiredCount(entityResults);
         long matchedRelationCount = matchedRequiredCount(relationResults);
+        long violatedForbiddenRelationCount = forbiddenRelationResults.stream()
+            .filter(result -> Boolean.TRUE.equals(result.getViolated()))
+            .count();
         long matchedEvidenceCount = matchedRequiredCount(evidenceResults);
         double entityRecall = ratio(matchedEntityCount, expectedEntityCount);
         double relationRecall = ratio(matchedRelationCount, expectedRelationCount);
+        double relationPrecision = forbiddenRelationCount == 0L
+            ? 1D
+            : ratio(forbiddenRelationCount - violatedForbiddenRelationCount, forbiddenRelationCount);
         double evidenceRecall = ratio(matchedEvidenceCount, expectedEvidenceCount);
         double overallRecall = overallRecall(entityRecall, expectedEntityCount, relationRecall, expectedRelationCount, evidenceRecall, expectedEvidenceCount);
-        String level = evaluationLevel(overallRecall);
+        double evaluationScore = violatedForbiddenRelationCount > 0L ? Math.min(overallRecall, 0.64D) : overallRecall;
+        String level = evaluationLevel(evaluationScore);
         double passThreshold = passThreshold(suite);
-        boolean passed = overallRecall >= passThreshold;
+        boolean passed = overallRecall >= passThreshold && violatedForbiddenRelationCount == 0L;
 
         return GraphRagEvaluationReport.builder()
             .suiteId(suite.getSuiteId())
@@ -139,23 +166,28 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .passThreshold(passThreshold)
             .passed(passed)
             .evaluationLevel(level)
-            .evaluationScore(overallRecall)
-            .summary(summary(level, overallRecall, entityRecall, relationRecall, evidenceRecall))
+            .evaluationScore(evaluationScore)
+            .summary(summary(level, overallRecall, entityRecall, relationRecall, relationPrecision, evidenceRecall, violatedForbiddenRelationCount))
             .qualityReport(qualityReport)
             .expectedEntityCount(expectedEntityCount)
             .matchedEntityCount(matchedEntityCount)
             .expectedRelationCount(expectedRelationCount)
             .matchedRelationCount(matchedRelationCount)
+            .forbiddenRelationCount(forbiddenRelationCount)
+            .violatedForbiddenRelationCount(violatedForbiddenRelationCount)
             .expectedEvidenceCount(expectedEvidenceCount)
             .matchedEvidenceCount(matchedEvidenceCount)
             .entityRecall(entityRecall)
             .relationRecall(relationRecall)
+            .relationPrecision(relationPrecision)
             .evidenceRecall(evidenceRecall)
             .overallRecall(overallRecall)
             .observedExtractorSources(sourceObservation.sources())
             .extractorSourceStats(sourceObservation.stats())
+            .llmExtractionAdvisor(llmExtractionAdvisor)
             .entityResults(entityResults)
             .relationResults(relationResults)
+            .forbiddenRelationResults(forbiddenRelationResults)
             .evidenceResults(evidenceResults)
             .build();
     }
@@ -179,14 +211,20 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         long matchedEntityCount = reports.stream().mapToLong(report -> longValue(report.getMatchedEntityCount())).sum();
         long expectedRelationCount = reports.stream().mapToLong(report -> longValue(report.getExpectedRelationCount())).sum();
         long matchedRelationCount = reports.stream().mapToLong(report -> longValue(report.getMatchedRelationCount())).sum();
+        long forbiddenRelationCount = reports.stream().mapToLong(report -> longValue(report.getForbiddenRelationCount())).sum();
+        long violatedForbiddenRelationCount = reports.stream().mapToLong(report -> longValue(report.getViolatedForbiddenRelationCount())).sum();
         long expectedEvidenceCount = reports.stream().mapToLong(report -> longValue(report.getExpectedEvidenceCount())).sum();
         long matchedEvidenceCount = reports.stream().mapToLong(report -> longValue(report.getMatchedEvidenceCount())).sum();
 
         double entityRecall = ratio(matchedEntityCount, expectedEntityCount);
         double relationRecall = ratio(matchedRelationCount, expectedRelationCount);
+        double relationPrecision = forbiddenRelationCount == 0L
+            ? 1D
+            : ratio(forbiddenRelationCount - violatedForbiddenRelationCount, forbiddenRelationCount);
         double evidenceRecall = ratio(matchedEvidenceCount, expectedEvidenceCount);
         double overallRecall = overallRecall(entityRecall, expectedEntityCount, relationRecall, expectedRelationCount, evidenceRecall, expectedEvidenceCount);
-        String level = evaluationLevel(overallRecall);
+        double evaluationScore = violatedForbiddenRelationCount > 0L ? Math.min(overallRecall, 0.64D) : overallRecall;
+        String level = evaluationLevel(evaluationScore);
         long passedSuiteCount = reports.stream().filter(this::passed).count();
         long suiteCount = reports.size();
         long failedSuiteCount = suiteCount - passedSuiteCount;
@@ -208,8 +246,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .batchId(batchId)
             .name(name)
             .evaluationLevel(level)
-            .evaluationScore(overallRecall)
-            .summary(batchSummary(level, overallRecall, passRate, suiteCount, failedSuiteCount))
+            .evaluationScore(evaluationScore)
+            .summary(batchSummary(level, overallRecall, relationPrecision, passRate, suiteCount, failedSuiteCount, violatedForbiddenRelationCount))
             .suiteCount(suiteCount)
             .passedSuiteCount(passedSuiteCount)
             .failedSuiteCount(failedSuiteCount)
@@ -217,16 +255,21 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .matchedEntityCount(matchedEntityCount)
             .expectedRelationCount(expectedRelationCount)
             .matchedRelationCount(matchedRelationCount)
+            .forbiddenRelationCount(forbiddenRelationCount)
+            .violatedForbiddenRelationCount(violatedForbiddenRelationCount)
             .expectedEvidenceCount(expectedEvidenceCount)
             .matchedEvidenceCount(matchedEvidenceCount)
             .entityRecall(entityRecall)
             .relationRecall(relationRecall)
+            .relationPrecision(relationPrecision)
             .evidenceRecall(evidenceRecall)
             .overallRecall(overallRecall)
             .passRate(passRate)
             .minSuiteRecall(round(minSuiteRecall))
             .maxSuiteRecall(round(maxSuiteRecall))
             .reports(reports)
+            .llmExtractionAdvisorStatusCounts(llmExtractionAdvisorStatusCounts(reports))
+            .llmExtractionAdvisorRejectedReasons(llmExtractionAdvisorRejectedReasons(reports))
             .failedSuites(failedSuites(reports))
             .build();
     }
@@ -247,6 +290,7 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             report.setQuestion(suite.getQuestion());
             report.setSourceDocument(suite.getSourceDocument());
             report.setPassThreshold(passThreshold(suite));
+            report.setLlmExtractionAdvisor(llmExtractionAdvisorObservation(taskId));
         }
         return report;
     }
@@ -257,9 +301,11 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                                                           GraphRagQualityReport qualityReport,
                                                           List<GraphRagEvaluationSuite.ExpectedEntity> expectedEntities,
                                                           List<GraphRagEvaluationSuite.ExpectedRelation> expectedRelations,
+                                                          List<GraphRagEvaluationSuite.ForbiddenRelation> forbiddenRelations,
                                                           List<GraphRagEvaluationSuite.ExpectedEvidence> expectedEvidences,
                                                           long expectedEntityCount,
                                                           long expectedRelationCount,
+                                                          long forbiddenRelationCount,
                                                           long expectedEvidenceCount) {
         String reason = "未绑定真实 documentId/taskId，无法评测该 GraphRAG baseline。";
         return GraphRagEvaluationReport.builder()
@@ -280,14 +326,18 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .matchedEntityCount(0L)
             .expectedRelationCount(expectedRelationCount)
             .matchedRelationCount(0L)
+            .forbiddenRelationCount(forbiddenRelationCount)
+            .violatedForbiddenRelationCount(0L)
             .expectedEvidenceCount(expectedEvidenceCount)
             .matchedEvidenceCount(0L)
             .entityRecall(0D)
             .relationRecall(0D)
+            .relationPrecision(forbiddenRelationCount == 0L ? 1D : 0D)
             .evidenceRecall(0D)
             .overallRecall(0D)
             .observedExtractorSources(List.of())
             .extractorSourceStats(List.of())
+            .llmExtractionAdvisor(llmExtractionAdvisorObservation(taskId))
             .entityResults(expectedEntities.stream()
                 .map(expected -> GraphRagEvaluationReport.EntityResult.builder()
                     .expectedName(expected == null ? null : expected.getName())
@@ -304,6 +354,15 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                     .expectedRelationType(expected == null ? null : expected.getRelationType())
                     .required(required(expected))
                     .matched(false)
+                    .reason(reason)
+                    .build())
+                .toList())
+            .forbiddenRelationResults(forbiddenRelations.stream()
+                .map(forbidden -> GraphRagEvaluationReport.ForbiddenRelationResult.builder()
+                    .forbiddenSourceName(forbidden == null ? null : forbidden.getSourceName())
+                    .forbiddenTargetName(forbidden == null ? null : forbidden.getTargetName())
+                    .forbiddenRelationType(forbidden == null ? null : forbidden.getRelationType())
+                    .violated(false)
                     .reason(reason)
                     .build())
                 .toList())
@@ -411,6 +470,42 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .build();
     }
 
+    private GraphRagEvaluationReport.ForbiddenRelationResult evaluateForbiddenRelation(
+        GraphRagEvaluationSuite.ForbiddenRelation forbidden,
+        List<SuperAgentKgEntity> entities,
+        List<SuperAgentKgRelation> relations,
+        Map<Long, SuperAgentKgEntity> entityById
+    ) {
+        GraphRagEvaluationSuite.ExpectedRelation expected = forbiddenRelation(forbidden);
+        RelationMatch relationMatch = findRelation(expected, entities, relations);
+        if (relationMatch.relation() == null) {
+            return GraphRagEvaluationReport.ForbiddenRelationResult.builder()
+                .forbiddenSourceName(forbidden == null ? null : forbidden.getSourceName())
+                .forbiddenTargetName(forbidden == null ? null : forbidden.getTargetName())
+                .forbiddenRelationType(forbidden == null ? null : forbidden.getRelationType())
+                .violated(false)
+                .reason("未出现禁止的强类型关系。")
+                .build();
+        }
+        SuperAgentKgRelation relation = relationMatch.relation();
+        SuperAgentKgEntity source = entityById.get(relation.getSourceEntityId());
+        SuperAgentKgEntity target = entityById.get(relation.getTargetEntityId());
+        return GraphRagEvaluationReport.ForbiddenRelationResult.builder()
+            .forbiddenSourceName(forbidden.getSourceName())
+            .forbiddenTargetName(forbidden.getTargetName())
+            .forbiddenRelationType(forbidden.getRelationType())
+            .violated(true)
+            .actualRelationId(relation.getId())
+            .actualSourceEntityId(relation.getSourceEntityId())
+            .actualSourceName(source == null ? null : source.getName())
+            .actualTargetEntityId(relation.getTargetEntityId())
+            .actualTargetName(target == null ? null : target.getName())
+            .actualCandidateSources(candidateSources(relation))
+            .actualExtractorSources(extractorSources(relation))
+            .reason(firstNonBlank(forbidden.getReason(), "命中了禁止的强类型关系：" + relationMatch.reason()))
+            .build();
+    }
+
     private GraphRagEvaluationReport.EvidenceResult evaluateEvidence(GraphRagEvaluationSuite.ExpectedEvidence expected,
                                                                      List<SuperAgentKgEntity> entities,
                                                                      List<SuperAgentKgRelation> relations,
@@ -487,10 +582,17 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
     }
 
     private boolean passed(GraphRagEvaluationReport report) {
-        if (report == null || report.getOverallRecall() == null) {
+        if (report == null) {
             return false;
         }
-        return Boolean.TRUE.equals(report.getPassed()) || report.getOverallRecall() >= passThreshold(report.getPassThreshold());
+        if (report.getPassed() != null) {
+            return Boolean.TRUE.equals(report.getPassed());
+        }
+        if (report.getOverallRecall() == null) {
+            return false;
+        }
+        return report.getOverallRecall() >= passThreshold(report.getPassThreshold())
+            && longValue(report.getViolatedForbiddenRelationCount()) == 0L;
     }
 
     private List<GraphRagEvaluationBatchReport.FailedSuite> failedSuites(List<GraphRagEvaluationReport> reports) {
@@ -506,8 +608,10 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
                 .evaluationLevel(report.getEvaluationLevel())
                 .reason(firstMissReason(report))
                 .observedExtractorSources(safeList(report.getObservedExtractorSources()))
+                .llmExtractionAdvisor(copyMap(report.getLlmExtractionAdvisor()))
                 .missingEntityNames(missingEntityNames(report))
                 .missingRelationNames(missingRelationNames(report))
+                .forbiddenRelationViolations(forbiddenRelationViolations(report))
                 .missingEvidenceHints(missingEvidenceHints(report))
                 .build())
             .toList();
@@ -526,6 +630,14 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             if (required(result.getRequired()) && !Boolean.TRUE.equals(result.getMatched())) {
                 return "关系未命中：" + StrUtil.blankToDefault(result.getExpectedSourceName(), "-")
                     + " -> " + StrUtil.blankToDefault(result.getExpectedTargetName(), "-")
+                    + "，" + result.getReason();
+            }
+        }
+        for (GraphRagEvaluationReport.ForbiddenRelationResult result : safeList(report.getForbiddenRelationResults())) {
+            if (Boolean.TRUE.equals(result.getViolated())) {
+                return "禁止关系误命中：" + StrUtil.blankToDefault(result.getForbiddenSourceName(), "-")
+                    + " -> " + StrUtil.blankToDefault(result.getForbiddenTargetName(), "-")
+                    + relationTypeHint(result.getForbiddenRelationType())
                     + "，" + result.getReason();
             }
         }
@@ -550,6 +662,15 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .map(result -> StrUtil.blankToDefault(result.getExpectedSourceName(), "-")
                 + " -> " + StrUtil.blankToDefault(result.getExpectedTargetName(), "-")
                 + relationTypeHint(result.getExpectedRelationType()))
+            .toList();
+    }
+
+    private List<String> forbiddenRelationViolations(GraphRagEvaluationReport report) {
+        return safeList(report == null ? null : report.getForbiddenRelationResults()).stream()
+            .filter(result -> Boolean.TRUE.equals(result.getViolated()))
+            .map(result -> StrUtil.blankToDefault(result.getForbiddenSourceName(), "-")
+                + " -> " + StrUtil.blankToDefault(result.getForbiddenTargetName(), "-")
+                + relationTypeHint(result.getForbiddenRelationType()))
             .toList();
     }
 
@@ -584,9 +705,11 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
 
     private String batchSummary(String level,
                                 double overallRecall,
+                                double relationPrecision,
                                 double passRate,
                                 long suiteCount,
-                                long failedSuiteCount) {
+                                long failedSuiteCount,
+                                long violatedForbiddenRelationCount) {
         String levelText = switch (level) {
             case GraphRagQualityReport.LEVEL_STRONG -> "较强";
             case GraphRagQualityReport.LEVEL_WATCH -> "需观察";
@@ -596,6 +719,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             + "，样例数 " + suiteCount
             + "，通过率 " + percent(passRate)
             + "，综合召回 " + percent(overallRecall)
+            + "，关系精度 " + percent(relationPrecision)
+            + "，禁止关系误命中 " + violatedForbiddenRelationCount + " 个"
             + "，未通过样例 " + failedSuiteCount + " 个。";
     }
 
@@ -661,6 +786,18 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             .relationType(expected.getRelationType())
             .relationTypeAliases(safeList(expected.getRelationTypeAliases()))
             .required(expected.getRequired())
+            .build();
+    }
+
+    private GraphRagEvaluationSuite.ExpectedRelation forbiddenRelation(GraphRagEvaluationSuite.ForbiddenRelation forbidden) {
+        if (forbidden == null) {
+            return GraphRagEvaluationSuite.ExpectedRelation.builder().build();
+        }
+        return GraphRagEvaluationSuite.ExpectedRelation.builder()
+            .sourceName(forbidden.getSourceName())
+            .targetName(forbidden.getTargetName())
+            .relationType(forbidden.getRelationType())
+            .relationTypeAliases(safeList(forbidden.getRelationTypeAliases()))
             .build();
     }
 
@@ -960,7 +1097,13 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         return GraphRagQualityReport.LEVEL_WEAK;
     }
 
-    private String summary(String level, double overallRecall, double entityRecall, double relationRecall, double evidenceRecall) {
+    private String summary(String level,
+                           double overallRecall,
+                           double entityRecall,
+                           double relationRecall,
+                           double relationPrecision,
+                           double evidenceRecall,
+                           long violatedForbiddenRelationCount) {
         String levelText = switch (level) {
             case GraphRagQualityReport.LEVEL_STRONG -> "较强";
             case GraphRagQualityReport.LEVEL_WATCH -> "需观察";
@@ -970,6 +1113,8 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
             + "，综合召回 " + percent(overallRecall)
             + "，实体召回 " + percent(entityRecall)
             + "，关系召回 " + percent(relationRecall)
+            + "，关系精度 " + percent(relationPrecision)
+            + "，禁止关系误命中 " + violatedForbiddenRelationCount + " 个"
             + "，证据召回 " + percent(evidenceRecall) + "。";
     }
 
@@ -1075,6 +1220,66 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         return !Boolean.FALSE.equals(required);
     }
 
+    private Map<String, Object> llmExtractionAdvisorObservation(Long taskId) {
+        if (taskId == null || taskMapper == null) {
+            return Map.of();
+        }
+        SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+        if (task == null || StrUtil.isBlank(task.getExtJson())) {
+            return Map.of();
+        }
+        Map<String, Object> extJson = readMap(task.getExtJson());
+        Map<String, Object> graphRagBuild = objectMap(extJson.get(GRAPH_RAG_BUILD_KEY));
+        Map<String, Object> extractorMetadata = objectMap(graphRagBuild.get(EXTRACTOR_METADATA_KEY));
+        return copyMap(objectMap(extractorMetadata.get(LLM_EXTRACTION_ADVISOR_KEY)));
+    }
+
+    private Map<String, Long> llmExtractionAdvisorStatusCounts(List<GraphRagEvaluationReport> reports) {
+        LinkedHashMap<String, Long> counts = new LinkedHashMap<>();
+        LinkedHashSet<String> countedTaskKeys = new LinkedHashSet<>();
+        for (GraphRagEvaluationReport report : safeList(reports)) {
+            String taskKey = advisorTaskKey(report);
+            if (StrUtil.isNotBlank(taskKey) && !countedTaskKeys.add(taskKey)) {
+                continue;
+            }
+            String status = stringValue(report == null || report.getLlmExtractionAdvisor() == null
+                ? null
+                : report.getLlmExtractionAdvisor().get("status"));
+            if (StrUtil.isBlank(status)) {
+                continue;
+            }
+            counts.merge(status, 1L, Long::sum);
+        }
+        return counts;
+    }
+
+    private String advisorTaskKey(GraphRagEvaluationReport report) {
+        if (report == null || report.getTaskId() == null || report.getDocumentId() == null) {
+            return "";
+        }
+        return report.getDocumentId() + ":" + report.getTaskId();
+    }
+
+    private List<String> llmExtractionAdvisorRejectedReasons(List<GraphRagEvaluationReport> reports) {
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        for (GraphRagEvaluationReport report : safeList(reports)) {
+            Map<String, Object> advisor = report == null ? Map.of() : copyMap(report.getLlmExtractionAdvisor());
+            String status = stringValue(advisor.get("status"));
+            if (StrUtil.isBlank(status) || !List.of("rejected", "failed", "not_graphable").contains(status)) {
+                continue;
+            }
+            String reason = firstNonBlank(
+                stringValue(advisor.get("rejectedReason")),
+                stringValue(advisor.get("reason")),
+                stringValue(advisor.get("errorMessage"))
+            );
+            if (StrUtil.isNotBlank(reason)) {
+                reasons.add(reason);
+            }
+        }
+        return List.copyOf(reasons);
+    }
+
     private List<SuperAgentKgEntity> activeEntities(Long documentId, Long taskId) {
         return safeList(entityMapper.selectList(new LambdaQueryWrapper<SuperAgentKgEntity>()
             .eq(SuperAgentKgEntity::getDocumentId, documentId)
@@ -1109,6 +1314,24 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> objectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> {
+                if (key != null) {
+                    result.put(String.valueOf(key), item);
+                }
+            });
+            return result;
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> copyMap(Map<String, Object> value) {
+        return value == null || value.isEmpty() ? Map.of() : new LinkedHashMap<>(value);
+    }
+
     private List<String> readStringList(Object value) {
         if (value instanceof List<?> values) {
             List<String> result = new ArrayList<>();
@@ -1126,6 +1349,18 @@ public class GraphRagEvaluationServiceImpl implements GraphRagEvaluationService 
 
     private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StrUtil.isNotBlank(value)) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String normalize(String value) {

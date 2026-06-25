@@ -64,6 +64,9 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
 
     private static final String RANK_ALGORITHM = "java.pagerank.v1";
     private static final String GRAPH_EXTRACTION_STRATEGY_LLM = "llm.controlled.extract.v1";
+    private static final String GRAPH_EXTRACTION_ADVISOR_METADATA_KEY = "llmExtractionAdvisor";
+    private static final String RELATION_TYPE_ASSOCIATED_WITH = "ASSOCIATED_WITH";
+    private static final String SUPPORT_MODE_EXPLICIT_ACTION = "EXPLICIT_ACTION";
     private static final String COMMUNITY_REPORT_STRATEGY_EXTRACTIVE = "extractive.template.v1";
     private static final String COMMUNITY_REPORT_STRATEGY_LLM = "llm.controlled.v1";
     private static final int RANK_ITERATIONS = 30;
@@ -337,12 +340,45 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                                                                     Long taskId,
                                                                     RagToolsGraphExtractRequest request,
                                                                     RagToolsGraphExtractResponse response) {
-        if (extractionAdvisor == null || request == null || response == null || CollUtil.isEmpty(request.getChunks())) {
+        if (response == null) {
             return response;
+        }
+        if (extractionAdvisor == null) {
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                false,
+                false,
+                "disabled",
+                "ADVISOR_DISABLED",
+                null,
+                null,
+                null,
+                0
+            ));
+        }
+        if (request == null || CollUtil.isEmpty(request.getChunks())) {
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                false,
+                "skipped",
+                "NO_CHUNK_CONTEXT",
+                null,
+                null,
+                null,
+                0
+            ));
         }
         GraphRagExtractionContext context = buildGraphExtractionContext(documentId, taskId, request);
         if (CollUtil.isEmpty(context.getChunks())) {
-            return response;
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                false,
+                "skipped",
+                "NO_VALID_CHUNK_CONTEXT",
+                null,
+                null,
+                null,
+                0
+            ));
         }
 
         Optional<GraphRagExtractionAdvice> advice;
@@ -352,19 +388,147 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         catch (RuntimeException exception) {
             log.warn("GraphRAG LLM 受控抽取增强失败，继续使用 Python 抽取结果: documentId={}, taskId={}, message={}",
                 documentId, taskId, exception.getMessage());
-            return response;
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                true,
+                "failed",
+                "ADVISOR_FAILED",
+                null,
+                null,
+                exception.getMessage(),
+                size(context.getChunks())
+            ));
         }
-        if (advice.isEmpty() || !Boolean.TRUE.equals(advice.get().getGraphable())) {
-            return response;
+        if (advice.isEmpty()) {
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                true,
+                "empty",
+                "EMPTY_ADVICE",
+                null,
+                null,
+                null,
+                size(context.getChunks())
+            ));
+        }
+        GraphRagExtractionAdvice extractionAdvice = advice.get();
+        if (!Boolean.TRUE.equals(extractionAdvice.getGraphable())) {
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                true,
+                "not_graphable",
+                StrUtil.blankToDefault(extractionAdvice.getReason(), "NOT_GRAPHABLE"),
+                extractionAdvice,
+                null,
+                null,
+                size(context.getChunks())
+            ));
         }
 
-        GraphExtractionValidation validation = validateGraphExtractionAdvice(advice.get(), context);
+        GraphExtractionValidation validation = validateGraphExtractionAdvice(extractionAdvice, context);
         if (!validation.enhanced()) {
             log.info("GraphRAG 受控抽取增强被拒绝: documentId={}, taskId={}, reason={}",
                 documentId, taskId, validation.rejectedReason());
+            return attachGraphExtractionAdvisorObservation(response, graphExtractionAdvisorObservation(
+                true,
+                true,
+                "rejected",
+                validation.rejectedReason(),
+                extractionAdvice,
+                validation,
+                null,
+                size(context.getChunks())
+            ));
+        }
+        RagToolsGraphExtractResponse merged = mergeGraphExtractionResponse(response, validation);
+        return attachGraphExtractionAdvisorObservation(merged, graphExtractionAdvisorObservation(
+            true,
+            true,
+            "accepted",
+            validation.reason(),
+            extractionAdvice,
+            validation,
+            null,
+            size(context.getChunks())
+        ));
+    }
+
+    private RagToolsGraphExtractResponse attachGraphExtractionAdvisorObservation(RagToolsGraphExtractResponse response,
+                                                                                Map<String, Object> observation) {
+        if (response == null || observation == null || observation.isEmpty()) {
             return response;
         }
-        return mergeGraphExtractionResponse(response, validation);
+        Map<String, Object> metadata = copyMetadata(response.getMetadata());
+        if (metadata == null) {
+            metadata = new LinkedHashMap<>();
+        }
+        metadata.put(GRAPH_EXTRACTION_ADVISOR_METADATA_KEY, observation);
+        response.setMetadata(metadata);
+        return response;
+    }
+
+    private Map<String, Object> graphExtractionAdvisorObservation(boolean enabled,
+                                                                  boolean called,
+                                                                  String status,
+                                                                  String reason,
+                                                                  GraphRagExtractionAdvice advice,
+                                                                  GraphExtractionValidation validation,
+                                                                  String errorMessage,
+                                                                  int contextChunkCount) {
+        Map<String, Object> observation = metadata(
+            "strategy", GRAPH_EXTRACTION_STRATEGY_LLM,
+            "enabled", enabled,
+            "called", called,
+            "status", status,
+            "reason", limit(reason, 300),
+            "contextChunkCount", contextChunkCount
+        );
+        if (StrUtil.isNotBlank(errorMessage)) {
+            observation.put("errorMessage", limit(errorMessage, 300));
+        }
+        if (advice != null) {
+            observation.put("graphable", Boolean.TRUE.equals(advice.getGraphable()));
+            observation.put("adviceConfidence", rounded(bounded(toDouble(advice.getConfidence(), 0D))));
+            observation.put("adviceEntityCount", size(advice.getEntities()));
+            observation.put("adviceRelationCount", size(advice.getRelations()));
+            observation.put("adviceEvidenceCount", size(advice.getEvidences()));
+        }
+        if (validation != null) {
+            observation.put("acceptedEntityCount", size(validation.entities()));
+            observation.put("acceptedRelationCount", size(validation.relations()));
+            observation.put("acceptedEvidenceCount", size(validation.evidences()));
+            Map<String, Long> mappingStatusCounts = relationTypeMappingStatusCounts(validation.relations());
+            if (!mappingStatusCounts.isEmpty()) {
+                observation.put("relationTypeMappingStatusCounts", mappingStatusCounts);
+                observation.put("downgradedRelationCount", mappingStatusCounts.entrySet().stream()
+                    .filter(entry -> entry.getKey() != null && entry.getKey().startsWith("downgraded"))
+                    .mapToLong(Map.Entry::getValue)
+                    .sum());
+            }
+            observation.put("accepted", validation.enhanced());
+            if (StrUtil.isNotBlank(validation.rejectedReason())) {
+                observation.put("rejectedReason", validation.rejectedReason());
+            }
+            if (validation.confidence() > 0D) {
+                observation.put("acceptedConfidence", rounded(validation.confidence()));
+            }
+        }
+        return observation;
+    }
+
+    private Map<String, Long> relationTypeMappingStatusCounts(List<RagToolsGraphExtractResponse.Relation> relations) {
+        LinkedHashMap<String, Long> counts = new LinkedHashMap<>();
+        for (RagToolsGraphExtractResponse.Relation relation : relations) {
+            if (relation == null || relation.getMetadata() == null) {
+                continue;
+            }
+            String status = String.valueOf(relation.getMetadata().getOrDefault("relationTypeMappingStatus", ""));
+            if (StrUtil.isBlank(status)) {
+                continue;
+            }
+            counts.merge(status, 1L, Long::sum);
+        }
+        return counts;
     }
 
     private GraphRagExtractionContext buildGraphExtractionContext(Long documentId,
@@ -537,6 +701,13 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 "sourceType", GRAPH_EXTRACTION_STRATEGY_LLM,
                 "sourceRelationId", candidate.localRelationId(),
                 "sourceEntityIds", List.of(candidate.sourceEntityId(), candidate.targetEntityId()),
+                "requestedRelationType", candidate.requestedRelationType(),
+                "effectiveRelationType", candidate.relationType(),
+                "supportMode", candidate.supportMode(),
+                "predicateQuoteText", candidate.predicateQuoteText(),
+                "relationTypeReason", candidate.relationTypeReason(),
+                "relationTypeMappingStatus", candidate.relationTypeMappingStatus(),
+                "relationTypeMappingReason", candidate.relationTypeMappingReason(),
                 "confidence", candidate.confidence()
             ));
             relations.add(relation);
@@ -550,7 +721,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 continue;
             }
             for (GraphRagExtractionAdvice.EvidenceItem evidenceItem : entry.getValue()) {
-                RagToolsGraphExtractResponse.Evidence evidence = buildGraphExtractionEvidence(evidenceItem, globalEntityId, null, chunkById, evidenceIndex++);
+                RagToolsGraphExtractResponse.Evidence evidence = buildGraphExtractionEvidence(evidenceItem, globalEntityId, null, null, chunkById, evidenceIndex++);
                 if (evidence != null) {
                     evidences.add(evidence);
                     addEvidenceIdToEntity(entities, globalEntityId, evidence.getId());
@@ -562,8 +733,9 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             if (StrUtil.isBlank(globalRelationId)) {
                 continue;
             }
+            RelationExtractionCandidate relationCandidate = relationCandidates.get(entry.getKey());
             for (GraphRagExtractionAdvice.EvidenceItem evidenceItem : entry.getValue()) {
-                RagToolsGraphExtractResponse.Evidence evidence = buildGraphExtractionEvidence(evidenceItem, null, globalRelationId, chunkById, evidenceIndex++);
+                RagToolsGraphExtractResponse.Evidence evidence = buildGraphExtractionEvidence(evidenceItem, null, globalRelationId, relationCandidate, chunkById, evidenceIndex++);
                 if (evidence != null) {
                     evidences.add(evidence);
                     addEvidenceIdToRelation(relations, globalRelationId, evidence.getId());
@@ -637,12 +809,43 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         if (StrUtil.isBlank(relationType)) {
             return null;
         }
+        String supportMode = normalizeGraphType(relation.getSupportMode());
+        if (StrUtil.isBlank(supportMode)) {
+            supportMode = "UNKNOWN";
+        }
+        String predicateQuoteText = limit(StrUtil.blankToDefault(relation.getPredicateQuoteText(), ""), 360);
+        String relationTypeReason = limit(StrUtil.blankToDefault(relation.getRelationTypeReason(), ""), 600);
+        String effectiveRelationType = relationType;
+        String mappingStatus = isStrongRelationType(relationType) ? "accepted_strong" : "accepted_weak";
+        String mappingReason = isStrongRelationType(relationType)
+            ? "explicit action support accepted"
+            : "weak relation type accepted";
+        if (isStrongRelationType(relationType)) {
+            EntityExtractionCandidate source = entityCandidates.get(relation.getSourceEntityId());
+            EntityExtractionCandidate target = entityCandidates.get(relation.getTargetEntityId());
+            if (!SUPPORT_MODE_EXPLICIT_ACTION.equals(supportMode)) {
+                effectiveRelationType = RELATION_TYPE_ASSOCIATED_WITH;
+                mappingStatus = "downgraded_weak_support";
+                mappingReason = "strong relation requires EXPLICIT_ACTION supportMode";
+            }
+            else if (!isPredicateQuoteTextMeaningful(predicateQuoteText, source, target)) {
+                effectiveRelationType = RELATION_TYPE_ASSOCIATED_WITH;
+                mappingStatus = "downgraded_missing_predicate";
+                mappingReason = "strong relation requires predicateQuoteText beyond entity mentions";
+            }
+        }
         double weight = bounded(toDouble(relation.getWeight(), Math.max(0.70D, confidence)));
         return new RelationExtractionCandidate(
             relation.getId(),
             relation.getSourceEntityId(),
             relation.getTargetEntityId(),
+            effectiveRelationType,
             relationType,
+            supportMode,
+            predicateQuoteText,
+            relationTypeReason,
+            mappingStatus,
+            mappingReason,
             limit(StrUtil.blankToDefault(relation.getDescription(), ""), 1000),
             rounded(weight),
             rounded(confidence)
@@ -665,6 +868,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
     private RagToolsGraphExtractResponse.Evidence buildGraphExtractionEvidence(GraphRagExtractionAdvice.EvidenceItem evidenceItem,
                                                                                String entityId,
                                                                                String relationId,
+                                                                               RelationExtractionCandidate relation,
                                                                                Map<Long, GraphRagExtractionContext.ChunkItem> chunkById,
                                                                                int index) {
         if (evidenceItem == null || StrUtil.isBlank(evidenceItem.getId()) || evidenceItem.getChunkId() == null || StrUtil.isBlank(evidenceItem.getQuoteText())) {
@@ -691,6 +895,13 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             "sourceType", GRAPH_EXTRACTION_STRATEGY_LLM,
             "sourceEvidenceId", evidenceItem.getId(),
             "sourceChunkId", chunk.getChunkId(),
+            "requestedRelationType", relation == null ? null : relation.requestedRelationType(),
+            "effectiveRelationType", relation == null ? null : relation.relationType(),
+            "supportMode", relation == null ? null : relation.supportMode(),
+            "predicateQuoteText", relation == null ? null : relation.predicateQuoteText(),
+            "relationTypeReason", relation == null ? null : relation.relationTypeReason(),
+            "relationTypeMappingStatus", relation == null ? null : relation.relationTypeMappingStatus(),
+            "relationTypeMappingReason", relation == null ? null : relation.relationTypeMappingReason(),
             "confidence", rounded(bounded(toDouble(evidenceItem.getConfidence(), 0D)))
         ));
         return evidence;
@@ -782,7 +993,11 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             return false;
         }
         String normalizedQuote = normalizeKey(evidence.getQuoteText());
-        return candidateMentionedInText(source, normalizedQuote) && candidateMentionedInText(target, normalizedQuote);
+        if (!candidateMentionedInText(source, normalizedQuote) || !candidateMentionedInText(target, normalizedQuote)) {
+            return false;
+        }
+        return !isStrongRelationType(relation.relationType())
+            || isPredicateQuoteGrounded(relation.predicateQuoteText(), normalizedQuote, source, target);
     }
 
     private boolean candidateMentionedInText(EntityExtractionCandidate candidate, String normalizedText) {
@@ -803,6 +1018,58 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             }
         }
         return false;
+    }
+
+    private boolean isStrongRelationType(String relationType) {
+        String normalized = normalizeGraphType(relationType);
+        return StrUtil.isNotBlank(normalized)
+            && !RELATION_TYPE_ASSOCIATED_WITH.equals(normalized)
+            && !"RELATED_TO".equals(normalized);
+    }
+
+    private boolean isPredicateQuoteGrounded(String predicateQuoteText,
+                                             String normalizedQuote,
+                                             EntityExtractionCandidate source,
+                                             EntityExtractionCandidate target) {
+        if (!isPredicateQuoteTextMeaningful(predicateQuoteText, source, target)) {
+            return false;
+        }
+        return normalizedQuote.contains(normalizeKey(predicateQuoteText));
+    }
+
+    private boolean isPredicateQuoteTextMeaningful(String predicateQuoteText,
+                                                   EntityExtractionCandidate source,
+                                                   EntityExtractionCandidate target) {
+        String normalized = normalizeKey(predicateQuoteText);
+        if (normalized.length() < 2) {
+            return false;
+        }
+        String withoutEntityMentions = normalized;
+        withoutEntityMentions = removeCandidateMentions(withoutEntityMentions, source);
+        withoutEntityMentions = removeCandidateMentions(withoutEntityMentions, target);
+        return withoutEntityMentions.length() >= 2;
+    }
+
+    private String removeCandidateMentions(String text, EntityExtractionCandidate candidate) {
+        if (StrUtil.isBlank(text) || candidate == null) {
+            return StrUtil.blankToDefault(text, "");
+        }
+        String result = removeNormalizedTerm(text, candidate.name());
+        result = removeNormalizedTerm(result, candidate.normalizedName());
+        if (CollUtil.isNotEmpty(candidate.aliases())) {
+            for (String alias : candidate.aliases()) {
+                result = removeNormalizedTerm(result, alias);
+            }
+        }
+        return result;
+    }
+
+    private String removeNormalizedTerm(String text, String term) {
+        String normalizedTerm = normalizeKey(term);
+        if (StrUtil.isBlank(text) || StrUtil.isBlank(normalizedTerm)) {
+            return StrUtil.blankToDefault(text, "");
+        }
+        return text.replace(normalizedTerm, "");
     }
 
     private String normalizeGraphType(String value) {
@@ -2433,6 +2700,12 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                                                String sourceEntityId,
                                                String targetEntityId,
                                                String relationType,
+                                               String requestedRelationType,
+                                               String supportMode,
+                                               String predicateQuoteText,
+                                               String relationTypeReason,
+                                               String relationTypeMappingStatus,
+                                               String relationTypeMappingReason,
                                                String description,
                                                double weight,
                                                double confidence) {

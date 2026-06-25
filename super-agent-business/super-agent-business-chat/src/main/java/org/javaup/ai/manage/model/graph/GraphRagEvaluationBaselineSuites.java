@@ -106,6 +106,20 @@ public final class GraphRagEvaluationBaselineSuites {
                 .relationType("触发")
                 .relationTypeAliases(List.of("TRIGGERS"))
                 .build()))
+            .forbiddenRelations(List.of(
+                forbiddenRelation(
+                    "智能客服平台",
+                    "GitLab",
+                    "DEPENDS_ON",
+                    "适用系统或核心平台清单只能证明弱关联，不能直接升级成强 DEPENDS_ON。"
+                ),
+                forbiddenRelation(
+                    "智能客服平台",
+                    "CanaryHub",
+                    "DEPENDS_ON",
+                    "适用系统或核心平台清单只能证明弱关联，不能直接升级成强 DEPENDS_ON。"
+                )
+            ))
             .build();
     }
 
@@ -323,6 +337,12 @@ public final class GraphRagEvaluationBaselineSuites {
                 .relationType("存放")
                 .relationTypeAliases(List.of("STORES"))
                 .build()))
+            .forbiddenRelations(List.of(forbiddenRelation(
+                "信息安全部",
+                "DataCleanRoom",
+                "RESPONSIBLE_FOR",
+                "修订记录只能说明文档变更来源，不能直接升级成信息安全部负责 DataCleanRoom。"
+            )))
             .build();
     }
 
@@ -333,6 +353,18 @@ public final class GraphRagEvaluationBaselineSuites {
             .name(name)
             .aliases(aliases)
             .mustHaveAliases(mustHaveAliases)
+            .build();
+    }
+
+    private static GraphRagEvaluationSuite.ForbiddenRelation forbiddenRelation(String sourceName,
+                                                                              String targetName,
+                                                                              String relationType,
+                                                                              String reason) {
+        return GraphRagEvaluationSuite.ForbiddenRelation.builder()
+            .sourceName(sourceName)
+            .targetName(targetName)
+            .relationType(relationType)
+            .reason(reason)
             .build();
     }
 }

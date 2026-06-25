@@ -40,6 +40,9 @@ public class GraphRagEvaluationSuite {
     private List<ExpectedRelation> expectedRelations = new ArrayList<>();
 
     @Builder.Default
+    private List<ForbiddenRelation> forbiddenRelations = new ArrayList<>();
+
+    @Builder.Default
     private List<ExpectedEvidence> expectedEvidences = new ArrayList<>();
 
     @Data
@@ -77,6 +80,24 @@ public class GraphRagEvaluationSuite {
         private List<String> relationTypeAliases = new ArrayList<>();
 
         private Boolean required;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ForbiddenRelation {
+
+        private String sourceName;
+
+        private String targetName;
+
+        private String relationType;
+
+        @Builder.Default
+        private List<String> relationTypeAliases = new ArrayList<>();
+
+        private String reason;
     }
 
     @Data

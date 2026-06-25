@@ -6,7 +6,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -38,6 +40,10 @@ public class GraphRagEvaluationBatchReport {
 
     private Long matchedRelationCount;
 
+    private Long forbiddenRelationCount;
+
+    private Long violatedForbiddenRelationCount;
+
     private Long expectedEvidenceCount;
 
     private Long matchedEvidenceCount;
@@ -45,6 +51,8 @@ public class GraphRagEvaluationBatchReport {
     private Double entityRecall;
 
     private Double relationRecall;
+
+    private Double relationPrecision;
 
     private Double evidenceRecall;
 
@@ -58,6 +66,12 @@ public class GraphRagEvaluationBatchReport {
 
     @Builder.Default
     private List<GraphRagEvaluationReport> reports = new ArrayList<>();
+
+    @Builder.Default
+    private Map<String, Long> llmExtractionAdvisorStatusCounts = new LinkedHashMap<>();
+
+    @Builder.Default
+    private List<String> llmExtractionAdvisorRejectedReasons = new ArrayList<>();
 
     @Builder.Default
     private List<FailedSuite> failedSuites = new ArrayList<>();
@@ -76,16 +90,21 @@ public class GraphRagEvaluationBatchReport {
             .matchedEntityCount(0L)
             .expectedRelationCount(0L)
             .matchedRelationCount(0L)
+            .forbiddenRelationCount(0L)
+            .violatedForbiddenRelationCount(0L)
             .expectedEvidenceCount(0L)
             .matchedEvidenceCount(0L)
             .entityRecall(0D)
             .relationRecall(0D)
+            .relationPrecision(1D)
             .evidenceRecall(0D)
             .overallRecall(0D)
             .passRate(0D)
             .minSuiteRecall(0D)
             .maxSuiteRecall(0D)
             .reports(List.of())
+            .llmExtractionAdvisorStatusCounts(Map.of())
+            .llmExtractionAdvisorRejectedReasons(List.of())
             .failedSuites(List.of())
             .build();
     }
@@ -116,10 +135,16 @@ public class GraphRagEvaluationBatchReport {
         private List<String> observedExtractorSources = new ArrayList<>();
 
         @Builder.Default
+        private Map<String, Object> llmExtractionAdvisor = new LinkedHashMap<>();
+
+        @Builder.Default
         private List<String> missingEntityNames = new ArrayList<>();
 
         @Builder.Default
         private List<String> missingRelationNames = new ArrayList<>();
+
+        @Builder.Default
+        private List<String> forbiddenRelationViolations = new ArrayList<>();
 
         @Builder.Default
         private List<String> missingEvidenceHints = new ArrayList<>();
