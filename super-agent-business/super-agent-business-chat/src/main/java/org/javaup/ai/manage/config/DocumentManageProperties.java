@@ -22,6 +22,8 @@ public class DocumentManageProperties {
 
     private Chunk chunk = new Chunk();
 
+    private IndexBuild indexBuild = new IndexBuild();
+
     private StructureParsing structureParsing = new StructureParsing();
 
     private PgVector pgVector = new PgVector();
@@ -59,6 +61,18 @@ public class DocumentManageProperties {
         private Boolean llmEnabled = Boolean.FALSE;
         private Integer llmMaxChars = 3500;
         private Boolean recommendLlmWhenLowQuality = Boolean.TRUE;
+    }
+
+    @Data
+    public static class IndexBuild {
+
+        private Integer embeddingBatchSize = 10;
+
+        private Integer embeddingParallelism = 1;
+
+        private Boolean elasticsearchRefreshWait = Boolean.FALSE;
+
+        private Integer progressLogLimit = 60;
     }
 
     @Data

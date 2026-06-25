@@ -13,7 +13,7 @@
           <div class="mb-4 flex flex-wrap gap-3 text-xs text-muted-foreground"><span>任务 {{ buildTaskSnapshot?.taskId || activeBuildTaskId || '创建中' }}</span><span>当前阶段 {{ activeBuildStageLabel || '准备启动' }}</span></div>
           <div class="grid grid-cols-2 gap-2">
             <article v-for="stage in buildStageItems" :key="`overlay-stage-${stage.code}`" class="flex items-center gap-3 rounded-lg border p-3" :class="buildOverlayStageClass(stage.status)">
-              <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold"><span v-if="stage.status === 'current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ stage.order }}</span></span>
+              <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold" :class="stage.status === 'completed' ? 'bg-[var(--color-success)] text-white' : stage.status === 'failed' ? 'bg-destructive text-white' : stage.status === 'current' ? 'bg-primary text-white' : 'bg-foreground/[0.08] text-muted-foreground'"><span v-if="stage.status === 'current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ stage.order }}</span></span>
               <div><strong class="block text-[13px] text-foreground">{{ stage.label }}</strong><span class="text-xs text-muted-foreground">{{ stage.statusLabel }}</span></div>
             </article>
           </div>
@@ -165,7 +165,7 @@
           <div v-if="documentDetail.parseErrorMsg" class="mb-3 rounded-md border border-destructive/10 bg-destructive/[0.06] px-3 py-2.5 text-sm text-destructive">{{ documentDetail.parseErrorMsg }}</div>
           <div v-if="strategySystemStages.length" class="mb-4 grid gap-2" :style="`grid-template-columns:repeat(${strategySystemStages.length},minmax(0,1fr))`">
             <article v-for="item in strategySystemStages" :key="`strategy-stage-${item.code}`" class="flex items-center gap-2 rounded-lg border p-3" :class="strategyStatusStepClass(item.status)">
-              <div class="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold" :class="item.status === 'done' ? 'bg-[var(--color-success)] text-white' : item.status === 'current' ? 'bg-primary text-white' : 'bg-foreground/[0.08] text-muted-foreground'">{{ item.order }}</div>
+              <div class="grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold" :class="item.status === 'completed' ? 'bg-[var(--color-success)] text-white' : item.status === 'failed' ? 'bg-destructive text-white' : item.status === 'current' ? 'bg-primary text-white' : 'bg-foreground/[0.08] text-muted-foreground'">{{ item.order }}</div>
               <div><strong class="block text-[13px] text-foreground">{{ item.label }}</strong><span class="text-xs text-muted-foreground">{{ item.description }}</span></div>
             </article>
           </div>
@@ -264,13 +264,13 @@
               <template v-for="(row,rowIndex) in buildStageRows" :key="`build-row-${rowIndex}`">
                 <div class="flex items-stretch gap-2">
                   <article v-if="row.leftItem" class="flex flex-1 items-center gap-3 rounded-lg border p-3" :class="buildStageClass(row.leftItem.status)">
-                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold" :class="row.leftItem.status==='done'?'bg-[var(--color-success)] text-white':row.leftItem.status==='current'?'bg-primary text-white':'bg-foreground/[0.08] text-muted-foreground'"><span v-if="row.leftItem.status==='current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ row.leftItem.order }}</span></div>
+                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold" :class="row.leftItem.status==='completed'?'bg-[var(--color-success)] text-white':row.leftItem.status==='current'?'bg-primary text-white':row.leftItem.status==='failed'?'bg-destructive text-white':'bg-foreground/[0.08] text-muted-foreground'"><span v-if="row.leftItem.status==='current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ row.leftItem.order }}</span></div>
                     <div><strong class="block text-[13px] text-foreground">{{ row.leftItem.label }}</strong><em class="mt-0.5 block text-xs not-italic text-muted-foreground">{{ row.leftItem.statusLabel }}</em></div>
                   </article>
                   <div v-else class="flex-1"></div>
                   <div class="flex w-6 items-center justify-center text-xs text-muted-foreground">{{ row.leftItem && row.rightItem ? (row.direction==='rtl'?'←':'→') : '' }}</div>
                   <article v-if="row.rightItem" class="flex flex-1 items-center gap-3 rounded-lg border p-3" :class="buildStageClass(row.rightItem.status)">
-                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold" :class="row.rightItem.status==='done'?'bg-[var(--color-success)] text-white':row.rightItem.status==='current'?'bg-primary text-white':'bg-foreground/[0.08] text-muted-foreground'"><span v-if="row.rightItem.status==='current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ row.rightItem.order }}</span></div>
+                    <div class="grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold" :class="row.rightItem.status==='completed'?'bg-[var(--color-success)] text-white':row.rightItem.status==='current'?'bg-primary text-white':row.rightItem.status==='failed'?'bg-destructive text-white':'bg-foreground/[0.08] text-muted-foreground'"><span v-if="row.rightItem.status==='current'" class="stage-spinner" aria-hidden="true"></span><span v-else>{{ row.rightItem.order }}</span></div>
                     <div><strong class="block text-[13px] text-foreground">{{ row.rightItem.label }}</strong><em class="mt-0.5 block text-xs not-italic text-muted-foreground">{{ row.rightItem.statusLabel }}</em></div>
                   </article>
                   <div v-else class="flex-1"></div>
@@ -281,7 +281,7 @@
             <div class="mt-4 flex flex-wrap gap-4 border-t border-border pt-3 text-xs text-muted-foreground">
               <span>任务 {{ buildTaskSnapshot?.taskId || activeBuildTaskId || '-' }}</span>
               <span>状态 {{ buildTaskSnapshot?.taskStatusName || (hasCode(documentDetail.indexStatus, 3) ? '成功' : '未知') }}</span>
-              <span>耗时 {{ formatDuration(buildTaskSnapshot?.costMillis) }}</span>
+              <span>耗时 {{ formatDuration(buildTaskSnapshot?.elapsedMillis || buildTaskSnapshot?.costMillis) }}</span>
             </div>
           </div>
         </section>
@@ -556,7 +556,11 @@ const BUILD_STAGE_LIBRARY = [
   { code: '5', order: '01', label: '切块执行', description: '按照当前策略链路生成原始 chunk' },
   { code: '6', order: '02', label: '切块后处理', description: '清洗空块并整理最终可入库片段' },
   { code: '7', order: '03', label: '向量化', description: '生成 embedding 并写入 PGVector' },
-  { code: '8', order: '04', label: '入库完成', description: '回写状态并将本次索引标记为可用' }
+  { code: '9', order: '04', label: '关键词索引', description: '写入 Elasticsearch BM25 关键词索引' },
+  { code: '10', order: '05', label: 'GraphRAG', description: '抽取并保存实体、关系、证据和社区摘要' },
+  { code: '11', order: '06', label: 'Graph 派生索引', description: '将图谱实体、关系、社区投影为可召回 chunk' },
+  { code: '12', order: '07', label: 'RAPTOR', description: '构建长文档层级摘要树和摘要向量' },
+  { code: '8', order: '08', label: '入库完成', description: '回写状态并将本次索引标记为可用' }
 ]
 
 const BUILD_STAGE_CODE_SET = new Set(BUILD_STAGE_LIBRARY.map((item) => item.code))
@@ -588,6 +592,8 @@ const logDrawerOpen = ref(false)
 const chunkDetailDrawerOpen = ref(false)
 const planPollTimer = ref(null)
 const buildPollTimer = ref(null)
+const buildProgressLatestLogId = ref(null)
+const buildProgressNoticeStage = ref(null)
 const buildTrackerRef = ref(null)
 const parentBlockSectionRef = ref(null)
 const overviewSectionRef = ref(null)
@@ -845,6 +851,9 @@ const ragArtifactSections = computed(() => {
 })
 const hasBuildTaskSnapshot = computed(() => hasCode(buildTaskSnapshot.value?.taskType, 2))
 const activeBuildTaskId = computed(() => {
+  if (hasBuildTaskSnapshot.value && buildTaskSnapshot.value?.taskId) {
+    return buildTaskSnapshot.value.taskId
+  }
   if (hasCode(documentDetail.value?.latestTaskType, 2)) {
     return documentDetail.value?.latestTaskId || ''
   }
@@ -1386,9 +1395,9 @@ const buildOverlayTitle = computed(() => {
 
 const buildOverlayDescription = computed(() => {
   if (buildLoading.value && !activeBuildTaskId.value && !hasBuildTaskSnapshot.value) {
-    return '系统正在锁定当前确认方案并创建异步任务，稍后会自动进入四个执行阶段。'
+    return '系统正在锁定当前确认方案并创建异步任务，稍后会自动进入构建阶段。'
   }
-  return '构建中的四个阶段会实时刷新，当前步骤会显示转圈提示，完成后自动解除页面锁定。'
+  return '构建阶段会实时刷新，当前步骤会显示转圈提示，完成后自动解除页面锁定。'
 })
 
 function showNotice(message, type = 'info') {
@@ -1752,22 +1761,100 @@ async function loadTaskLogs() {
 }
 
 async function loadBuildTaskLogs() {
-  const buildTaskId = activeBuildTaskId.value
-  if (!buildTaskId) {
+  await loadBuildProgress({ resetLogs: true })
+}
+
+async function loadBuildProgress(options = {}) {
+  const {
+    resetLogs = false,
+    taskId = activeBuildTaskId.value || buildTaskSnapshot.value?.taskId || ''
+  } = options
+  if (!documentId.value) {
     buildTaskSnapshot.value = null
-    return
+    buildProgressLatestLogId.value = null
+    return null
   }
   try {
-    const data = await manageApi.queryTaskLogs({
-      taskId: buildTaskId,
-      pageNo: '1',
-      pageSize: '30'
+    const data = await manageApi.queryIndexBuildProgress({
+      documentId: documentId.value,
+      taskId: taskId || undefined,
+      sinceLogId: resetLogs ? undefined : buildProgressLatestLogId.value || undefined,
+      logLimit: resetLogs ? 60 : 40
     })
-    buildTaskSnapshot.value = data || null
+    applyBuildProgress(data, resetLogs)
+    return data
   } catch (error) {
-    console.error('读取构建任务日志失败', error)
-    buildTaskSnapshot.value = null
+    console.error('读取构建进度失败', error)
+    if (resetLogs) {
+      buildTaskSnapshot.value = null
+      buildProgressLatestLogId.value = null
+      buildProgressNoticeStage.value = null
+    }
+    throw error
   }
+}
+
+function applyBuildProgress(data, resetLogs = false) {
+  if (!data) {
+    return
+  }
+  const previousTaskStatus = normalizeCode(buildTaskSnapshot.value?.taskStatus)
+  const previous = resetLogs ? [] : asArray(buildTaskSnapshot.value?.logs)
+  const mergedLogs = mergeTaskLogs(previous, asArray(data.logs))
+  buildTaskSnapshot.value = {
+    ...buildTaskSnapshot.value,
+    ...data,
+    logs: mergedLogs
+  }
+  buildProgressLatestLogId.value = data.latestLogId || latestLogId(mergedLogs) || buildProgressLatestLogId.value || null
+  if (hasCode(data.taskStatus, 4)) {
+    buildProgressNoticeStage.value = null
+    showNotice(data.errorMsg || '索引构建失败，请查看当前任务轨迹里的失败阶段。', 'danger')
+  } else if (hasCode(data.taskStatus, 3) && previousTaskStatus !== '3') {
+    buildProgressNoticeStage.value = null
+    showNotice('索引构建完成，文档索引和 RAG 产物已更新。', 'success')
+  } else if (data.building === true && data.currentStageName && normalizeCode(data.currentStage) !== buildProgressNoticeStage.value) {
+    buildProgressNoticeStage.value = normalizeCode(data.currentStage)
+    showNotice(`索引构建进行中：${data.currentStageName}`, 'info')
+  }
+  if (documentDetail.value) {
+    documentDetail.value = {
+      ...documentDetail.value,
+      indexStatus: data.indexStatus ?? documentDetail.value.indexStatus,
+      indexStatusName: data.indexStatusName || documentDetail.value.indexStatusName,
+      latestTaskId: data.taskId || documentDetail.value.latestTaskId,
+      latestTaskType: data.taskType || documentDetail.value.latestTaskType,
+      latestTaskTypeName: data.taskTypeName || documentDetail.value.latestTaskTypeName,
+      latestTaskStatus: data.taskStatus || documentDetail.value.latestTaskStatus,
+      latestTaskStatusName: data.taskStatusName || documentDetail.value.latestTaskStatusName
+    }
+  }
+}
+
+function mergeTaskLogs(previousLogs, incomingLogs) {
+  const byId = new Map()
+  previousLogs.concat(incomingLogs).forEach((item) => {
+    const id = normalizeCode(item?.id)
+    if (id) {
+      byId.set(id, item)
+    }
+  })
+  return Array.from(byId.values())
+    .sort((left, right) => {
+      const leftTime = new Date(left?.createTime || 0).getTime()
+      const rightTime = new Date(right?.createTime || 0).getTime()
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime
+      }
+      return Number(left?.id || 0) - Number(right?.id || 0)
+    })
+}
+
+function latestLogId(logs) {
+  return asArray(logs)
+    .map((item) => Number(item?.id || 0))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .reduce((max, id) => Math.max(max, id), 0) || null
 }
 
 async function loadDocumentChunks(page = chunkCurrentPage.value, options = {}) {
@@ -1943,7 +2030,8 @@ async function submitBuildIndex() {
       operatorId: OPERATOR_ID
     })
     showNotice(`索引任务 ${result.taskId} 已创建，系统正在异步构建中。`, 'success')
-    await loadAll()
+    await loadDocumentDetail()
+    await loadBuildProgress({ resetLogs: true, taskId: result.taskId })
     startBuildPolling()
     focusBuildTracker()
   } catch (error) {
@@ -2010,21 +2098,40 @@ function clearBuildPolling() {
 
 function startBuildPolling() {
   clearBuildPolling()
-  let pollCount = 0
+  let consecutiveErrorCount = 0
   buildPollTimer.value = window.setInterval(async () => {
-    pollCount += 1
     try {
-      await loadAll()
-      const building = hasCode(documentDetail.value?.indexStatus, 2)
-        || (hasCode(documentDetail.value?.latestTaskType, 2) && ['1', '2'].includes(normalizeCode(documentDetail.value?.latestTaskStatus)))
-      if (!building || pollCount >= 30) {
+      const progress = await loadBuildProgress()
+      consecutiveErrorCount = 0
+      const building = progress?.building === true
+        || ['1', '2'].includes(normalizeCode(buildTaskSnapshot.value?.taskStatus))
+        || hasCode(documentDetail.value?.indexStatus, 2)
+      if (!building) {
         clearBuildPolling()
+        await refreshBuildCompletionArtifacts()
       }
     } catch (error) {
       console.error('轮询索引构建状态失败', error)
-      clearBuildPolling()
+      consecutiveErrorCount += 1
+      if (consecutiveErrorCount >= 10) {
+        showNotice('索引构建仍在后台执行，但进度轮询连续失败，请稍后手动刷新。', 'warning')
+        clearBuildPolling()
+      }
     }
   }, 3000)
+}
+
+async function refreshBuildCompletionArtifacts() {
+  try {
+    await loadDocumentDetail()
+    await Promise.all([
+      loadBuildProgress({ resetLogs: true }),
+      loadDocumentChunks(chunkCurrentPage.value, { resetCollapse: false }),
+      loadDocumentRagSnapshot()
+    ])
+  } catch (error) {
+    console.error('刷新构建完成后的产物失败', error)
+  }
 }
 
 function startPlanPolling() {
@@ -2139,6 +2246,7 @@ const chunkStats = computed(() => [
 ])
 function noticeClass(type) {
   if (type === 'success') return 'bg-[#ecfdf3] text-[#027a48]'
+  if (type === 'warning') return 'bg-amber-500/10 text-amber-700'
   if (type === 'danger') return 'bg-[#fef3f2] text-[#b42318]'
   return 'bg-primary/[0.08] text-primary'
 }
@@ -2149,25 +2257,27 @@ function guidanceCardClass(tone) {
   return 'border-primary/20 bg-primary/[0.04]'
 }
 function actionStageClass(state) {
-  if (state === 'done') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (state === 'done' || state === 'completed') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (state === 'ready') return 'border-primary/20 bg-primary/[0.04]'
   if (state === 'blocked') return 'border-amber-500/20 bg-amber-500/[0.04]'
   return 'border-border bg-secondary'
 }
 function strategyStatusStepClass(status) {
-  if (status === 'done') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (status === 'done' || status === 'completed') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (status === 'current') return 'border-primary/20 bg-primary/[0.04]'
+  if (status === 'failed') return 'border-destructive/20 bg-destructive/[0.04]'
   return 'border-border bg-secondary'
 }
 function buildStageClass(status) {
-  if (status === 'done') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (status === 'done' || status === 'completed') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (status === 'current') return 'border-primary/20 bg-primary/[0.04]'
-  if (status === 'error') return 'border-destructive/20 bg-destructive/[0.04]'
+  if (status === 'error' || status === 'failed') return 'border-destructive/20 bg-destructive/[0.04]'
   return 'border-border bg-card'
 }
 function buildOverlayStageClass(status) {
-  if (status === 'done') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (status === 'done' || status === 'completed') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (status === 'current') return 'border-primary/20 bg-primary/[0.04]'
+  if (status === 'failed') return 'border-destructive/20 bg-destructive/[0.04]'
   return 'border-border bg-card/50'
 }
 function chunkChipClass(code) {

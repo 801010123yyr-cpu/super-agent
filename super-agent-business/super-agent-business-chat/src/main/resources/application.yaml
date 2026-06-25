@@ -24,8 +24,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       pool-name: super-agent-business-chat-hikari
-      maximum-pool-size: 10
-      minimum-idle: 2
+      maximum-pool-size: 200
+      minimum-idle: 100
   kafka:
     bootstrap-servers: 127.0.0.1:9092
     producer:
@@ -93,6 +93,7 @@ app:
     connect-timeout-ms: 3000
     read-timeout-ms: 10000
     graph-extract-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_GRAPH_EXTRACT_READ_TIMEOUT_MS:30000}
+    raptor-build-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_RAPTOR_BUILD_READ_TIMEOUT_MS:60000}
   graph-rag:
     build:
       lease-enabled: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_ENABLED:true}
@@ -103,7 +104,7 @@ app:
       # 是否启用 GraphRAG LLM 受控抽取增强。
       # 开启后，LLM 只能基于 Java 提供的 chunk 原文返回实体/关系/evidence JSON；
       # Java 会校验 chunkId、sourceChunkIds、quoteText 原文片段、端点实体和置信度后才合并到 KG 候选。
-      enabled: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_ENABLED:false}
+      enabled: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_ENABLED:true}
     community-report:
       # 是否启用 GraphRAG LLM 受控社区报告增强。
       # 开启后，LLM 只能基于 Java 提供的实体/关系/evidence 上下文返回 JSON 报告建议；
@@ -113,7 +114,7 @@ app:
       # 是否启用 GraphRAG LLM 受控实体消歧增强。
       # 开启后，LLM 只能基于 Java 提供的候选实体返回 mergeGroups 建议；
       # Java 会校验 sourceEntityId、entityType、置信度和名称来源，通过后才影响 canonical 合并。
-      enabled: ${SUPER_AGENT_GRAPH_RAG_ENTITY_RESOLUTION_ENABLED:false}
+      enabled: ${SUPER_AGENT_GRAPH_RAG_ENTITY_RESOLUTION_ENABLED:true}
   chat:
     # 是否开启“推荐追问问题”能力。
     # 开启后，主回答生成完成后会额外调用一次模型，产出最多 3 个可继续追问的问题。
@@ -312,6 +313,15 @@ app:
     include-raw-content: false
 
   manage:
+    index-build:
+      # 文档索引构建时单次 embedding 请求的 chunk 数。阿里百炼 text-embedding-v4 当前限制最大 10，代码也会钳制到 10。
+      embedding-batch-size: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_BATCH_SIZE:10}
+      # embedding 批次并发数。默认 1 保持串行；本地调优可设置为 2 或 3。
+      embedding-parallelism: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_PARALLELISM:1}
+      # 后台构建不强制等待 ES refresh，减少 bulk 写入尾延迟；如需构建完成后立即强一致可临时改为 true。
+      elasticsearch-refresh-wait: ${SUPER_AGENT_INDEX_BUILD_ES_REFRESH_WAIT:true}
+      # 前端轻量轮询接口单次返回的最新日志数量。
+      progress-log-limit: ${SUPER_AGENT_INDEX_BUILD_PROGRESS_LOG_LIMIT:60}
     minio:
       # MinIO 服务地址。
       # 上传的原始文件和解析后的纯文本都会放在这里。

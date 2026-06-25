@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
@@ -21,6 +22,7 @@ import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildDto;
+import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
@@ -39,6 +41,7 @@ import org.javaup.ai.manage.mapper.SuperAgentTopicDocumentRelationMapper;
 import org.javaup.ai.manage.mq.DocumentKafkaProducer;
 import org.javaup.ai.manage.mq.message.DocumentIndexBuildMessage;
 import org.javaup.ai.manage.mq.message.DocumentParseRouteMessage;
+import org.javaup.ai.manage.service.DocumentIndexBuildProgressCacheService;
 import org.javaup.ai.manage.service.DocumentManageService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentParseArtifactService;
@@ -57,6 +60,7 @@ import org.javaup.ai.manage.vo.DocumentChunkItemVo;
 import org.javaup.ai.manage.vo.DocumentChunkQueryVo;
 import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentDeleteVo;
+import org.javaup.ai.manage.vo.DocumentIndexBuildProgressVo;
 import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentParentBlockItemVo;
@@ -151,6 +155,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
 
     private final DocumentTaskLogService taskLogService;
 
+    private final DocumentIndexBuildProgressCacheService progressCacheService;
+
     private final DocumentVectorGateway vectorGateway;
 
     private final ObjectProvider<DocumentKeywordSearchGateway> keywordSearchGatewayProvider;
@@ -168,8 +174,10 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     private final DocumentKafkaProducer kafkaProducer;
 
     private final TransactionTemplate transactionTemplate;
-    
+
     private final UidGenerator uidGenerator;
+
+    private final DocumentManageProperties properties;
 
     @Override
     public DocumentUploadVo upload(MultipartFile file, DocumentUploadDto dto) {
@@ -660,6 +668,66 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     }
 
     @Override
+    public DocumentIndexBuildProgressVo queryIndexBuildProgress(DocumentIndexBuildProgressQueryDto dto) {
+        DocumentIndexBuildProgressVo cachedByTaskId = cachedBuildProgress(dto);
+        if (cachedByTaskId != null) {
+            return cachedByTaskId;
+        }
+
+        SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
+        SuperAgentDocumentTask task = dto.getTaskId() == null
+            ? getLatestTask(document.getId(), DocumentTaskTypeEnum.BUILD_INDEX.getCode())
+            : taskMapper.selectById(dto.getTaskId());
+        if (task != null && (!Objects.equals(task.getDocumentId(), document.getId())
+            || !Objects.equals(task.getStatus(), BusinessStatus.YES.getCode())
+            || !Objects.equals(task.getTaskType(), DocumentTaskTypeEnum.BUILD_INDEX.getCode()))) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_NOT_FOUND.getCode(), "索引构建任务不存在。");
+        }
+        DocumentIndexBuildProgressVo cachedProgress = cachedBuildProgress(document, task, dto);
+        if (cachedProgress != null) {
+            return cachedProgress;
+        }
+
+        List<DocumentTaskLogVo> logs = task == null ? List.of() : listProgressLogs(task.getId(), dto.getSinceLogId(), resolveProgressLogLimit(dto.getLogLimit()));
+        Long totalLogCount = task == null ? 0L : countTaskLogs(task.getId());
+        Long latestLogId = logs.stream()
+            .map(DocumentTaskLogVo::getId)
+            .filter(Objects::nonNull)
+            .max(Long::compareTo)
+            .orElse(dto.getSinceLogId());
+        boolean building = task != null && (
+            Objects.equals(task.getTaskStatus(), DocumentTaskStatusEnum.NEW.getCode())
+                || Objects.equals(task.getTaskStatus(), DocumentTaskStatusEnum.RUNNING.getCode())
+                || Objects.equals(document.getIndexStatus(), DocumentIndexStatusEnum.BUILDING.getCode())
+        );
+        Long elapsedMillis = resolveElapsedMillis(task);
+
+        return new DocumentIndexBuildProgressVo(
+            document.getId(),
+            document.getIndexStatus(),
+            enumMsg(DocumentIndexStatusEnum.getRc(document.getIndexStatus())),
+            task == null ? null : task.getId(),
+            task == null ? null : task.getTaskType(),
+            task == null ? "" : enumMsg(DocumentTaskTypeEnum.getRc(task.getTaskType())),
+            task == null ? null : task.getTaskStatus(),
+            task == null ? "" : enumMsg(DocumentTaskStatusEnum.getRc(task.getTaskStatus())),
+            task == null ? null : task.getCurrentStage(),
+            task == null ? "" : enumMsg(DocumentTaskStageEnum.getRc(task.getCurrentStage())),
+            task == null ? null : task.getStartTime(),
+            task == null ? null : task.getFinishTime(),
+            task == null ? null : task.getCostMillis(),
+            elapsedMillis,
+            task == null ? null : task.getErrorCode(),
+            task == null ? null : task.getErrorMsg(),
+            task == null ? null : task.getExtJson(),
+            building,
+            latestLogId,
+            totalLogCount,
+            logs
+        );
+    }
+
+    @Override
     public DocumentChunkQueryVo queryDocumentChunks(DocumentChunkQueryDto dto) {
         SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
         int pageNo = dto.getPageNo() == null || dto.getPageNo() <= 0 ? 1 : dto.getPageNo();
@@ -810,6 +878,154 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             .eq(SuperAgentDocumentTask::getStatus, BusinessStatus.YES.getCode())
             .orderByDesc(SuperAgentDocumentTask::getId)
             .last("limit 1"));
+    }
+
+    private List<DocumentTaskLogVo> listProgressLogs(Long taskId, Long sinceLogId, int logLimit) {
+        LambdaQueryWrapper<SuperAgentDocumentTaskLog> wrapper = new LambdaQueryWrapper<SuperAgentDocumentTaskLog>()
+            .eq(SuperAgentDocumentTaskLog::getTaskId, taskId)
+            .eq(SuperAgentDocumentTaskLog::getStatus, BusinessStatus.YES.getCode());
+        if (sinceLogId != null && sinceLogId > 0) {
+            wrapper.gt(SuperAgentDocumentTaskLog::getId, sinceLogId)
+                .orderByAsc(SuperAgentDocumentTaskLog::getCreateTime, SuperAgentDocumentTaskLog::getId)
+                .last("limit " + logLimit);
+            return taskLogMapper.selectList(wrapper).stream()
+                .map(this::toTaskLogVo)
+                .toList();
+        }
+        wrapper.orderByDesc(SuperAgentDocumentTaskLog::getCreateTime, SuperAgentDocumentTaskLog::getId)
+            .last("limit " + logLimit);
+        List<DocumentTaskLogVo> logs = new ArrayList<>(taskLogMapper.selectList(wrapper).stream()
+            .map(this::toTaskLogVo)
+            .toList());
+        logs.sort(Comparator
+            .comparing(DocumentTaskLogVo::getCreateTime, Comparator.nullsLast(Date::compareTo))
+            .thenComparing(DocumentTaskLogVo::getId, Comparator.nullsLast(Long::compareTo)));
+        return logs;
+    }
+
+    private DocumentIndexBuildProgressVo cachedBuildProgress(DocumentIndexBuildProgressQueryDto dto) {
+        if (dto == null || dto.getTaskId() == null) {
+            return null;
+        }
+        DocumentIndexBuildProgressVo cached = progressCacheService.get(dto.getTaskId());
+        if (cached == null
+            || !Objects.equals(cached.getDocumentId(), dto.getDocumentId())
+            || !Objects.equals(cached.getTaskType(), DocumentTaskTypeEnum.BUILD_INDEX.getCode())) {
+            return null;
+        }
+        return cachedBuildProgress(cached, dto);
+    }
+
+    private DocumentIndexBuildProgressVo cachedBuildProgress(SuperAgentDocument document,
+                                                             SuperAgentDocumentTask task,
+                                                             DocumentIndexBuildProgressQueryDto dto) {
+        if (document == null || task == null || task.getId() == null) {
+            return null;
+        }
+        DocumentIndexBuildProgressVo cached = progressCacheService.get(task.getId());
+        if (cached == null || !Objects.equals(cached.getDocumentId(), document.getId())) {
+            return null;
+        }
+        return cachedBuildProgress(cached, dto);
+    }
+
+    private DocumentIndexBuildProgressVo cachedBuildProgress(DocumentIndexBuildProgressVo cached,
+                                                             DocumentIndexBuildProgressQueryDto dto) {
+        List<DocumentTaskLogVo> filteredLogs = filterCachedProgressLogs(
+            cached.getLogs(), dto.getSinceLogId(), resolveProgressLogLimit(dto.getLogLimit())
+        );
+        Long latestLogId = cached.getLatestLogId();
+        if (latestLogId == null) {
+            latestLogId = filteredLogs.stream()
+                .map(DocumentTaskLogVo::getId)
+                .filter(Objects::nonNull)
+                .max(Long::compareTo)
+                .orElse(dto.getSinceLogId());
+        }
+        return new DocumentIndexBuildProgressVo(
+            cached.getDocumentId(),
+            cached.getIndexStatus(),
+            cached.getIndexStatusName(),
+            cached.getTaskId(),
+            cached.getTaskType(),
+            cached.getTaskTypeName(),
+            cached.getTaskStatus(),
+            cached.getTaskStatusName(),
+            cached.getCurrentStage(),
+            cached.getCurrentStageName(),
+            cached.getStartTime(),
+            cached.getFinishTime(),
+            cached.getCostMillis(),
+            resolveCachedElapsedMillis(cached),
+            cached.getErrorCode(),
+            cached.getErrorMsg(),
+            cached.getExtJson(),
+            cached.getBuilding(),
+            latestLogId,
+            cached.getTotalLogCount(),
+            filteredLogs
+        );
+    }
+
+    private Long resolveCachedElapsedMillis(DocumentIndexBuildProgressVo cached) {
+        if (cached == null) {
+            return null;
+        }
+        if (cached.getCostMillis() != null && cached.getCostMillis() > 0) {
+            return cached.getCostMillis();
+        }
+        if (cached.getStartTime() == null) {
+            return cached.getElapsedMillis();
+        }
+        Date endTime = cached.getFinishTime() == null ? new Date() : cached.getFinishTime();
+        return Math.max(0L, endTime.getTime() - cached.getStartTime().getTime());
+    }
+
+    private List<DocumentTaskLogVo> filterCachedProgressLogs(List<DocumentTaskLogVo> logs, Long sinceLogId, int logLimit) {
+        if (logs == null || logs.isEmpty()) {
+            return List.of();
+        }
+        List<DocumentTaskLogVo> filtered = logs.stream()
+            .filter(log -> log != null && log.getId() != null)
+            .filter(log -> sinceLogId == null || sinceLogId <= 0 || log.getId() > sinceLogId)
+            .sorted(Comparator
+                .comparing(DocumentTaskLogVo::getCreateTime, Comparator.nullsLast(Date::compareTo))
+                .thenComparing(DocumentTaskLogVo::getId, Comparator.nullsLast(Long::compareTo)))
+            .toList();
+        if (filtered.size() <= logLimit) {
+            return filtered;
+        }
+        return filtered.subList(filtered.size() - logLimit, filtered.size());
+    }
+
+    private Long countTaskLogs(Long taskId) {
+        if (taskId == null) {
+            return 0L;
+        }
+        return taskLogMapper.selectCount(new LambdaQueryWrapper<SuperAgentDocumentTaskLog>()
+            .eq(SuperAgentDocumentTaskLog::getTaskId, taskId)
+            .eq(SuperAgentDocumentTaskLog::getStatus, BusinessStatus.YES.getCode()));
+    }
+
+    private int resolveProgressLogLimit(Integer requestedLimit) {
+        int configured = properties.getIndexBuild().getProgressLogLimit() == null
+            ? 60 : properties.getIndexBuild().getProgressLogLimit();
+        int limit = requestedLimit == null || requestedLimit <= 0 ? configured : requestedLimit;
+        return Math.max(1, Math.min(limit, 200));
+    }
+
+    private Long resolveElapsedMillis(SuperAgentDocumentTask task) {
+        if (task == null) {
+            return null;
+        }
+        if (task.getCostMillis() != null && task.getCostMillis() > 0) {
+            return task.getCostMillis();
+        }
+        if (task.getStartTime() == null) {
+            return 0L;
+        }
+        Date endTime = task.getFinishTime() == null ? new Date() : task.getFinishTime();
+        return Math.max(0L, endTime.getTime() - task.getStartTime().getTime());
     }
 
     private Map<Long, SuperAgentDocumentTask> getLatestTaskMap(List<SuperAgentDocument> documentList) {

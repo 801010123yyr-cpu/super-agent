@@ -133,6 +133,11 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.javaup</groupId>
+            <artifactId>super-agent-redis-framework</artifactId>
+            <version>${revision}</version>
+        </dependency>
     </dependencies>
 
     <build>

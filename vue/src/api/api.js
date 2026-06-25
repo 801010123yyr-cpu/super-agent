@@ -500,6 +500,13 @@ export const manageApi = {
     })
   },
 
+  queryIndexBuildProgress(payload) {
+    return requestApiEnvelope('/manage/document/index/build/progress/query', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
+  },
+
   queryDocumentChunks(payload) {
     return requestApiEnvelope('/manage/document/chunk/query', {
       method: 'POST',

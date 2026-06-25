@@ -18,6 +18,7 @@
         <module>super-agent-common</module>
         <module>super-agent-id-generator-framework</module>
         <module>super-agent-redisson-framework</module>
+        <module>super-agent-redis-tool-framework</module>
     </modules>
     
     <properties>

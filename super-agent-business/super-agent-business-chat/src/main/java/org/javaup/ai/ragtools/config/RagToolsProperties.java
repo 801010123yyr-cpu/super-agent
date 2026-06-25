@@ -16,4 +16,6 @@ public class RagToolsProperties {
     private int readTimeoutMs = 10000;
 
     private int graphExtractReadTimeoutMs = 30000;
+
+    private int raptorBuildReadTimeoutMs = 60000;
 }

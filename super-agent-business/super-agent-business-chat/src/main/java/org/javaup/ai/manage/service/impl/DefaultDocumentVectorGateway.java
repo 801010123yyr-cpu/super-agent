@@ -6,6 +6,7 @@ import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.service.DocumentVectorGateway;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
@@ -24,10 +25,17 @@ import org.springframework.stereotype.Service;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -89,6 +97,8 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
 
     private final ObjectMapper objectMapper;
 
+    private final DocumentManageProperties properties;
+
     @Value("${spring.ai.openai.embedding.options.model:}")
     private String embeddingModelName;
 
@@ -109,37 +119,88 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
         }
 
         String upsertSql = UPSERT_SQL_TEMPLATE.formatted(DocumentPgVectorConstants.EMBEDDING_TABLE_NAME);
-        int batchSize = EMBEDDING_BATCH_SIZE_LIMIT;
+        int batchSize = embeddingBatchSize();
         String currentEmbeddingModelName = resolveEmbeddingModelName();
         int totalBatchCount = (validChunkList.size() + batchSize - 1) / batchSize;
+        int parallelism = embeddingParallelism(totalBatchCount);
+        long vectorizeStartedNanos = System.nanoTime();
 
-        log.info("开始执行文档向量化，chunkCount={}, batchSize={}, batchCount={}, embeddingModel={}",
-            validChunkList.size(), batchSize, totalBatchCount, currentEmbeddingModelName);
+        log.info("开始执行文档向量化，chunkCount={}, batchSize={}, batchCount={}, parallelism={}, embeddingModel={}",
+            validChunkList.size(), batchSize, totalBatchCount, parallelism, currentEmbeddingModelName);
 
-        for (int startIndex = 0; startIndex < validChunkList.size(); startIndex += batchSize) {
-            int endIndex = Math.min(startIndex + batchSize, validChunkList.size());
-            List<SuperAgentDocumentChunk> currentBatch = validChunkList.subList(startIndex, endIndex);
-            int currentBatchIndex = (startIndex / batchSize) + 1;
-
-            log.info("开始处理 embedding 批次，batchIndex={}/{}, chunkRange=[{}, {}], currentBatchSize={}",
-                currentBatchIndex, totalBatchCount, startIndex + 1, endIndex, currentBatch.size());
-
-            List<float[]> embeddingList = embeddingModel.embed(currentBatch.stream()
-                .map(this::embeddingInput)
-                .toList());
-            if (embeddingList.size() != currentBatch.size()) {
-                throw new IllegalStateException("EmbeddingModel 返回的向量数量与 chunk 数量不一致。");
+        List<VectorBatch> batches = buildBatches(validChunkList, batchSize);
+        if (parallelism <= 1) {
+            for (VectorBatch batch : batches) {
+                processBatch(embeddingModel, upsertSql, batch, totalBatchCount, currentEmbeddingModelName);
             }
-
-            batchUpsert(upsertSql, currentBatch, embeddingList, currentEmbeddingModelName);
-            markSuccess(currentBatch);
-
-            log.info("embedding 批次处理完成，batchIndex={}/{}, currentBatchSize={}",
-                currentBatchIndex, totalBatchCount, currentBatch.size());
+        }
+        else {
+            ExecutorService executorService = Executors.newFixedThreadPool(parallelism, vectorThreadFactory());
+            try {
+                List<CompletableFuture<Void>> futures = batches.stream()
+                    .map(batch -> CompletableFuture.runAsync(
+                        () -> processBatch(embeddingModel, upsertSql, batch, totalBatchCount, currentEmbeddingModelName),
+                        executorService
+                    ))
+                    .toList();
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            }
+            catch (CompletionException exception) {
+                Throwable cause = exception.getCause();
+                if (cause instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                throw exception;
+            }
+            finally {
+                executorService.shutdown();
+            }
         }
 
-        log.info("文档向量化执行完成，chunkCount={}, batchSize={}, batchCount={}, embeddingModel={}",
-            validChunkList.size(), batchSize, totalBatchCount, currentEmbeddingModelName);
+        log.info("文档向量化执行完成，chunkCount={}, batchSize={}, batchCount={}, parallelism={}, embeddingModel={}, costMillis={}",
+            validChunkList.size(), batchSize, totalBatchCount, parallelism, currentEmbeddingModelName, elapsedMillis(vectorizeStartedNanos));
+    }
+
+    private void processBatch(EmbeddingModel embeddingModel,
+                              String upsertSql,
+                              VectorBatch batch,
+                              int totalBatchCount,
+                              String currentEmbeddingModelName) {
+        List<SuperAgentDocumentChunk> currentBatch = batch.chunks();
+        log.info("开始处理 embedding 批次，batchIndex={}/{}, chunkRange=[{}, {}], currentBatchSize={}",
+            batch.batchIndex(), totalBatchCount, batch.startNo(), batch.endNo(), currentBatch.size());
+
+        long batchStartedNanos = System.nanoTime();
+        long embeddingStartedNanos = System.nanoTime();
+        List<float[]> embeddingList = embeddingModel.embed(currentBatch.stream()
+            .map(this::embeddingInput)
+            .toList());
+        long embeddingCostMillis = elapsedMillis(embeddingStartedNanos);
+        if (embeddingList.size() != currentBatch.size()) {
+            throw new IllegalStateException("EmbeddingModel 返回的向量数量与 chunk 数量不一致。");
+        }
+
+        long upsertStartedNanos = System.nanoTime();
+        batchUpsert(upsertSql, currentBatch, embeddingList, currentEmbeddingModelName);
+        long upsertCostMillis = elapsedMillis(upsertStartedNanos);
+        markSuccess(currentBatch);
+
+        log.info("embedding 批次处理完成，batchIndex={}/{}, currentBatchSize={}, embeddingCostMillis={}, pgVectorCostMillis={}, batchCostMillis={}",
+            batch.batchIndex(), totalBatchCount, currentBatch.size(), embeddingCostMillis, upsertCostMillis, elapsedMillis(batchStartedNanos));
+    }
+
+    private List<VectorBatch> buildBatches(List<SuperAgentDocumentChunk> validChunkList, int batchSize) {
+        List<VectorBatch> batches = new ArrayList<>();
+        for (int startIndex = 0; startIndex < validChunkList.size(); startIndex += batchSize) {
+            int endIndex = Math.min(startIndex + batchSize, validChunkList.size());
+            batches.add(new VectorBatch(
+                (startIndex / batchSize) + 1,
+                startIndex + 1,
+                endIndex,
+                validChunkList.subList(startIndex, endIndex)
+            ));
+        }
+        return batches;
     }
 
     @Override
@@ -304,6 +365,35 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
             : "default";
     }
 
+    private int embeddingBatchSize() {
+        Integer configured = properties.getIndexBuild().getEmbeddingBatchSize();
+        if (configured == null || configured <= 0) {
+            return EMBEDDING_BATCH_SIZE_LIMIT;
+        }
+        return Math.min(configured, EMBEDDING_BATCH_SIZE_LIMIT);
+    }
+
+    private int embeddingParallelism(int totalBatchCount) {
+        Integer configured = properties.getIndexBuild().getEmbeddingParallelism();
+        if (configured == null || configured <= 1 || totalBatchCount <= 1) {
+            return 1;
+        }
+        return Math.min(Math.min(configured, 4), totalBatchCount);
+    }
+
+    private ThreadFactory vectorThreadFactory() {
+        AtomicInteger index = new AtomicInteger(1);
+        return runnable -> {
+            Thread thread = new Thread(runnable, "document-vector-batch-" + index.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    private long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
+    }
+
     private String embeddingInput(SuperAgentDocumentChunk chunk) {
         if (chunk == null) {
             return "";
@@ -314,5 +404,13 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
     private int defaultInteger(Integer value) {
 
         return Objects.requireNonNullElse(value, 0);
+    }
+
+    private record VectorBatch(
+        int batchIndex,
+        int startNo,
+        int endNo,
+        List<SuperAgentDocumentChunk> chunks
+    ) {
     }
 }

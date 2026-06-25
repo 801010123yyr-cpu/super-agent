@@ -70,8 +70,10 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
 
         Map<Long, SuperAgentDocument> documentMap = loadDocumentMap(chunkList);
         BulkRequest.Builder bulkBuilder = new BulkRequest.Builder()
-            .index(properties.getElasticsearch().getIndexName())
-            .refresh(Refresh.WaitFor);
+            .index(properties.getElasticsearch().getIndexName());
+        if (Boolean.TRUE.equals(properties.getIndexBuild().getElasticsearchRefreshWait())) {
+            bulkBuilder.refresh(Refresh.WaitFor);
+        }
 
         for (SuperAgentDocumentChunk chunk : chunkList) {
             SuperAgentDocument document = documentMap.get(chunk.getDocumentId());
@@ -85,7 +87,11 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         }
 
         try {
+            long startedNanos = System.nanoTime();
             BulkResponse response = elasticsearchClient.bulk(bulkBuilder.build());
+            log.info("文档关键词索引 bulk 写入完成，chunkCount={}, refreshWait={}, costMillis={}",
+                chunkList.size(), Boolean.TRUE.equals(properties.getIndexBuild().getElasticsearchRefreshWait()),
+                (System.nanoTime() - startedNanos) / 1_000_000L);
             if (response.errors()) {
                 String errorMessage = response.items().stream()
                     .filter(item -> item.error() != null)

@@ -1,3 +1,5 @@
+import logging
+import time
 import warnings
 
 from fastapi import FastAPI, HTTPException
@@ -16,6 +18,8 @@ from rag_tools.semantic_model import SemanticModelUnavailable, score_rerank_pair
 
 SERVICE_NAME = "super-agent-rag-tools"
 SERVICE_VERSION = "0.1.0"
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=UnsupportedFieldAttributeWarning)
 
@@ -60,7 +64,28 @@ def rerank(request: RerankRequest) -> RerankResponse:
 
 @app.post("/document/parse", response_model=DocumentParseResponse)
 def document_parse(request: DocumentParseRequest) -> DocumentParseResponse:
-    return parse_document(request)
+    started = time.perf_counter()
+    try:
+        response = parse_document(request)
+        logger.info(
+            "document_parse completed file_name=%s file_type=%s parsed_text_length=%s block_count=%s artifact_count=%s structure_node_count=%s cost_ms=%s",
+            request.file_name,
+            request.file_type,
+            len(response.parsed_text or ""),
+            len(response.blocks or []),
+            len(response.artifacts or []),
+            len(response.structure_nodes or []),
+            int((time.perf_counter() - started) * 1000),
+        )
+        return response
+    except Exception:
+        logger.exception(
+            "document_parse failed file_name=%s file_type=%s cost_ms=%s",
+            request.file_name,
+            request.file_type,
+            int((time.perf_counter() - started) * 1000),
+        )
+        raise
 
 
 @app.post("/citation/repair", response_model=CitationRepairResponse)

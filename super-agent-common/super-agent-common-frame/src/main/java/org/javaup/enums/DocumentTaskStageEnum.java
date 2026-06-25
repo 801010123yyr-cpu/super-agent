@@ -14,7 +14,11 @@ public enum DocumentTaskStageEnum {
     CHUNK_EXECUTE(5, "切块执行"),
     CHUNK_POST_PROCESS(6, "切块后处理"),
     VECTORIZE(7, "向量化"),
-    STORE_COMPLETE(8, "入库完成");
+    STORE_COMPLETE(8, "入库完成"),
+    KEYWORD_INDEX(9, "关键词索引"),
+    GRAPH_RAG(10, "GraphRAG"),
+    GRAPH_TYPED_INDEX(11, "GraphRAG 派生索引"),
+    RAPTOR(12, "RAPTOR");
 
     private final Integer code;
 

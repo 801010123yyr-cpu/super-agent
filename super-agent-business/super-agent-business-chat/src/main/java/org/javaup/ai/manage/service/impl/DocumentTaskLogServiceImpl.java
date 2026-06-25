@@ -25,15 +25,15 @@ public class DocumentTaskLogServiceImpl implements DocumentTaskLogService {
     private final UidGenerator uidGenerator;
 
     @Override
-    public void saveLog(Long taskId,
-                        Long documentId,
-                        Integer stageType,
-                        Integer eventType,
-                        Integer logLevel,
-                        Integer operatorType,
-                        Long operatorId,
-                        String content,
-                        Object detail) {
+    public SuperAgentDocumentTaskLog saveLog(Long taskId,
+                                             Long documentId,
+                                             Integer stageType,
+                                             Integer eventType,
+                                             Integer logLevel,
+                                             Integer operatorType,
+                                             Long operatorId,
+                                             String content,
+                                             Object detail) {
         SuperAgentDocumentTaskLog log = new SuperAgentDocumentTaskLog();
         log.setId(uidGenerator.getUid());
         log.setTaskId(taskId);
@@ -47,6 +47,7 @@ public class DocumentTaskLogServiceImpl implements DocumentTaskLogService {
         log.setDetailJson(toJson(detail));
         log.setStatus(BusinessStatus.YES.getCode());
         taskLogMapper.insert(log);
+        return log;
     }
 
     private String toJson(Object detail) {

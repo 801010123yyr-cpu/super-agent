@@ -3,6 +3,7 @@ package org.javaup.ai.manage.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import org.javaup.ai.manage.dto.DocumentIndexBuildDto;
+import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentChunkQueryDto;
 import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
@@ -18,6 +19,7 @@ import org.javaup.ai.manage.service.GraphRagEvaluationBaselineService;
 import org.javaup.ai.manage.service.DocumentManageService;
 import org.javaup.ai.manage.service.DocumentRagSnapshotService;
 import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
+import org.javaup.ai.manage.vo.DocumentIndexBuildProgressVo;
 import org.javaup.ai.manage.vo.DocumentChunkQueryVo;
 import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
@@ -103,6 +105,12 @@ public class DocumentManageController {
     @PostMapping("/index/build")
     public ApiResponse<DocumentIndexBuildVo> buildIndex(@Valid @RequestBody DocumentIndexBuildDto dto) {
         return ApiResponse.ok(documentManageService.buildIndex(dto));
+    }
+
+    @Operation(summary = "查询文档索引构建轻量进度")
+    @PostMapping("/index/build/progress/query")
+    public ApiResponse<DocumentIndexBuildProgressVo> queryIndexBuildProgress(@Valid @RequestBody DocumentIndexBuildProgressQueryDto dto) {
+        return ApiResponse.ok(documentManageService.queryIndexBuildProgress(dto));
     }
 
     @Operation(summary = "查询文档 chunk 列表")

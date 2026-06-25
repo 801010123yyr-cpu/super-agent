@@ -7,9 +7,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentTask;
+import org.javaup.ai.manage.data.SuperAgentDocumentTaskLog;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.model.graph.GraphRagBuildResult;
+import org.javaup.ai.manage.service.DocumentIndexBuildProgressCacheService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
 import org.javaup.ai.manage.service.GraphRagBuildCheckpointService;
 import org.javaup.enums.DocumentLogLevelEnum;
@@ -36,7 +40,11 @@ public class DocumentGraphRagBuildCheckpointServiceImpl implements GraphRagBuild
 
     private final SuperAgentDocumentTaskMapper taskMapper;
 
+    private final SuperAgentDocumentMapper documentMapper;
+
     private final DocumentTaskLogService taskLogService;
+
+    private final DocumentIndexBuildProgressCacheService progressCacheService;
 
     private final ObjectMapper objectMapper;
 
@@ -224,15 +232,18 @@ public class DocumentGraphRagBuildCheckpointServiceImpl implements GraphRagBuild
                          DocumentLogLevelEnum logLevel,
                          String content,
                          Map<String, Object> detail) {
-        taskLogService.saveLog(taskId,
+        SuperAgentDocumentTaskLog taskLog = taskLogService.saveLog(taskId,
             documentId,
-            DocumentTaskStageEnum.VECTORIZE.getCode(),
+            DocumentTaskStageEnum.GRAPH_RAG.getCode(),
             eventType.getCode(),
             logLevel.getCode(),
             DocumentOperatorTypeEnum.SYSTEM.getCode(),
             null,
             content,
             detail);
+        SuperAgentDocument document = documentMapper.selectById(documentId);
+        SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+        progressCacheService.update(document, task, taskLog);
     }
 
     private String limit(String value, int maxLength) {

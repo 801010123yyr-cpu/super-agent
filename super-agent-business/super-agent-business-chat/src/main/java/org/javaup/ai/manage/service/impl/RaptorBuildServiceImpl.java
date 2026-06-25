@@ -8,12 +8,14 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
 import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
+import org.javaup.ai.manage.support.MybatisBatchExecutor;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsRaptorBuildRequest;
 import org.javaup.ai.ragtools.model.RagToolsRaptorBuildResponse;
@@ -89,6 +91,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
 
+    private final DocumentManageProperties properties;
+
     @Value("${spring.ai.openai.embedding.options.model:}")
     private String embeddingModelName;
 
@@ -106,16 +110,22 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             return RaptorBuildResult.builder().build();
         }
 
+        long buildStartedNanos = System.nanoTime();
+        log.info("开始构建 RAPTOR 摘要树，documentId={}, taskId={}, chunkCount={}", documentId, taskId, chunks.size());
+        long pythonStartedNanos = System.nanoTime();
         RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(documentId, taskId, chunks));
+        log.info("Python RAPTOR 构建调用完成，documentId={}, taskId={}, costMillis={}",
+            documentId, taskId, elapsedMillis(pythonStartedNanos));
         if (response == null) {
             throw new IllegalStateException("Python RAPTOR 构建接口返回为空。");
         }
 
         Map<String, Long> idMap = allocateNodeIds(response.getNodes());
         List<SuperAgentRaptorNode> nodes = buildNodeEntities(documentId, taskId, response.getNodes(), idMap);
-        for (SuperAgentRaptorNode node : nodes) {
-            raptorNodeMapper.insert(node);
-        }
+        long insertStartedNanos = System.nanoTime();
+        MybatisBatchExecutor.insertBatch(SuperAgentRaptorNode.class, nodes);
+        log.info("RAPTOR 节点入库完成，documentId={}, taskId={}, nodeCount={}, costMillis={}",
+            documentId, taskId, nodes.size(), elapsedMillis(insertStartedNanos));
         vectorize(nodes);
 
         int levelCount = nodes.stream()
@@ -133,7 +143,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             .levelCount(levelCount)
             .sourceChunkCount(sourceChunkCount)
             .build();
-        log.info("RAPTOR 层级摘要树构建完成: documentId={}, taskId={}, result={}", documentId, taskId, result);
+        log.info("RAPTOR 层级摘要树构建完成: documentId={}, taskId={}, result={}, costMillis={}",
+            documentId, taskId, result, elapsedMillis(buildStartedNanos));
         return result;
     }
 
@@ -288,17 +299,32 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         EmbeddingModel embeddingModel = requireEmbeddingModel();
         String embeddingModelName = resolveEmbeddingModelName();
         String upsertSql = UPSERT_SQL_TEMPLATE.formatted(DocumentPgVectorConstants.RAPTOR_EMBEDDING_TABLE_NAME);
-        for (int startIndex = 0; startIndex < nodes.size(); startIndex += EMBEDDING_BATCH_SIZE_LIMIT) {
-            int endIndex = Math.min(startIndex + EMBEDDING_BATCH_SIZE_LIMIT, nodes.size());
+        int batchSize = embeddingBatchSize();
+        int totalBatchCount = (nodes.size() + batchSize - 1) / batchSize;
+        long vectorizeStartedNanos = System.nanoTime();
+        log.info("开始执行 RAPTOR 摘要向量化，nodeCount={}, batchSize={}, batchCount={}, embeddingModel={}",
+            nodes.size(), batchSize, totalBatchCount, embeddingModelName);
+        for (int startIndex = 0; startIndex < nodes.size(); startIndex += batchSize) {
+            int endIndex = Math.min(startIndex + batchSize, nodes.size());
             List<SuperAgentRaptorNode> currentBatch = nodes.subList(startIndex, endIndex);
+            int currentBatchIndex = (startIndex / batchSize) + 1;
+            long batchStartedNanos = System.nanoTime();
+            long embeddingStartedNanos = System.nanoTime();
             List<float[]> embeddings = embeddingModel.embed(currentBatch.stream()
                 .map(this::embeddingInput)
                 .toList());
+            long embeddingCostMillis = elapsedMillis(embeddingStartedNanos);
             if (embeddings.size() != currentBatch.size()) {
                 throw new IllegalStateException("EmbeddingModel 返回的 RAPTOR 向量数量与节点数量不一致。");
             }
+            long upsertStartedNanos = System.nanoTime();
             batchUpsert(upsertSql, currentBatch, embeddings, embeddingModelName);
+            log.info("RAPTOR 摘要向量化批次完成，batchIndex={}/{}, currentBatchSize={}, embeddingCostMillis={}, pgVectorCostMillis={}, batchCostMillis={}",
+                currentBatchIndex, totalBatchCount, currentBatch.size(), embeddingCostMillis,
+                elapsedMillis(upsertStartedNanos), elapsedMillis(batchStartedNanos));
         }
+        log.info("RAPTOR 摘要向量化完成，nodeCount={}, batchSize={}, batchCount={}, embeddingModel={}, costMillis={}",
+            nodes.size(), batchSize, totalBatchCount, embeddingModelName, elapsedMillis(vectorizeStartedNanos));
     }
 
     private void batchUpsert(String upsertSql,
@@ -375,6 +401,18 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private String resolveEmbeddingModelName() {
         return StrUtil.isNotBlank(embeddingModelName) ? embeddingModelName : "default";
+    }
+
+    private int embeddingBatchSize() {
+        Integer configured = properties.getIndexBuild().getEmbeddingBatchSize();
+        if (configured == null || configured <= 0) {
+            return EMBEDDING_BATCH_SIZE_LIMIT;
+        }
+        return Math.min(configured, EMBEDDING_BATCH_SIZE_LIMIT);
+    }
+
+    private long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000L;
     }
 
     private String toVectorLiteral(float[] embedding) {

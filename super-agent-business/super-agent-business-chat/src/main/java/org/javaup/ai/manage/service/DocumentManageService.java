@@ -6,6 +6,7 @@ import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
 import org.javaup.ai.manage.dto.DocumentTaskLogQueryDto;
@@ -16,6 +17,7 @@ import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentDeleteVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentIndexBuildProgressVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogQueryVo;
@@ -43,6 +45,8 @@ public interface DocumentManageService {
     DocumentStrategyConfirmVo confirmStrategy(DocumentStrategyConfirmDto dto);
 
     DocumentIndexBuildVo buildIndex(DocumentIndexBuildDto dto);
+
+    DocumentIndexBuildProgressVo queryIndexBuildProgress(DocumentIndexBuildProgressQueryDto dto);
 
     DocumentChunkQueryVo queryDocumentChunks(DocumentChunkQueryDto dto);
 
