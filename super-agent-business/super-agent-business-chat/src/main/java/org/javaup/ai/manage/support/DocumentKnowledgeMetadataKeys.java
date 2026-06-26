@@ -1,5 +1,7 @@
 package org.javaup.ai.manage.support;
 
+import java.util.List;
+
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
  * @description: 支撑组件
@@ -81,6 +83,11 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_COMMUNITY_ID = "kgCommunityId";
     public static final String KG_COMMUNITY_TITLE = "kgCommunityTitle";
     public static final String KG_COMMUNITY_SUMMARY = "kgCommunitySummary";
+    public static final String KG_CROSS_DOCUMENT_COMMUNITY_KEY = "kgCrossDocumentCommunityKey";
+    public static final String KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT = "kgCrossDocumentCommunityEntityCount";
+    public static final String KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT = "kgCrossDocumentCommunityRelationGroupCount";
+    public static final String KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT = "kgCrossDocumentCommunityEvidenceCount";
+    public static final String KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT = "kgCrossDocumentCommunityDocumentCount";
     public static final String KG_RANK_BOOST = "kgRankBoost";
     public static final String KG_QUALITY_SCORE = "kgQualityScore";
     public static final String KG_QUALITY_REASONS = "kgQualityReasons";
@@ -88,6 +95,40 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_PAGERANK = "kgPagerank";
     public static final String KG_RANK_POSITION = "kgRankPosition";
     public static final String KG_DEGREE = "kgDegree";
+    public static final List<String> GRAPH_RAG_METADATA_KEYS = List.of(
+        KG_ENTITY_ID,
+        KG_ENTITY_NAME,
+        KG_CANONICAL_ENTITY_KEY,
+        KG_CANONICAL_ENTITY_NAME,
+        KG_CANONICAL_ENTITY_COUNT,
+        KG_CANONICAL_DOCUMENT_COUNT,
+        KG_RELATED_ENTITY_ID,
+        KG_RELATED_ENTITY_NAME,
+        KG_RELATION_ID,
+        KG_RELATION_TYPE,
+        KG_RELATION_GROUP_KEY,
+        KG_RELATION_GROUP_RELATION_COUNT,
+        KG_RELATION_GROUP_EVIDENCE_COUNT,
+        KG_RELATION_GROUP_DOCUMENT_COUNT,
+        KG_EVIDENCE_ID,
+        KG_GRAPH_PATH,
+        KG_HOP_COUNT,
+        KG_COMMUNITY_ID,
+        KG_COMMUNITY_TITLE,
+        KG_COMMUNITY_SUMMARY,
+        KG_CROSS_DOCUMENT_COMMUNITY_KEY,
+        KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT,
+        KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT,
+        KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT,
+        KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT,
+        KG_RANK_BOOST,
+        KG_QUALITY_SCORE,
+        KG_QUALITY_REASONS,
+        KG_NOISE_REASONS,
+        KG_PAGERANK,
+        KG_RANK_POSITION,
+        KG_DEGREE
+    );
     public static final String RAPTOR_NODE_ID = "raptorNodeId";
     public static final String RAPTOR_NODE_TITLE = "raptorNodeTitle";
     public static final String RAPTOR_NODE_LEVEL = "raptorNodeLevel";

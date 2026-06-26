@@ -37,6 +37,11 @@ class GraphRagRetrievalChannelTest {
             .kgPagerank(0.17D)
             .kgRankPosition(2)
             .kgDegree(3)
+            .crossDocumentCommunityKey("xdoc-community:retrieval-hit-rate-build-task")
+            .crossDocumentCommunityEntityCount(2)
+            .crossDocumentCommunityRelationGroupCount(1)
+            .crossDocumentCommunityEvidenceCount(3)
+            .crossDocumentCommunityDocumentCount(2)
             .evidenceId(300L)
             .quoteText("检索命中率突然下降时，需要先确认最近一次构建任务是否成功。")
             .sectionPath("14.1 场景一：检索命中率突然下降")
@@ -58,6 +63,7 @@ class GraphRagRetrievalChannelTest {
         Document document = result.getDocuments().get(0);
         assertThat(document.getId()).isEqualTo("graphrag-300");
         assertThat(document.getText()).contains("检索命中率突然下降");
+        assertThat(document.getText()).contains("跨文档社区：2 份文档 / 1 个关系组 / 3 条证据支撑");
         assertThat(document.getMetadata().values()).doesNotContainNull();
         assertThat(document.getMetadata())
             .containsEntry(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG")
@@ -80,6 +86,11 @@ class GraphRagRetrievalChannelTest {
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.17D)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 2)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_DEGREE, 3)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:retrieval-hit-rate-build-task")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 2)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 1)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 3)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2)
             .doesNotContainKeys(
                 DocumentKnowledgeMetadataKeys.KG_RELATION_ID,
                 DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID,

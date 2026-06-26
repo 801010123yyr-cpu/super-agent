@@ -9,10 +9,17 @@ import java.util.Map;
 import java.util.Set;
 
 public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonicalGroupByEntityId,
-                                         Map<Long, RelationGroup> relationGroupByRelationId) {
+                                         Map<Long, RelationGroup> relationGroupByRelationId,
+                                         Map<String, CrossDocumentCommunity> communityByKey,
+                                         Map<String, CrossDocumentCommunity> communityByRelationGroupKey) {
 
     public static GraphRagCrossDocumentIndex empty() {
-        return new GraphRagCrossDocumentIndex(Map.of(), Map.of());
+        return new GraphRagCrossDocumentIndex(Map.of(), Map.of(), Map.of(), Map.of());
+    }
+
+    public GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonicalGroupByEntityId,
+                                      Map<Long, RelationGroup> relationGroupByRelationId) {
+        this(canonicalGroupByEntityId, relationGroupByRelationId, Map.of(), Map.of());
     }
 
     public CanonicalEntityGroup canonicalGroupOf(Long entityId) {
@@ -23,12 +30,20 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
         return relationId == null ? null : relationGroupByRelationId.get(relationId);
     }
 
+    public CrossDocumentCommunity communityOfRelationGroup(String relationGroupKey) {
+        return relationGroupKey == null ? null : communityByRelationGroupKey.get(relationGroupKey);
+    }
+
     public boolean hasCanonicalGroups() {
         return canonicalGroupByEntityId != null && !canonicalGroupByEntityId.isEmpty();
     }
 
     public boolean hasRelationGroups() {
         return relationGroupByRelationId != null && !relationGroupByRelationId.isEmpty();
+    }
+
+    public boolean hasCommunities() {
+        return communityByKey != null && !communityByKey.isEmpty();
     }
 
     public Map<String, CanonicalEntityGroup> distinctCanonicalGroups() {
@@ -141,6 +156,40 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
 
         public static QualityProfile empty() {
             return new QualityProfile(0D, List.of(), List.of());
+        }
+    }
+
+    public record CrossDocumentCommunity(Long id,
+                                         String key,
+                                         String title,
+                                         String summary,
+                                         Set<String> canonicalGroupKeys,
+                                         Set<String> relationGroupKeys,
+                                         Set<Long> evidenceIds,
+                                         Set<Long> documentIds,
+                                         double rankScore,
+                                         QualityProfile qualityProfile,
+                                         RankProfile rankProfile) {
+
+        public CrossDocumentCommunity {
+            qualityProfile = qualityProfile == null ? QualityProfile.empty() : qualityProfile;
+            rankProfile = rankProfile == null ? RankProfile.empty() : rankProfile;
+        }
+
+        public int entityCount() {
+            return canonicalGroupKeys == null ? 0 : canonicalGroupKeys.size();
+        }
+
+        public int relationGroupCount() {
+            return relationGroupKeys == null ? 0 : relationGroupKeys.size();
+        }
+
+        public int evidenceCount() {
+            return evidenceIds == null ? 0 : evidenceIds.size();
+        }
+
+        public int documentCount() {
+            return documentIds == null ? 0 : documentIds.size();
         }
     }
 

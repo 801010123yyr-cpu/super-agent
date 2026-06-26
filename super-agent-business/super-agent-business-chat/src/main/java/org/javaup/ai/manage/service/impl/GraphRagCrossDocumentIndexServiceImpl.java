@@ -10,6 +10,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentKgCanonicalEntityGroup;
 import org.javaup.ai.manage.data.SuperAgentKgCanonicalEntityMember;
+import org.javaup.ai.manage.data.SuperAgentKgCrossDocumentCommunity;
+import org.javaup.ai.manage.data.SuperAgentKgCrossDocumentCommunityMember;
 import org.javaup.ai.manage.data.SuperAgentKgEntity;
 import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
@@ -18,6 +20,8 @@ import org.javaup.ai.manage.data.SuperAgentKgRelationGroupMember;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityGroupMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityMemberMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKgCrossDocumentCommunityMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKgCrossDocumentCommunityMemberMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationGroupMapper;
@@ -61,6 +65,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
     private final SuperAgentKgCanonicalEntityMemberMapper canonicalMemberMapper;
     private final SuperAgentKgRelationGroupMapper relationGroupMapper;
     private final SuperAgentKgRelationGroupMemberMapper relationGroupMemberMapper;
+    private final SuperAgentKgCrossDocumentCommunityMapper communityMapper;
+    private final SuperAgentKgCrossDocumentCommunityMemberMapper communityMemberMapper;
     private final GraphRagCrossDocumentIndexSupport indexSupport;
     private final UidGenerator uidGenerator;
     private final ObjectMapper objectMapper;
@@ -73,6 +79,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
                                                  SuperAgentKgCanonicalEntityMemberMapper canonicalMemberMapper,
                                                  SuperAgentKgRelationGroupMapper relationGroupMapper,
                                                  SuperAgentKgRelationGroupMemberMapper relationGroupMemberMapper,
+                                                 SuperAgentKgCrossDocumentCommunityMapper communityMapper,
+                                                 SuperAgentKgCrossDocumentCommunityMemberMapper communityMemberMapper,
                                                  GraphRagCrossDocumentIndexSupport indexSupport,
                                                  UidGenerator uidGenerator,
                                                  ObjectMapper objectMapper) {
@@ -84,6 +92,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         this.canonicalMemberMapper = canonicalMemberMapper;
         this.relationGroupMapper = relationGroupMapper;
         this.relationGroupMemberMapper = relationGroupMemberMapper;
+        this.communityMapper = communityMapper;
+        this.communityMemberMapper = communityMemberMapper;
         this.indexSupport = indexSupport;
         this.uidGenerator = uidGenerator;
         this.objectMapper = objectMapper;
@@ -202,7 +212,7 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
                 }
             }
         }
-        return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId);
+        return withLoadedCommunities(scopeKey, canonicalByEntityId, relationByRelationId);
     }
 
     private GraphRagCrossDocumentIndexBuildResult persistScope(String scopeKey, ScopeDataset dataset) {
@@ -223,9 +233,11 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         }
 
         Map<String, GraphRagCrossDocumentIndex.RelationGroup> relationGroups = index.distinctRelationGroups();
+        Map<String, Long> relationGroupIdByKey = new LinkedHashMap<>();
         int relationMemberCount = 0;
         for (GraphRagCrossDocumentIndex.RelationGroup group : relationGroups.values()) {
             Long groupId = uidGenerator.getUid();
+            relationGroupIdByKey.put(group.key(), groupId);
             relationGroupMapper.insert(toRelationGroupRow(scopeKey, groupId, group));
             for (Long relationId : group.relationIds()) {
                 SuperAgentKgRelation relation = dataset.relationById().get(relationId);
@@ -237,12 +249,29 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             }
         }
 
+        int communityMemberCount = 0;
+        for (GraphRagCrossDocumentIndex.CrossDocumentCommunity community : index.communityByKey().values()) {
+            Long communityId = uidGenerator.getUid();
+            communityMapper.insert(toCommunityRow(scopeKey, communityId, community));
+            for (String relationGroupKey : community.relationGroupKeys()) {
+                Long relationGroupId = relationGroupIdByKey.get(relationGroupKey);
+                GraphRagCrossDocumentIndex.RelationGroup relationGroup = relationGroups.get(relationGroupKey);
+                if (relationGroupId == null || relationGroup == null) {
+                    continue;
+                }
+                communityMemberMapper.insert(toCommunityMemberRow(scopeKey, communityId, community, relationGroupId, relationGroup));
+                communityMemberCount++;
+            }
+        }
+
         return GraphRagCrossDocumentIndexBuildResult.builder()
             .scopeKey(scopeKey)
             .canonicalGroupCount(canonicalGroups.size())
             .canonicalMemberCount(memberCount)
             .relationGroupCount(relationGroups.size())
             .relationGroupMemberCount(relationMemberCount)
+            .communityCount(index.communityByKey().size())
+            .communityMemberCount(communityMemberCount)
             .build();
     }
 
@@ -443,6 +472,65 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         return row;
     }
 
+    private SuperAgentKgCrossDocumentCommunity toCommunityRow(String scopeKey,
+                                                              Long communityId,
+                                                              GraphRagCrossDocumentIndex.CrossDocumentCommunity community) {
+        SuperAgentKgCrossDocumentCommunity row = new SuperAgentKgCrossDocumentCommunity();
+        row.setId(communityId);
+        row.setScopeKey(scopeKey);
+        row.setCommunityKey(limit(community.key(), 255));
+        row.setTitle(limit(community.title(), 500));
+        row.setSummary(community.summary());
+        row.setCanonicalGroupKeysJson(writeJson(community.canonicalGroupKeys()));
+        row.setRelationGroupKeysJson(writeJson(community.relationGroupKeys().stream()
+            .map(this::relationGroupStorageKey)
+            .toList()));
+        row.setEntityCount(community.entityCount());
+        row.setRelationGroupCount(community.relationGroupCount());
+        row.setEvidenceCount(community.evidenceCount());
+        row.setDocumentCount(community.documentCount());
+        row.setRankScore(decimal(community.rankScore()));
+        Map<String, Object> metadata = baseDerivedMetadata(community.qualityProfile(), community.rankProfile());
+        metadata.put("communityKey", community.key());
+        metadata.put("canonicalGroupKeys", community.canonicalGroupKeys());
+        metadata.put("relationGroupKeys", community.relationGroupKeys());
+        metadata.put("evidenceIds", community.evidenceIds());
+        metadata.put("documentIds", community.documentIds());
+        metadata.put("sourceType", "java.cross_document_community.v1");
+        row.setMetadataJson(writeJson(metadata));
+        row.setStatus(BusinessStatus.YES.getCode());
+        return row;
+    }
+
+    private SuperAgentKgCrossDocumentCommunityMember toCommunityMemberRow(
+        String scopeKey,
+        Long communityId,
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity community,
+        Long relationGroupId,
+        GraphRagCrossDocumentIndex.RelationGroup relationGroup
+    ) {
+        SuperAgentKgCrossDocumentCommunityMember row = new SuperAgentKgCrossDocumentCommunityMember();
+        row.setId(uidGenerator.getUid());
+        row.setScopeKey(scopeKey);
+        row.setCommunityId(communityId);
+        row.setCommunityKey(limit(community.key(), 255));
+        row.setRelationGroupId(relationGroupId);
+        row.setRelationGroupKey(relationGroupStorageKey(relationGroup.key()));
+        row.setSourceGroupKey(limit(relationGroup.sourceGroupKey(), 255));
+        row.setTargetGroupKey(limit(relationGroup.targetGroupKey(), 255));
+        row.setRelationType(limit(relationGroup.relationType(), 64));
+        row.setRelationCount(relationGroup.relationCount());
+        row.setEvidenceCount(relationGroup.evidenceCount());
+        row.setDocumentCount(relationGroup.documentCount());
+        Map<String, Object> metadata = baseDerivedMetadata(relationGroup.qualityProfile(), relationGroup.rankProfile());
+        metadata.put("communityKey", community.key());
+        metadata.put("naturalRelationGroupKey", relationGroup.key());
+        metadata.put("rankScore", community.rankScore());
+        row.setMetadataJson(writeJson(metadata));
+        row.setStatus(BusinessStatus.YES.getCode());
+        return row;
+    }
+
     private GraphRagCrossDocumentIndex.CanonicalEntityGroup toCanonicalGroup(String groupKey,
                                                                             SuperAgentKgCanonicalEntityGroup groupRow,
                                                                             List<SuperAgentKgCanonicalEntityMember> members) {
@@ -513,6 +601,94 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             groupRow == null || groupRow.getRankScore() == null ? 0D : groupRow.getRankScore().doubleValue(),
             qualityProfile,
             rankProfile
+        );
+    }
+
+    private GraphRagCrossDocumentIndex withLoadedCommunities(
+        String scopeKey,
+        Map<Long, GraphRagCrossDocumentIndex.CanonicalEntityGroup> canonicalByEntityId,
+        Map<Long, GraphRagCrossDocumentIndex.RelationGroup> relationByRelationId
+    ) {
+        Map<String, GraphRagCrossDocumentIndex.RelationGroup> relationByStorageKey = new LinkedHashMap<>();
+        for (GraphRagCrossDocumentIndex.RelationGroup group : relationByRelationId.values()) {
+            if (group != null) {
+                relationByStorageKey.putIfAbsent(relationGroupStorageKey(group.key()), group);
+            }
+        }
+        if (relationByStorageKey.isEmpty()) {
+            return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId);
+        }
+
+        List<SuperAgentKgCrossDocumentCommunityMember> members = communityMemberMapper.selectList(
+            new LambdaQueryWrapper<SuperAgentKgCrossDocumentCommunityMember>()
+                .eq(SuperAgentKgCrossDocumentCommunityMember::getScopeKey, scopeKey)
+                .in(SuperAgentKgCrossDocumentCommunityMember::getRelationGroupKey, relationByStorageKey.keySet())
+                .eq(SuperAgentKgCrossDocumentCommunityMember::getStatus, BusinessStatus.YES.getCode())
+        );
+        if (members.isEmpty()) {
+            return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId);
+        }
+        Set<Long> communityIds = members.stream()
+            .map(SuperAgentKgCrossDocumentCommunityMember::getCommunityId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<Long, SuperAgentKgCrossDocumentCommunity> communityRowById = communityIds.isEmpty()
+            ? Map.of()
+            : communityMapper.selectList(new LambdaQueryWrapper<SuperAgentKgCrossDocumentCommunity>()
+                .eq(SuperAgentKgCrossDocumentCommunity::getScopeKey, scopeKey)
+                .in(SuperAgentKgCrossDocumentCommunity::getId, communityIds)
+                .eq(SuperAgentKgCrossDocumentCommunity::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .collect(Collectors.toMap(SuperAgentKgCrossDocumentCommunity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
+        Map<Long, List<SuperAgentKgCrossDocumentCommunityMember>> membersByCommunityId = members.stream()
+            .filter(member -> member.getCommunityId() != null)
+            .collect(Collectors.groupingBy(SuperAgentKgCrossDocumentCommunityMember::getCommunityId, LinkedHashMap::new, Collectors.toList()));
+
+        LinkedHashMap<String, GraphRagCrossDocumentIndex.CrossDocumentCommunity> communityByKey = new LinkedHashMap<>();
+        LinkedHashMap<String, GraphRagCrossDocumentIndex.CrossDocumentCommunity> communityByRelationGroupKey = new LinkedHashMap<>();
+        for (Map.Entry<Long, List<SuperAgentKgCrossDocumentCommunityMember>> entry : membersByCommunityId.entrySet()) {
+            SuperAgentKgCrossDocumentCommunity row = communityRowById.get(entry.getKey());
+            if (row == null) {
+                continue;
+            }
+            GraphRagCrossDocumentIndex.CrossDocumentCommunity community = toCommunity(row, entry.getValue(), relationByStorageKey);
+            communityByKey.put(community.key(), community);
+            for (String relationGroupKey : community.relationGroupKeys()) {
+                communityByRelationGroupKey.put(relationGroupKey, community);
+            }
+        }
+        return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId, communityByKey, communityByRelationGroupKey);
+    }
+
+    private GraphRagCrossDocumentIndex.CrossDocumentCommunity toCommunity(
+        SuperAgentKgCrossDocumentCommunity row,
+        List<SuperAgentKgCrossDocumentCommunityMember> members,
+        Map<String, GraphRagCrossDocumentIndex.RelationGroup> relationByStorageKey
+    ) {
+        Map<String, Object> metadata = readMetadata(row.getMetadataJson());
+        String communityKey = StrUtil.blankToDefault(stringValue(metadata.get("communityKey")), row.getCommunityKey());
+        Set<String> relationGroupKeys = new LinkedHashSet<>();
+        for (SuperAgentKgCrossDocumentCommunityMember member : members) {
+            GraphRagCrossDocumentIndex.RelationGroup relationGroup = relationByStorageKey.get(member.getRelationGroupKey());
+            if (relationGroup != null) {
+                relationGroupKeys.add(relationGroup.key());
+            }
+        }
+        if (relationGroupKeys.isEmpty()) {
+            relationGroupKeys.addAll(readStringSet(metadata, "relationGroupKeys"));
+        }
+        return new GraphRagCrossDocumentIndex.CrossDocumentCommunity(
+            row.getId(),
+            communityKey,
+            row.getTitle(),
+            row.getSummary(),
+            readStringSet(metadata, "canonicalGroupKeys"),
+            relationGroupKeys,
+            readLongSet(metadata, "evidenceIds"),
+            readLongSet(metadata, "documentIds"),
+            row.getRankScore() == null ? 0D : row.getRankScore().doubleValue(),
+            qualityProfile(metadata),
+            rankProfile(metadata)
         );
     }
 
@@ -590,6 +766,23 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
                 catch (NumberFormatException ignored) {
                     // Ignore malformed metadata values in the derived read model.
                 }
+            }
+        }
+        return result;
+    }
+
+    private Set<String> readStringSet(Map<String, Object> map, String key) {
+        if (map == null || map.isEmpty()) {
+            return Set.of();
+        }
+        Object value = map.get(key);
+        if (!(value instanceof Collection<?> collection)) {
+            return Set.of();
+        }
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        for (Object item : collection) {
+            if (item != null && StrUtil.isNotBlank(String.valueOf(item))) {
+                result.add(String.valueOf(item));
             }
         }
         return result;
@@ -682,6 +875,10 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
     }
 
     private void deleteAllDerivedIndexes() {
+        communityMemberMapper.delete(new LambdaQueryWrapper<SuperAgentKgCrossDocumentCommunityMember>()
+            .isNotNull(SuperAgentKgCrossDocumentCommunityMember::getId));
+        communityMapper.delete(new LambdaQueryWrapper<SuperAgentKgCrossDocumentCommunity>()
+            .isNotNull(SuperAgentKgCrossDocumentCommunity::getId));
         relationGroupMemberMapper.delete(new LambdaQueryWrapper<SuperAgentKgRelationGroupMember>()
             .isNotNull(SuperAgentKgRelationGroupMember::getId));
         relationGroupMapper.delete(new LambdaQueryWrapper<SuperAgentKgRelationGroup>()

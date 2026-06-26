@@ -140,7 +140,15 @@ class DocumentKnowledgeServiceImplTest {
                 DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "一跳：AuditTrail --RECORDS--> 异常权限扩散",
                 DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.81D,
                 DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,strongRelationSource",
-                DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, ""
+                DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, "",
+                DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统",
+                DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 6,
+                DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 4,
+                DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 8,
+                DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2,
+                DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.17D,
+                DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 1,
+                DocumentKnowledgeMetadataKeys.KG_DEGREE, 5
             ))
             .build();
 
@@ -165,6 +173,15 @@ class DocumentKnowledgeServiceImplTest {
         assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE)).isEqualTo(0.81D);
         assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS))
             .isEqualTo("groundedEvidence,strongRelationSource");
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY))
+            .isEqualTo("xdoc-community:concept审计系统");
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT)).isEqualTo(6);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)).isEqualTo(4);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT)).isEqualTo(8);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT)).isEqualTo(2);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_PAGERANK)).isEqualTo(0.17D);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION)).isEqualTo(1);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_DEGREE)).isEqualTo(5);
     }
 
     private static Map<String, Object> metadata(Object... values) {

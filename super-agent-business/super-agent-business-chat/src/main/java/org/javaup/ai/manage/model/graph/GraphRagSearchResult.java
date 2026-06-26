@@ -63,6 +63,16 @@ public class GraphRagSearchResult {
 
     private String communitySummary;
 
+    private String crossDocumentCommunityKey;
+
+    private Integer crossDocumentCommunityEntityCount;
+
+    private Integer crossDocumentCommunityRelationGroupCount;
+
+    private Integer crossDocumentCommunityEvidenceCount;
+
+    private Integer crossDocumentCommunityDocumentCount;
+
     private Long chunkId;
 
     private Long parentBlockId;

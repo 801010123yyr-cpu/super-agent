@@ -475,9 +475,24 @@ class GraphRagSearchServiceImplTest {
             new GraphRagCrossDocumentIndex.QualityProfile(0.88D, List.of("groundedEvidence", "crossDocument"), List.of()),
             new GraphRagCrossDocumentIndex.RankProfile(0.17D, 0.86D, 2, 3, 1, 2, 2.8D)
         );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity community = new GraphRagCrossDocumentIndex.CrossDocumentCommunity(
+            8801L,
+            "xdoc-community:audittrail-permission",
+            "审计系统权限记录社区",
+            "审计系统 AuditTrail 记录权限申请、审批和权限回收，覆盖 2 份文档中的权限记录证据。",
+            new LinkedHashSet<>(List.of("SYSTEM:audittrail", "PROCESS:权限申请")),
+            new LinkedHashSet<>(List.of(relationGroup.key())),
+            new LinkedHashSet<>(List.of(3701L, 3702L)),
+            new LinkedHashSet<>(List.of(17L, 18L)),
+            0.78D,
+            new GraphRagCrossDocumentIndex.QualityProfile(0.88D, List.of("groundedEvidence", "crossDocument"), List.of()),
+            new GraphRagCrossDocumentIndex.RankProfile(0.17D, 0.86D, 2, 3, 1, 2, 2.8D)
+        );
         GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
             Map.of(1601L, canonicalGroup, 1701L, canonicalGroup),
-            Map.of(2701L, relationGroup)
+            Map.of(2701L, relationGroup),
+            Map.of(community.key(), community),
+            Map.of(relationGroup.key(), community)
         );
         AtomicInteger indexLoadCount = new AtomicInteger();
         GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
@@ -540,7 +555,10 @@ class GraphRagSearchServiceImplTest {
 
         assertThat(indexLoadCount).hasValue(1);
         assertThat(results).isNotEmpty();
-        GraphRagSearchResult result = results.get(0);
+        GraphRagSearchResult result = results.stream()
+            .filter(item -> Long.valueOf(2701L).equals(item.getRelationId()))
+            .findFirst()
+            .orElseThrow();
         assertThat(result.getRelationId()).isEqualTo(2701L);
         assertThat(result.getEntityName()).isEqualTo("AuditTrail");
         assertThat(result.getCanonicalEntityName()).isEqualTo("AuditTrail");
@@ -550,11 +568,20 @@ class GraphRagSearchServiceImplTest {
         assertThat(result.getRelationGroupRelationCount()).isEqualTo(2);
         assertThat(result.getRelationGroupEvidenceCount()).isEqualTo(2);
         assertThat(result.getRelationGroupDocumentCount()).isEqualTo(2);
+        assertThat(result.getCrossDocumentCommunityKey()).isEqualTo("xdoc-community:audittrail-permission");
+        assertThat(result.getCrossDocumentCommunityEntityCount()).isEqualTo(2);
+        assertThat(result.getCrossDocumentCommunityRelationGroupCount()).isEqualTo(1);
+        assertThat(result.getCrossDocumentCommunityEvidenceCount()).isEqualTo(2);
+        assertThat(result.getCrossDocumentCommunityDocumentCount()).isEqualTo(2);
+        assertThat(result.getCommunityTitle()).isEqualTo("审计系统权限记录社区");
         assertThat(result.getKgQualityScore()).isEqualTo(0.88D);
         assertThat(result.getKgQualityReasons()).contains("groundedEvidence");
         assertThat(result.getKgPagerank()).isEqualTo(0.17D);
         assertThat(result.getKgRankPosition()).isEqualTo(2);
         assertThat(result.getKgDegree()).isEqualTo(3);
+        assertThat(results)
+            .filteredOn(item -> "xdoc-community:audittrail-permission".equals(item.getCrossDocumentCommunityKey()))
+            .isNotEmpty();
         assertThat(relationSelectCount).hasValue(1);
     }
 

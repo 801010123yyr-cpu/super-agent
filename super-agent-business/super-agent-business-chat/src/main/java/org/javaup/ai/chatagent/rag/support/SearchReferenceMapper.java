@@ -91,6 +91,11 @@ public final class SearchReferenceMapper {
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
+        reference.setKgCrossDocumentCommunityKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY), ""));
+        reference.setKgCrossDocumentCommunityEntityCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT)));
+        reference.setKgCrossDocumentCommunityRelationGroupCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)));
+        reference.setKgCrossDocumentCommunityEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT)));
+        reference.setKgCrossDocumentCommunityDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT)));
         reference.setKgQualityScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE)));
         reference.setKgQualityReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS), ""));
         reference.setKgNoiseReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS), ""));

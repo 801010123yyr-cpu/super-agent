@@ -432,13 +432,13 @@ public class GraphRagCrossDocumentIndexSupport {
         Map<Long, GraphRagCrossDocumentIndex.RelationGroup> relationByRelationId
     ) {
         if (canonicalByEntityId.isEmpty()) {
-            return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId);
+            return withCommunities(new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId));
         }
         Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> canonicalByKey = distinctCanonicalGroups(canonicalByEntityId);
         Map<String, GraphRagCrossDocumentIndex.RelationGroup> relationByKey = distinctRelationGroups(relationByRelationId);
         Map<String, GraphRagCrossDocumentIndex.RankProfile> canonicalRankProfiles = calculateCanonicalRankProfiles(canonicalByKey, relationByKey);
         if (canonicalRankProfiles.isEmpty()) {
-            return new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId);
+            return withCommunities(new GraphRagCrossDocumentIndex(canonicalByEntityId, relationByRelationId));
         }
 
         Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> rankedCanonicalByKey = new LinkedHashMap<>();
@@ -500,7 +500,119 @@ public class GraphRagCrossDocumentIndexSupport {
                 rankedRelationByKey.getOrDefault(entry.getValue().key(), entry.getValue())
             );
         }
-        return new GraphRagCrossDocumentIndex(rankedCanonicalByEntityId, rankedRelationByRelationId);
+        return withCommunities(new GraphRagCrossDocumentIndex(rankedCanonicalByEntityId, rankedRelationByRelationId));
+    }
+
+    private GraphRagCrossDocumentIndex withCommunities(GraphRagCrossDocumentIndex index) {
+        if (index == null || !index.hasRelationGroups()) {
+            return index == null ? GraphRagCrossDocumentIndex.empty() : index;
+        }
+        Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> canonicalByKey = index.distinctCanonicalGroups();
+        Map<String, GraphRagCrossDocumentIndex.RelationGroup> relationByKey = index.distinctRelationGroups();
+        if (canonicalByKey.isEmpty() || relationByKey.isEmpty()) {
+            return index;
+        }
+
+        Map<String, String> parent = new LinkedHashMap<>();
+        for (String canonicalKey : canonicalByKey.keySet()) {
+            parent.put(canonicalKey, canonicalKey);
+        }
+        for (GraphRagCrossDocumentIndex.RelationGroup relationGroup : relationByKey.values()) {
+            if (StrUtil.isBlank(relationGroup.sourceGroupKey())
+                || StrUtil.isBlank(relationGroup.targetGroupKey())
+                || !parent.containsKey(relationGroup.sourceGroupKey())
+                || !parent.containsKey(relationGroup.targetGroupKey())) {
+                continue;
+            }
+            unionKey(parent, relationGroup.sourceGroupKey(), relationGroup.targetGroupKey());
+        }
+
+        Map<String, CommunityAccumulator> accumulators = new LinkedHashMap<>();
+        for (GraphRagCrossDocumentIndex.RelationGroup relationGroup : relationByKey.values()) {
+            String componentKey = communityComponentKey(parent, relationGroup, canonicalByKey);
+            if (StrUtil.isBlank(componentKey)) {
+                continue;
+            }
+            CommunityAccumulator accumulator = accumulators.computeIfAbsent(componentKey, CommunityAccumulator::new);
+            accumulator.addRelationGroup(relationGroup);
+            GraphRagCrossDocumentIndex.CanonicalEntityGroup source = canonicalByKey.get(relationGroup.sourceGroupKey());
+            GraphRagCrossDocumentIndex.CanonicalEntityGroup target = canonicalByKey.get(relationGroup.targetGroupKey());
+            accumulator.addCanonicalGroup(source);
+            accumulator.addCanonicalGroup(target);
+        }
+
+        List<GraphRagCrossDocumentIndex.CrossDocumentCommunity> communities = accumulators.values().stream()
+            .map(CommunityAccumulator::toCommunity)
+            .filter(Objects::nonNull)
+            .sorted(Comparator.comparingDouble(GraphRagCrossDocumentIndex.CrossDocumentCommunity::rankScore).reversed()
+                .thenComparing(GraphRagCrossDocumentIndex.CrossDocumentCommunity::key))
+            .toList();
+        LinkedHashMap<String, GraphRagCrossDocumentIndex.CrossDocumentCommunity> communityByKey = new LinkedHashMap<>();
+        LinkedHashMap<String, GraphRagCrossDocumentIndex.CrossDocumentCommunity> communityByRelationGroupKey = new LinkedHashMap<>();
+        for (int indexNo = 0; indexNo < communities.size(); indexNo++) {
+            GraphRagCrossDocumentIndex.CrossDocumentCommunity community = communities.get(indexNo);
+            GraphRagCrossDocumentIndex.CrossDocumentCommunity rankedCommunity = new GraphRagCrossDocumentIndex.CrossDocumentCommunity(
+                community.id(),
+                community.key(),
+                community.title(),
+                community.summary(),
+                community.canonicalGroupKeys(),
+                community.relationGroupKeys(),
+                community.evidenceIds(),
+                community.documentIds(),
+                community.rankScore(),
+                community.qualityProfile(),
+                new GraphRagCrossDocumentIndex.RankProfile(
+                    community.rankProfile().pagerank(),
+                    community.rankProfile().rankBoost(),
+                    indexNo + 1,
+                    community.rankProfile().degree(),
+                    community.rankProfile().inDegree(),
+                    community.rankProfile().outDegree(),
+                    community.rankProfile().weightedDegree()
+                )
+            );
+            communityByKey.put(rankedCommunity.key(), rankedCommunity);
+            for (String relationGroupKey : rankedCommunity.relationGroupKeys()) {
+                communityByRelationGroupKey.put(relationGroupKey, rankedCommunity);
+            }
+        }
+        return new GraphRagCrossDocumentIndex(
+            index.canonicalGroupByEntityId(),
+            index.relationGroupByRelationId(),
+            communityByKey,
+            communityByRelationGroupKey
+        );
+    }
+
+    private String communityComponentKey(Map<String, String> parent,
+                                         GraphRagCrossDocumentIndex.RelationGroup relationGroup,
+                                         Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> canonicalByKey) {
+        String sourceKey = relationGroup.sourceGroupKey();
+        String targetKey = relationGroup.targetGroupKey();
+        if (!parent.containsKey(sourceKey) && !parent.containsKey(targetKey)) {
+            return "";
+        }
+        String representative = parent.containsKey(sourceKey)
+            ? keyByRoot(parent, findKey(parent, sourceKey), canonicalByKey)
+            : keyByRoot(parent, findKey(parent, targetKey), canonicalByKey);
+        if (StrUtil.isBlank(representative)) {
+            representative = sourceKey + "|" + targetKey;
+        }
+        return "xdoc-community:" + normalizeCanonicalVariant(representative);
+    }
+
+    private String keyByRoot(Map<String, String> parent,
+                             String root,
+                             Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> canonicalByKey) {
+        return parent.entrySet().stream()
+            .filter(entry -> Objects.equals(findKey(parent, entry.getKey()), root))
+            .map(Map.Entry::getKey)
+            .filter(canonicalByKey::containsKey)
+            .sorted(Comparator.comparingDouble((String key) -> canonicalByKey.get(key).rankScore()).reversed()
+                .thenComparing(key -> StrUtil.blankToDefault(canonicalByKey.get(key).name(), key)))
+            .findFirst()
+            .orElse("");
     }
 
     private Map<String, GraphRagCrossDocumentIndex.CanonicalEntityGroup> distinctCanonicalGroups(
@@ -1071,6 +1183,30 @@ public class GraphRagCrossDocumentIndexSupport {
         return current;
     }
 
+    private void unionKey(Map<String, String> parent, String left, String right) {
+        String leftRoot = findKey(parent, left);
+        String rightRoot = findKey(parent, right);
+        if (StrUtil.isBlank(leftRoot) || StrUtil.isBlank(rightRoot) || Objects.equals(leftRoot, rightRoot)) {
+            return;
+        }
+        parent.put(rightRoot, leftRoot);
+    }
+
+    private String findKey(Map<String, String> parent, String key) {
+        if (StrUtil.isBlank(key)) {
+            return "";
+        }
+        String current = parent.get(key);
+        if (StrUtil.isBlank(current)) {
+            return key;
+        }
+        if (!Objects.equals(current, parent.get(current))) {
+            current = findKey(parent, current);
+            parent.put(key, current);
+        }
+        return current;
+    }
+
     private double rounded(double value) {
         return BigDecimal.valueOf(value).setScale(6, java.math.RoundingMode.HALF_UP).doubleValue();
     }
@@ -1221,6 +1357,188 @@ public class GraphRagCrossDocumentIndexSupport {
                 effectiveRankScore,
                 qualityProfile == null ? GraphRagCrossDocumentIndex.QualityProfile.empty() : qualityProfile
             );
+        }
+    }
+
+    private class CommunityAccumulator {
+
+        private final String key;
+        private final Set<String> canonicalGroupKeys = new LinkedHashSet<>();
+        private final Set<String> relationGroupKeys = new LinkedHashSet<>();
+        private final Set<Long> evidenceIds = new LinkedHashSet<>();
+        private final Set<Long> documentIds = new LinkedHashSet<>();
+        private final List<String> canonicalNames = new ArrayList<>();
+        private final Set<String> relationTypes = new LinkedHashSet<>();
+        private final Set<String> qualityReasons = new LinkedHashSet<>();
+        private final Set<String> noiseReasons = new LinkedHashSet<>();
+        private double qualityScore;
+        private double rankScore;
+        private double pagerank;
+        private double rankBoost;
+        private int degree;
+        private int inDegree;
+        private int outDegree;
+        private double weightedDegree;
+
+        private CommunityAccumulator(String key) {
+            this.key = key;
+        }
+
+        private void addCanonicalGroup(GraphRagCrossDocumentIndex.CanonicalEntityGroup group) {
+            if (group == null || StrUtil.isBlank(group.key())) {
+                return;
+            }
+            canonicalGroupKeys.add(group.key());
+            if (StrUtil.isNotBlank(group.name()) && !canonicalNames.contains(group.name())) {
+                canonicalNames.add(group.name());
+            }
+            documentIds.addAll(safeSet(group.documentIds()));
+            qualityScore = Math.max(qualityScore, group.qualityProfile().score());
+            qualityReasons.addAll(group.qualityProfile().qualityReasons());
+            noiseReasons.addAll(group.qualityProfile().noiseReasons());
+            rankScore = Math.max(rankScore, group.rankScore());
+            pagerank = Math.max(pagerank, group.rankProfile().pagerank());
+            rankBoost = Math.max(rankBoost, group.rankProfile().rankBoost());
+            degree += group.rankProfile().degree();
+            inDegree += group.rankProfile().inDegree();
+            outDegree += group.rankProfile().outDegree();
+            weightedDegree += group.rankProfile().weightedDegree();
+        }
+
+        private void addRelationGroup(GraphRagCrossDocumentIndex.RelationGroup group) {
+            if (group == null || StrUtil.isBlank(group.key())) {
+                return;
+            }
+            relationGroupKeys.add(group.key());
+            relationTypes.add(StrUtil.blankToDefault(group.relationType(), "ASSOCIATED_WITH"));
+            evidenceIds.addAll(safeSet(group.evidenceIds()));
+            documentIds.addAll(safeSet(group.documentIds()));
+            qualityScore = Math.max(qualityScore, group.qualityProfile().score());
+            qualityReasons.addAll(group.qualityProfile().qualityReasons());
+            noiseReasons.addAll(group.qualityProfile().noiseReasons());
+            rankScore = Math.max(rankScore, group.rankScore());
+            pagerank = Math.max(pagerank, group.rankProfile().pagerank());
+            rankBoost = Math.max(rankBoost, group.rankProfile().rankBoost());
+            degree += group.rankProfile().degree();
+            inDegree += group.rankProfile().inDegree();
+            outDegree += group.rankProfile().outDegree();
+            weightedDegree += group.rankProfile().weightedDegree();
+        }
+
+        private GraphRagCrossDocumentIndex.CrossDocumentCommunity toCommunity() {
+            if (relationGroupKeys.isEmpty() || canonicalGroupKeys.isEmpty()) {
+                return null;
+            }
+            GraphRagCrossDocumentIndex.QualityProfile qualityProfile = communityQualityProfile();
+            double effectiveRank = rounded(clamp(
+                qualityProfile.score() * 0.64D
+                    + Math.min(1D, rankBoost) * 0.20D
+                    + Math.min(0.10D, documentIds.size() * 0.025D)
+                    + Math.min(0.06D, relationGroupKeys.size() * 0.015D)
+            ));
+            return new GraphRagCrossDocumentIndex.CrossDocumentCommunity(
+                null,
+                key,
+                communityTitle(),
+                communitySummary(),
+                Set.copyOf(canonicalGroupKeys),
+                Set.copyOf(relationGroupKeys),
+                Set.copyOf(evidenceIds),
+                Set.copyOf(documentIds),
+                effectiveRank,
+                qualityProfile,
+                new GraphRagCrossDocumentIndex.RankProfile(
+                    rounded(pagerank),
+                    rounded(clamp(rankBoost)),
+                    0,
+                    degree,
+                    inDegree,
+                    outDegree,
+                    rounded(weightedDegree)
+                )
+            );
+        }
+
+        private GraphRagCrossDocumentIndex.QualityProfile communityQualityProfile() {
+            LinkedHashSet<String> reasons = new LinkedHashSet<>();
+            LinkedHashSet<String> noises = new LinkedHashSet<>(noiseReasons);
+            double score = 0.32D;
+            if (canonicalGroupKeys.size() > 1) {
+                score += Math.min(0.16D, canonicalGroupKeys.size() * 0.03D);
+                reasons.add("multiEntityCommunity");
+            }
+            if (!relationGroupKeys.isEmpty()) {
+                score += Math.min(0.18D, relationGroupKeys.size() * 0.035D);
+                reasons.add("relationGroupSupport");
+            }
+            if (!evidenceIds.isEmpty()) {
+                score += Math.min(0.18D, evidenceIds.size() * 0.035D);
+                reasons.add("groundedEvidence");
+            }
+            else {
+                score -= 0.18D;
+                noises.add("missingEvidence");
+            }
+            if (documentIds.size() > 1) {
+                score += 0.16D;
+                reasons.add("crossDocument");
+            }
+            if (qualityScore > 0D) {
+                score += Math.min(0.10D, qualityScore * 0.10D);
+                reasons.add("memberQuality");
+            }
+            reasons.addAll(qualityReasons.stream().limit(4).toList());
+            return new GraphRagCrossDocumentIndex.QualityProfile(
+                rounded(clamp(score)),
+                List.copyOf(reasons),
+                List.copyOf(noises)
+            );
+        }
+
+        private String communityTitle() {
+            List<String> names = canonicalNames.stream()
+                .filter(StrUtil::isNotBlank)
+                .limit(3)
+                .toList();
+            if (names.isEmpty()) {
+                return "跨文档图谱社区";
+            }
+            return "跨文档图谱社区：" + String.join(" / ", names);
+        }
+
+        private String communitySummary() {
+            String names = canonicalNames.stream()
+                .filter(StrUtil::isNotBlank)
+                .limit(5)
+                .collect(Collectors.joining("、"));
+            String types = relationTypes.stream()
+                .filter(StrUtil::isNotBlank)
+                .limit(6)
+                .collect(Collectors.joining("、"));
+            StringBuilder builder = new StringBuilder();
+            builder.append("该跨文档社区由 ")
+                .append(canonicalGroupKeys.size())
+                .append(" 个 canonical 实体组和 ")
+                .append(relationGroupKeys.size())
+                .append(" 个关系组构成");
+            if (documentIds.size() > 1) {
+                builder.append("，覆盖 ").append(documentIds.size()).append(" 份文档");
+            }
+            if (StrUtil.isNotBlank(names)) {
+                builder.append("，代表实体包括：").append(names);
+            }
+            if (StrUtil.isNotBlank(types)) {
+                builder.append("，关系类型包括：").append(types);
+            }
+            if (!evidenceIds.isEmpty()) {
+                builder.append("，可追溯证据 ").append(evidenceIds.size()).append(" 条");
+            }
+            builder.append("。");
+            return builder.toString();
+        }
+
+        private <T> Set<T> safeSet(Set<T> values) {
+            return values == null ? Set.of() : values;
         }
     }
 

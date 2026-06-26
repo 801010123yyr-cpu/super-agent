@@ -520,33 +520,9 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return;
         }
         Map<String, Object> graphMetadata = graphRagChild.getMetadata();
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_ID);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_ID);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RANK_BOOST);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_PAGERANK);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RANK_POSITION);
-        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_DEGREE);
+        for (String key : DocumentKnowledgeMetadataKeys.GRAPH_RAG_METADATA_KEYS) {
+            copyIfPresent(graphMetadata, metadata, key);
+        }
     }
 
     private Document selectBestGraphRagChild(List<Document> childDocuments) {
@@ -566,25 +542,38 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         return "graph-rag".equalsIgnoreCase(channel)
             || "GRAPH_RAG".equalsIgnoreCase(sourceType)
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null
+            || StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY)))
+            || StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY)))
+            || StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY)))
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID) != null;
     }
 
     private double graphRagMetadataPriority(Document document) {
         Map<String, Object> metadata = document.getMetadata();
-        double priority = resolveScoreOrZero(document);
+        double priority = resolveScoreOrZero(document) * 0.01D;
         if (metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null) {
-            priority += 0.22D;
+            priority += 20D;
         }
         if (metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null) {
-            priority += 0.16D;
+            priority += 16D;
+        }
+        if (StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY)))) {
+            priority += 24D;
+        }
+        if (StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY)))) {
+            priority += 18D;
         }
         if (StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME)))) {
-            priority += 0.08D;
+            priority += 10D;
         }
         Object qualityScore = metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE);
         if (qualityScore instanceof Number number) {
-            priority += Math.min(0.1D, Math.max(0D, number.doubleValue()) * 0.1D);
+            priority += Math.min(4D, Math.max(0D, number.doubleValue()) * 4D);
+        }
+        Object pagerank = metadata.get(DocumentKnowledgeMetadataKeys.KG_PAGERANK);
+        if (pagerank instanceof Number number) {
+            priority += Math.min(3D, Math.max(0D, number.doubleValue()) * 3D);
         }
         return priority;
     }

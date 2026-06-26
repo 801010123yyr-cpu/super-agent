@@ -133,6 +133,16 @@ public class SearchReference {
 
     private Integer kgHopCount;
 
+    private String kgCrossDocumentCommunityKey;
+
+    private Integer kgCrossDocumentCommunityEntityCount;
+
+    private Integer kgCrossDocumentCommunityRelationGroupCount;
+
+    private Integer kgCrossDocumentCommunityEvidenceCount;
+
+    private Integer kgCrossDocumentCommunityDocumentCount;
+
     private Double kgQualityScore;
 
     private String kgQualityReasons;

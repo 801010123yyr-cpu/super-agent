@@ -16,4 +16,8 @@ public class GraphRagCrossDocumentIndexBuildResult {
     private int relationGroupCount;
 
     private int relationGroupMemberCount;
+
+    private int communityCount;
+
+    private int communityMemberCount;
 }

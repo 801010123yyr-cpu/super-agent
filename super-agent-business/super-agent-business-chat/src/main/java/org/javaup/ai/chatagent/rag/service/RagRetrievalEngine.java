@@ -322,6 +322,7 @@ public class RagRetrievalEngine {
                 document.getMetadata().put(DocumentKnowledgeMetadataKeys.KEYWORD_SCORE, originalScore);
             }
             CandidateHolder holder = holders.computeIfAbsent(documentId, ignored -> new CandidateHolder(document));
+            mergeGraphRagMetadata(holder, document);
             holder.rrfScore += rrfScore;
             holder.rankScore += channelWeight * hybridRankWeight() * normalizedRankScore;
             holder.originalScore += channelWeight * hybridOriginalScoreWeight() * normalizedOriginalScore;
@@ -407,6 +408,75 @@ public class RagRetrievalEngine {
             }
         }
         return 1D;
+    }
+
+    private void mergeGraphRagMetadata(CandidateHolder holder, Document candidate) {
+        if (holder == null || holder.document == null || holder.document.getMetadata() == null
+            || candidate == null || candidate.getMetadata() == null
+            || !isGraphRagMetadata(candidate.getMetadata())) {
+            return;
+        }
+        Map<String, Object> holderMetadata = holder.document.getMetadata();
+        Map<String, Object> candidateMetadata = candidate.getMetadata();
+        if (graphRagMetadataPriority(candidate) > graphRagMetadataPriority(holder.document)) {
+            copyGraphRagMetadata(candidateMetadata, holderMetadata);
+            return;
+        }
+        for (String key : DocumentKnowledgeMetadataKeys.GRAPH_RAG_METADATA_KEYS) {
+            Object existing = holderMetadata.get(key);
+            Object incoming = candidateMetadata.get(key);
+            if (isMeaningfulMetadataValue(incoming) && !isMeaningfulMetadataValue(existing)) {
+                holderMetadata.put(key, incoming);
+            }
+        }
+    }
+
+    private void copyGraphRagMetadata(Map<String, Object> source, Map<String, Object> target) {
+        for (String key : DocumentKnowledgeMetadataKeys.GRAPH_RAG_METADATA_KEYS) {
+            Object value = source.get(key);
+            if (isMeaningfulMetadataValue(value)) {
+                target.put(key, value);
+            }
+        }
+    }
+
+    private boolean isMeaningfulMetadataValue(Object value) {
+        if (value == null) {
+            return false;
+        }
+        return !(value instanceof String text) || !text.isBlank();
+    }
+
+    private double graphRagMetadataPriority(Document document) {
+        if (document == null || document.getMetadata() == null || !isGraphRagMetadata(document.getMetadata())) {
+            return 0D;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        double priority = finalDocumentScore(document) * 0.01D;
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID))) {
+            priority += 20D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID))) {
+            priority += 16D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))) {
+            priority += 24D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY))) {
+            priority += 18D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME))) {
+            priority += 10D;
+        }
+        Double qualityScore = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE));
+        if (qualityScore != null) {
+            priority += Math.min(4D, Math.max(0D, qualityScore) * 4D);
+        }
+        Double pagerank = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_PAGERANK));
+        if (pagerank != null) {
+            priority += Math.min(3D, Math.max(0D, pagerank) * 3D);
+        }
+        return priority;
     }
 
     private RetrievalIntent resolveRetrievalIntent(ConversationExecutionPlan plan) {
@@ -705,6 +775,9 @@ public class RagRetrievalEngine {
         return RetrievalChannelEnum.GRAPH_RAG.getName().equals(channel)
             || "GRAPH_RAG".equalsIgnoreCase(sourceType)
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY))
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID) != null
             || metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null;
     }

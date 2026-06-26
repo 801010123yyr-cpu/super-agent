@@ -104,6 +104,11 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID, result.getCommunityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, StrUtil.blankToDefault(result.getCommunityTitle(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, StrUtil.blankToDefault(result.getCommunitySummary(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, StrUtil.blankToDefault(result.getCrossDocumentCommunityKey(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, result.getCrossDocumentCommunityEntityCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, result.getCrossDocumentCommunityRelationGroupCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, result.getCrossDocumentCommunityEvidenceCount());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, result.getCrossDocumentCommunityDocumentCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RANK_BOOST, result.getRankBoost());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, result.getKgQualityScore());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, StrUtil.blankToDefault(result.getKgQualityReasons(), ""));
@@ -138,6 +143,14 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
             builder.append("跨文档关系组：")
                 .append(result.getRelationGroupDocumentCount()).append(" 份文档 / ")
                 .append(result.getRelationGroupEvidenceCount() == null ? "-" : result.getRelationGroupEvidenceCount())
+                .append(" 条证据支撑\n");
+        }
+        if (result.getCrossDocumentCommunityDocumentCount() != null && result.getCrossDocumentCommunityDocumentCount() > 1) {
+            builder.append("跨文档社区：")
+                .append(result.getCrossDocumentCommunityDocumentCount()).append(" 份文档 / ")
+                .append(result.getCrossDocumentCommunityRelationGroupCount() == null ? "-" : result.getCrossDocumentCommunityRelationGroupCount())
+                .append(" 个关系组 / ")
+                .append(result.getCrossDocumentCommunityEvidenceCount() == null ? "-" : result.getCrossDocumentCommunityEvidenceCount())
                 .append(" 条证据支撑\n");
         }
         builder.append("原文证据：").append(StrUtil.blankToDefault(result.getQuoteText(), "")).append('\n');

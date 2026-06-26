@@ -27,6 +27,11 @@ class SearchReferenceMapperTest {
         metadata.put(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.17D);
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 2);
         metadata.put(DocumentKnowledgeMetadataKeys.KG_DEGREE, 3);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:audittrail-permission");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 1);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 3);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2);
 
         Document document = Document.builder()
             .id("parent-1001")
@@ -46,5 +51,10 @@ class SearchReferenceMapperTest {
         assertThat(reference.getKgPagerank()).isEqualTo(0.17D);
         assertThat(reference.getKgRankPosition()).isEqualTo(2);
         assertThat(reference.getKgDegree()).isEqualTo(3);
+        assertThat(reference.getKgCrossDocumentCommunityKey()).isEqualTo("xdoc-community:audittrail-permission");
+        assertThat(reference.getKgCrossDocumentCommunityEntityCount()).isEqualTo(2);
+        assertThat(reference.getKgCrossDocumentCommunityRelationGroupCount()).isEqualTo(1);
+        assertThat(reference.getKgCrossDocumentCommunityEvidenceCount()).isEqualTo(3);
+        assertThat(reference.getKgCrossDocumentCommunityDocumentCount()).isEqualTo(2);
     }
 }

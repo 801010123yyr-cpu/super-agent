@@ -250,6 +250,107 @@ class RagRetrievalEngineTest {
     }
 
     @Test
+    void weightedHybridPreservesGraphRagMetadataWhenSameCandidateAlsoComesFromVector() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        Document vectorDoc = document("chunk-1001", "AuditTrail 需记录权限申请、权限审批、权限回收、临时权限延长。", 0.94D);
+        vectorDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        vectorDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.VECTOR.getName());
+
+        LinkedHashMap<String, Object> graphMetadata = new LinkedHashMap<>();
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.78D);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "O6跨文档图谱-审计证据规范A.md");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 2001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "AuditTrail");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY, "CONCEPT:审计系统");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, "审计系统");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT, 4);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT, 2);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 3001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "RECORDS");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, 2);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 3);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 2);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 4001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "一跳：AuditTrail --RECORDS--> 权限申请");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 6);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 6);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 6);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.86D);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,crossDocumentSupport");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, "");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.21D);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 1);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_DEGREE, 5);
+        Document graphDoc = Document.builder()
+            .id("chunk-1001")
+            .text("GraphRAG: AuditTrail RECORDS 权限申请")
+            .metadata(graphMetadata)
+            .score(0.78D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(
+                    new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorDoc)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(graphDoc))
+                ),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("审计系统有哪些权限相关要求？")
+                .retrievalSubQuestions(List.of("审计系统有哪些权限相关要求？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            Document finalDocument = context.getSubQuestionEvidenceList().get(0).getDocuments().get(0);
+            assertThat(finalDocument.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT")
+                .containsEntry(DocumentKnowledgeMetadataKeys.CHANNEL, "hybrid")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, "审计系统")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.86D)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.21D)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 1)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_DEGREE, 5);
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .hasSize(1)
+                .first()
+                .satisfies(reference -> {
+                    assertThat(reference.getSourceType()).isEqualTo("DOCUMENT");
+                    assertThat(reference.getChannel()).isEqualTo("hybrid");
+                    assertThat(reference.getKgCanonicalEntityName()).isEqualTo("审计系统");
+                    assertThat(reference.getKgRelationGroupKey()).isEqualTo("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+                    assertThat(reference.getKgCrossDocumentCommunityKey()).isEqualTo("xdoc-community:concept审计系统");
+                    assertThat(reference.getKgQualityScore()).isEqualTo(0.86D);
+                    assertThat(reference.getKgPagerank()).isEqualTo(0.21D);
+                    assertThat(reference.getKgRankPosition()).isEqualTo(1);
+                    assertThat(reference.getKgDegree()).isEqualTo(5);
+                });
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
     void graphRagCanonicalObservationPrioritizesRelationGroupSupport() {
         ChatRagProperties properties = new ChatRagProperties();
         properties.setRerankEnabled(false);

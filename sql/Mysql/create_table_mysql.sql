@@ -633,6 +633,52 @@ CREATE TABLE IF NOT EXISTS `super_agent_kg_relation_group_member` (
     KEY `idx_kg_relation_group_member_document` (`document_id`, `task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG跨文档relation group成员派生表';
 
+CREATE TABLE IF NOT EXISTS `super_agent_kg_cross_document_community` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `scope_key` varchar(255) NOT NULL COMMENT '跨文档图谱派生索引范围',
+    `community_key` varchar(255) NOT NULL COMMENT '跨文档community稳定键',
+    `title` varchar(500) NOT NULL COMMENT '跨文档community标题',
+    `summary` longtext COMMENT '跨文档community摘要',
+    `canonical_group_keys_json` text COMMENT 'community包含的canonical实体组key JSON数组',
+    `relation_group_keys_json` text COMMENT 'community包含的relation group key JSON数组',
+    `entity_count` int NOT NULL DEFAULT '0' COMMENT '覆盖canonical实体组数',
+    `relation_group_count` int NOT NULL DEFAULT '0' COMMENT '覆盖relation group数',
+    `evidence_count` int NOT NULL DEFAULT '0' COMMENT '覆盖证据数',
+    `document_count` int NOT NULL DEFAULT '0' COMMENT '覆盖文档数',
+    `rank_score` decimal(10,6) NOT NULL DEFAULT '0.000000' COMMENT '跨文档community rank分',
+    `metadata_json` text COMMENT '派生索引扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_kg_xdoc_community_scope_key` (`scope_key`, `community_key`),
+    KEY `idx_kg_xdoc_community_scope_rank` (`scope_key`, `rank_score`),
+    KEY `idx_kg_xdoc_community_scope_docs` (`scope_key`, `document_count`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG跨文档community派生表';
+
+CREATE TABLE IF NOT EXISTS `super_agent_kg_cross_document_community_member` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `scope_key` varchar(255) NOT NULL COMMENT '跨文档图谱派生索引范围',
+    `community_id` bigint NOT NULL COMMENT '跨文档community id',
+    `community_key` varchar(255) NOT NULL COMMENT '跨文档community稳定键',
+    `relation_group_id` bigint NOT NULL COMMENT 'relation group id',
+    `relation_group_key` varchar(255) NOT NULL COMMENT 'relation group持久化稳定键',
+    `source_group_key` varchar(255) NOT NULL COMMENT '起点canonical实体组key',
+    `target_group_key` varchar(255) NOT NULL COMMENT '终点canonical实体组key',
+    `relation_type` varchar(64) NOT NULL DEFAULT 'ASSOCIATED_WITH' COMMENT '关系类型',
+    `relation_count` int NOT NULL DEFAULT '0' COMMENT '组内关系数',
+    `evidence_count` int NOT NULL DEFAULT '0' COMMENT '组内证据数',
+    `document_count` int NOT NULL DEFAULT '0' COMMENT '覆盖文档数',
+    `metadata_json` text COMMENT '派生索引成员扩展元数据JSON',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_kg_xdoc_community_member_group` (`scope_key`, `relation_group_id`),
+    KEY `idx_kg_xdoc_community_member_community` (`scope_key`, `community_id`),
+    KEY `idx_kg_xdoc_community_member_relation` (`scope_key`, `relation_group_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='GraphRAG跨文档community成员派生表';
+
 CREATE TABLE IF NOT EXISTS `super_agent_raptor_node` (
     `id` bigint NOT NULL COMMENT '主键id',
     `document_id` bigint NOT NULL COMMENT '文档id',
