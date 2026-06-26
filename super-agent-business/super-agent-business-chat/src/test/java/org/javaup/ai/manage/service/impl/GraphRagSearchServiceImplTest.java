@@ -458,7 +458,9 @@ class GraphRagSearchServiceImplTest {
             new LinkedHashSet<>(List.of(16L, 17L)),
             new LinkedHashSet<>(List.of(26L, 27L)),
             List.of("SYSTEM:audittrail", "SYSTEM:审计系统", "NAME:audittrail"),
-            0.75D
+            0.75D,
+            new GraphRagCrossDocumentIndex.QualityProfile(0.82D, List.of("crossDocument"), List.of()),
+            new GraphRagCrossDocumentIndex.RankProfile(0.19D, 0.91D, 1, 4, 2, 2, 3.4D)
         );
         GraphRagCrossDocumentIndex.RelationGroup relationGroup = new GraphRagCrossDocumentIndex.RelationGroup(
             "SYSTEM:audittrail->RECORDS->PROCESS:权限申请",
@@ -469,7 +471,9 @@ class GraphRagSearchServiceImplTest {
             new LinkedHashSet<>(List.of(3701L, 3702L)),
             new LinkedHashSet<>(List.of(17L, 18L)),
             Map.of(2701L, 1, 2702L, 1),
-            0.75D
+            0.75D,
+            new GraphRagCrossDocumentIndex.QualityProfile(0.88D, List.of("groundedEvidence", "crossDocument"), List.of()),
+            new GraphRagCrossDocumentIndex.RankProfile(0.17D, 0.86D, 2, 3, 1, 2, 2.8D)
         );
         GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
             Map.of(1601L, canonicalGroup, 1701L, canonicalGroup),
@@ -546,6 +550,11 @@ class GraphRagSearchServiceImplTest {
         assertThat(result.getRelationGroupRelationCount()).isEqualTo(2);
         assertThat(result.getRelationGroupEvidenceCount()).isEqualTo(2);
         assertThat(result.getRelationGroupDocumentCount()).isEqualTo(2);
+        assertThat(result.getKgQualityScore()).isEqualTo(0.88D);
+        assertThat(result.getKgQualityReasons()).contains("groundedEvidence");
+        assertThat(result.getKgPagerank()).isEqualTo(0.17D);
+        assertThat(result.getKgRankPosition()).isEqualTo(2);
+        assertThat(result.getKgDegree()).isEqualTo(3);
         assertThat(relationSelectCount).hasValue(1);
     }
 
@@ -567,7 +576,8 @@ class GraphRagSearchServiceImplTest {
             new LinkedHashSet<>(List.of(18L, 19L)),
             new LinkedHashSet<>(List.of(28L, 29L)),
             List.of("SYSTEM:audittrail", "SYSTEM:审计系统", "NAME:audittrail"),
-            0.75D
+            0.75D,
+            new GraphRagCrossDocumentIndex.QualityProfile(0.82D, List.of("crossDocument"), List.of())
         );
         GraphRagCrossDocumentIndex.RelationGroup singleRelationGroup = new GraphRagCrossDocumentIndex.RelationGroup(
             "SYSTEM:audittrail->RECORDS->PROCESS:临时权限延长",
@@ -578,7 +588,8 @@ class GraphRagSearchServiceImplTest {
             new LinkedHashSet<>(List.of(3901L)),
             new LinkedHashSet<>(List.of(19L)),
             Map.of(2901L, 1),
-            0.75D
+            0.75D,
+            new GraphRagCrossDocumentIndex.QualityProfile(0.76D, List.of("groundedEvidence"), List.of())
         );
         GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
             Map.of(1801L, canonicalGroup, 1901L, canonicalGroup),

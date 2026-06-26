@@ -459,6 +459,7 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(parentBlock.getSourceBlockIds()));
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, parentScore);
         metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, safeText(parentBlock.getParentText()));
+        mergeGraphRagMetadata(metadata, childDocuments);
 
         LinkedHashSet<String> channels = childDocuments.stream()
             .map(document -> asText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.CHANNEL)))
@@ -511,6 +512,88 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             return bestRelationChild;
         }
         return bestByScore;
+    }
+
+    private void mergeGraphRagMetadata(Map<String, Object> metadata, List<Document> childDocuments) {
+        Document graphRagChild = selectBestGraphRagChild(childDocuments);
+        if (graphRagChild == null || graphRagChild.getMetadata() == null) {
+            return;
+        }
+        Map<String, Object> graphMetadata = graphRagChild.getMetadata();
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_ID);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_ID);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RANK_BOOST);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_PAGERANK);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_RANK_POSITION);
+        copyIfPresent(graphMetadata, metadata, DocumentKnowledgeMetadataKeys.KG_DEGREE);
+    }
+
+    private Document selectBestGraphRagChild(List<Document> childDocuments) {
+        if (CollUtil.isEmpty(childDocuments)) {
+            return null;
+        }
+        return childDocuments.stream()
+            .filter(document -> document != null && document.getMetadata() != null)
+            .filter(document -> hasGraphRagMetadata(document.getMetadata()))
+            .max(Comparator.comparingDouble(this::graphRagMetadataPriority))
+            .orElse(null);
+    }
+
+    private boolean hasGraphRagMetadata(Map<String, Object> metadata) {
+        String channel = asText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL));
+        String sourceType = asText(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_TYPE));
+        return "graph-rag".equalsIgnoreCase(channel)
+            || "GRAPH_RAG".equalsIgnoreCase(sourceType)
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null
+            || metadata.get(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID) != null;
+    }
+
+    private double graphRagMetadataPriority(Document document) {
+        Map<String, Object> metadata = document.getMetadata();
+        double priority = resolveScoreOrZero(document);
+        if (metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null) {
+            priority += 0.22D;
+        }
+        if (metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null) {
+            priority += 0.16D;
+        }
+        if (StrUtil.isNotBlank(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME)))) {
+            priority += 0.08D;
+        }
+        Object qualityScore = metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE);
+        if (qualityScore instanceof Number number) {
+            priority += Math.min(0.1D, Math.max(0D, number.doubleValue()) * 0.1D);
+        }
+        return priority;
+    }
+
+    private void copyIfPresent(Map<String, Object> source, Map<String, Object> target, String key) {
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private double aggregateParentScore(List<Document> childDocuments) {

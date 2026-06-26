@@ -64,7 +64,26 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
                                        Set<Long> documentIds,
                                        Set<Long> taskIds,
                                        List<String> variants,
-                                       double rankScore) {
+                                       double rankScore,
+                                       QualityProfile qualityProfile,
+                                       RankProfile rankProfile) {
+
+        public CanonicalEntityGroup {
+            qualityProfile = qualityProfile == null ? QualityProfile.empty() : qualityProfile;
+            rankProfile = rankProfile == null ? RankProfile.empty() : rankProfile;
+        }
+
+        public CanonicalEntityGroup(String key,
+                                    String name,
+                                    String entityType,
+                                    Set<Long> entityIds,
+                                    Set<Long> documentIds,
+                                    Set<Long> taskIds,
+                                    List<String> variants,
+                                    double rankScore,
+                                    QualityProfile qualityProfile) {
+            this(key, name, entityType, entityIds, documentIds, taskIds, variants, rankScore, qualityProfile, RankProfile.empty());
+        }
     }
 
     public record RelationGroup(String key,
@@ -75,7 +94,28 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
                                 Set<Long> evidenceIds,
                                 Set<Long> documentIds,
                                 Map<Long, Integer> evidenceCountByRelationId,
-                                double rankScore) {
+                                double rankScore,
+                                QualityProfile qualityProfile,
+                                RankProfile rankProfile) {
+
+        public RelationGroup {
+            qualityProfile = qualityProfile == null ? QualityProfile.empty() : qualityProfile;
+            rankProfile = rankProfile == null ? RankProfile.empty() : rankProfile;
+        }
+
+        public RelationGroup(String key,
+                             String sourceGroupKey,
+                             String targetGroupKey,
+                             String relationType,
+                             Set<Long> relationIds,
+                             Set<Long> evidenceIds,
+                             Set<Long> documentIds,
+                             Map<Long, Integer> evidenceCountByRelationId,
+                             double rankScore,
+                             QualityProfile qualityProfile) {
+            this(key, sourceGroupKey, targetGroupKey, relationType, relationIds, evidenceIds, documentIds,
+                evidenceCountByRelationId, rankScore, qualityProfile, RankProfile.empty());
+        }
 
         public int relationCount() {
             return relationIds == null ? 0 : relationIds.size();
@@ -92,6 +132,28 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
 
         public int documentCount() {
             return documentIds == null ? 0 : documentIds.size();
+        }
+    }
+
+    public record QualityProfile(double score,
+                                 List<String> qualityReasons,
+                                 List<String> noiseReasons) {
+
+        public static QualityProfile empty() {
+            return new QualityProfile(0D, List.of(), List.of());
+        }
+    }
+
+    public record RankProfile(double pagerank,
+                              double rankBoost,
+                              int rankPosition,
+                              int degree,
+                              int inDegree,
+                              int outDegree,
+                              double weightedDegree) {
+
+        public static RankProfile empty() {
+            return new RankProfile(0D, 0D, 0, 0, 0, 0, 0D);
         }
     }
 

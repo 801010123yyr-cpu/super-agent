@@ -39,6 +39,18 @@ public class GraphRagSearchResult {
 
     private Integer relationGroupDocumentCount;
 
+    private Double kgQualityScore;
+
+    private String kgQualityReasons;
+
+    private String kgNoiseReasons;
+
+    private Double kgPagerank;
+
+    private Integer kgRankPosition;
+
+    private Integer kgDegree;
+
     private Long relatedEntityId;
 
     private String relatedEntityName;

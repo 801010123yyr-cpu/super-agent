@@ -92,6 +92,25 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             assertThat(group.getGroupKey()).startsWith("sha256:");
             Map<String, Object> metadata = objectMapper.readValue(group.getMetadataJson(), Map.class);
             assertThat(metadata.get("naturalGroupKey")).asString().contains("->");
+            assertThat(metadata).containsKey("qualityScore");
+            assertThat((Double) metadata.get("qualityScore")).isGreaterThan(0D);
+            assertThat(metadata).containsKey("qualityReasons");
+            assertThat(metadata).containsEntry("rankAlgorithm", "java.cross_document_pagerank.v1");
+            assertThat((Double) metadata.get("pagerank")).isGreaterThan(0D);
+            assertThat((Double) metadata.get("rankBoost")).isGreaterThan(0D);
+            assertThat((Integer) metadata.get("rankPosition")).isGreaterThan(0);
+            assertThat((Integer) metadata.get("degree")).isGreaterThan(0);
+        });
+        assertThat(canonicalGroupStore.items()).allSatisfy(group -> {
+            Map<String, Object> metadata = objectMapper.readValue(group.getMetadataJson(), Map.class);
+            assertThat(metadata).containsKey("qualityScore");
+            assertThat((Double) metadata.get("qualityScore")).isGreaterThan(0D);
+            if ("global".equals(group.getScopeKey()) && group.getMetadataJson().contains("\"pagerank\"")) {
+                assertThat(metadata).containsEntry("rankAlgorithm", "java.cross_document_pagerank.v1");
+                assertThat((Double) metadata.get("pagerank")).isGreaterThan(0D);
+                assertThat((Double) metadata.get("rankBoost")).isGreaterThan(0D);
+                assertThat((Integer) metadata.get("rankPosition")).isGreaterThan(0);
+            }
         });
         assertThat(canonicalGroupStore.deleteCount()).isEqualTo(1);
         assertThat(canonicalMemberStore.deleteCount()).isEqualTo(1);
@@ -128,12 +147,23 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         assertThat(auditGroup).isNotNull();
         assertThat(auditGroup.entityIds()).containsExactlyInAnyOrder(1001L, 1101L);
         assertThat(auditGroup.documentIds()).containsExactlyInAnyOrder(10L, 11L);
+        assertThat(auditGroup.qualityProfile().score()).isGreaterThan(0D);
+        assertThat(auditGroup.qualityProfile().qualityReasons()).isNotEmpty();
+        assertThat(auditGroup.rankProfile().pagerank()).isGreaterThan(0D);
+        assertThat(auditGroup.rankProfile().rankBoost()).isGreaterThan(0D);
+        assertThat(auditGroup.rankProfile().rankPosition()).isGreaterThan(0);
+        assertThat(auditGroup.rankProfile().degree()).isGreaterThan(0);
         assertThat(loaded.canonicalGroupOf(1201L)).isNull();
         GraphRagCrossDocumentIndex.RelationGroup recordsGroup = loaded.relationGroupOf(2001L);
         assertThat(recordsGroup).isNotNull();
         assertThat(recordsGroup.relationCount()).isEqualTo(2);
         assertThat(recordsGroup.evidenceCount()).isEqualTo(2);
         assertThat(recordsGroup.documentCount()).isEqualTo(2);
+        assertThat(recordsGroup.qualityProfile().score()).isGreaterThan(0D);
+        assertThat(recordsGroup.qualityProfile().qualityReasons()).contains("groundedEvidence");
+        assertThat(recordsGroup.rankProfile().pagerank()).isGreaterThan(0D);
+        assertThat(recordsGroup.rankProfile().rankBoost()).isGreaterThan(0D);
+        assertThat(recordsGroup.rankProfile().rankPosition()).isGreaterThan(0);
         assertThat(loaded.relationGroupOf(2201L)).isNull();
     }
 
@@ -176,6 +206,65 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             .filter(group -> "global".equals(group.getScopeKey()))
             .map(SuperAgentKgCanonicalEntityGroup::getCanonicalName)
             .toList()).hasSize(2);
+    }
+
+    @Test
+    void rebuildAllPersistsEntityQualityNoiseReasonsForSentenceLikeNames() throws Exception {
+        InMemoryMapper<SuperAgentDocument> documentStore = new InMemoryMapper<>(List.of(
+            document(10L, "security")
+        ));
+        InMemoryMapper<SuperAgentKgEntity> entityStore = new InMemoryMapper<>(List.of(
+            entity(
+                1001L,
+                10L,
+                20L,
+                "AuditTrail",
+                null,
+                "SYSTEM",
+                "{\"candidateSources\":[\"englishToken\",\"ner.pattern\"],\"extractorSources\":[\"ner\"],\"evidenceIds\":[\"EV1\"],\"confidence\":0.9}"
+            ),
+            entity(
+                1002L,
+                10L,
+                20L,
+                "审计系统负责接收权限变更事件，并写入统一审计流水",
+                null,
+                "CONCEPT",
+                "{\"candidateSources\":[\"mixedPhrase\"],\"extractorSources\":[\"rule\"],\"evidenceIds\":[\"EV2\"],\"confidence\":0.5}"
+            )
+        ));
+        InMemoryMapper<SuperAgentKgCanonicalEntityGroup> canonicalGroupStore = new InMemoryMapper<>(List.of());
+        ObjectMapper objectMapper = new ObjectMapper();
+        GraphRagCrossDocumentIndexServiceImpl service = new GraphRagCrossDocumentIndexServiceImpl(
+            documentStore.proxy(SuperAgentDocumentMapper.class),
+            entityStore.proxy(SuperAgentKgEntityMapper.class),
+            new InMemoryMapper<SuperAgentKgRelation>(List.of()).proxy(SuperAgentKgRelationMapper.class),
+            new InMemoryMapper<SuperAgentKgEvidence>(List.of()).proxy(SuperAgentKgEvidenceMapper.class),
+            canonicalGroupStore.proxy(SuperAgentKgCanonicalEntityGroupMapper.class),
+            new InMemoryMapper<SuperAgentKgCanonicalEntityMember>(List.of()).proxy(SuperAgentKgCanonicalEntityMemberMapper.class),
+            new InMemoryMapper<SuperAgentKgRelationGroup>(List.of()).proxy(SuperAgentKgRelationGroupMapper.class),
+            new InMemoryMapper<SuperAgentKgRelationGroupMember>(List.of()).proxy(SuperAgentKgRelationGroupMemberMapper.class),
+            new GraphRagCrossDocumentIndexSupport(objectMapper),
+            uidGenerator(),
+            objectMapper
+        );
+
+        service.rebuildAll();
+
+        SuperAgentKgCanonicalEntityGroup auditGroup = canonicalGroupStore.items().stream()
+            .filter(group -> "global".equals(group.getScopeKey()))
+            .filter(group -> "AuditTrail".equals(group.getCanonicalName()))
+            .findFirst()
+            .orElseThrow();
+        SuperAgentKgCanonicalEntityGroup sentenceLikeGroup = canonicalGroupStore.items().stream()
+            .filter(group -> "global".equals(group.getScopeKey()))
+            .filter(group -> group.getCanonicalName().contains("权限变更事件"))
+            .findFirst()
+            .orElseThrow();
+        Map<String, Object> sentenceMetadata = objectMapper.readValue(sentenceLikeGroup.getMetadataJson(), Map.class);
+
+        assertThat(sentenceMetadata.get("noiseReasons")).asList().contains("sentenceLikeName", "weakEntitySource");
+        assertThat(sentenceLikeGroup.getRankScore()).isLessThan(auditGroup.getRankScore());
     }
 
     private static SuperAgentDocument document(Long id, String knowledgeScopeCode) {

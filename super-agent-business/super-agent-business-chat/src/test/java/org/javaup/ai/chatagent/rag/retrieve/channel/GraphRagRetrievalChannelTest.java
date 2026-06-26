@@ -31,6 +31,12 @@ class GraphRagRetrievalChannelTest {
             .relationGroupRelationCount(2)
             .relationGroupEvidenceCount(3)
             .relationGroupDocumentCount(2)
+            .kgQualityScore(0.86D)
+            .kgQualityReasons("groundedEvidence,crossDocument")
+            .kgNoiseReasons("")
+            .kgPagerank(0.17D)
+            .kgRankPosition(2)
+            .kgDegree(3)
             .evidenceId(300L)
             .quoteText("检索命中率突然下降时，需要先确认最近一次构建任务是否成功。")
             .sectionPath("14.1 场景一：检索命中率突然下降")
@@ -68,6 +74,12 @@ class GraphRagRetrievalChannelTest {
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, 2)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 3)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 2)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.86D)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,crossDocument")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, "")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.17D)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 2)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_DEGREE, 3)
             .doesNotContainKeys(
                 DocumentKnowledgeMetadataKeys.KG_RELATION_ID,
                 DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID,

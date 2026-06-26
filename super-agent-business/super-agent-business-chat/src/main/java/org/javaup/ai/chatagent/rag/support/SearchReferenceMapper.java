@@ -91,6 +91,12 @@ public final class SearchReferenceMapper {
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
+        reference.setKgQualityScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE)));
+        reference.setKgQualityReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS), ""));
+        reference.setKgNoiseReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS), ""));
+        reference.setKgPagerank(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.KG_PAGERANK)));
+        reference.setKgRankPosition(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION)));
+        reference.setKgDegree(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_DEGREE)));
         reference.setRaptorNodeId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_ID)));
         reference.setRaptorNodeTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_TITLE), ""));
         reference.setRaptorNodeLevel(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL)));

@@ -362,13 +362,12 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         row.setDocumentCount(size(group.documentIds()));
         row.setTaskCount(size(group.taskIds()));
         row.setRankScore(decimal(group.rankScore()));
-        row.setMetadataJson(writeJson(Map.of(
-            "sourceType", "java.cross_document_index.v1",
-            "variants", group.variants(),
-            "entityIds", group.entityIds(),
-            "documentIds", group.documentIds(),
-            "taskIds", group.taskIds()
-        )));
+        Map<String, Object> metadata = baseDerivedMetadata(group.qualityProfile(), group.rankProfile());
+        metadata.put("variants", group.variants());
+        metadata.put("entityIds", group.entityIds());
+        metadata.put("documentIds", group.documentIds());
+        metadata.put("taskIds", group.taskIds());
+        row.setMetadataJson(writeJson(metadata));
         row.setStatus(BusinessStatus.YES.getCode());
         return row;
     }
@@ -388,11 +387,10 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         row.setEntityName(limit(entity.getName(), 500));
         row.setNormalizedName(limit(entity.getNormalizedName(), 500));
         row.setEntityType(limit(entity.getEntityType(), 64));
-        row.setMetadataJson(writeJson(Map.of(
-            "sourceType", "java.cross_document_index.v1",
-            "canonicalName", group.name(),
-            "rankScore", group.rankScore()
-        )));
+        Map<String, Object> metadata = baseDerivedMetadata(group.qualityProfile(), group.rankProfile());
+        metadata.put("canonicalName", group.name());
+        metadata.put("rankScore", group.rankScore());
+        row.setMetadataJson(writeJson(metadata));
         row.setStatus(BusinessStatus.YES.getCode());
         return row;
     }
@@ -411,13 +409,12 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         row.setEvidenceCount(group.evidenceCount());
         row.setDocumentCount(group.documentCount());
         row.setRankScore(decimal(group.rankScore()));
-        row.setMetadataJson(writeJson(Map.of(
-            "sourceType", DERIVED_INDEX_SOURCE_TYPE,
-            "naturalGroupKey", group.key(),
-            "relationIds", group.relationIds(),
-            "evidenceIds", group.evidenceIds(),
-            "documentIds", group.documentIds()
-        )));
+        Map<String, Object> metadata = baseDerivedMetadata(group.qualityProfile(), group.rankProfile());
+        metadata.put("naturalGroupKey", group.key());
+        metadata.put("relationIds", group.relationIds());
+        metadata.put("evidenceIds", group.evidenceIds());
+        metadata.put("documentIds", group.documentIds());
+        row.setMetadataJson(writeJson(metadata));
         row.setStatus(BusinessStatus.YES.getCode());
         return row;
     }
@@ -436,13 +433,12 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         row.setTaskId(relation.getTaskId());
         int evidenceCount = group.evidenceCountByRelationId().getOrDefault(relation.getId(), 0);
         row.setEvidenceCount(evidenceCount);
-        row.setMetadataJson(writeJson(Map.of(
-            "sourceType", DERIVED_INDEX_SOURCE_TYPE,
-            "naturalGroupKey", group.key(),
-            "relationType", StrUtil.blankToDefault(relation.getRelationType(), "ASSOCIATED_WITH"),
-            "evidenceCount", evidenceCount,
-            "rankScore", group.rankScore()
-        )));
+        Map<String, Object> metadata = baseDerivedMetadata(group.qualityProfile(), group.rankProfile());
+        metadata.put("naturalGroupKey", group.key());
+        metadata.put("relationType", StrUtil.blankToDefault(relation.getRelationType(), "ASSOCIATED_WITH"));
+        metadata.put("evidenceCount", evidenceCount);
+        metadata.put("rankScore", group.rankScore());
+        row.setMetadataJson(writeJson(metadata));
         row.setStatus(BusinessStatus.YES.getCode());
         return row;
     }
@@ -463,6 +459,9 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             .filter(Objects::nonNull)
             .collect(Collectors.toCollection(LinkedHashSet::new));
         SuperAgentKgCanonicalEntityMember first = members.get(0);
+        Map<String, Object> metadata = readMetadata(groupRow == null ? null : groupRow.getMetadataJson());
+        GraphRagCrossDocumentIndex.QualityProfile qualityProfile = qualityProfile(metadata);
+        GraphRagCrossDocumentIndex.RankProfile rankProfile = rankProfile(metadata);
         return new GraphRagCrossDocumentIndex.CanonicalEntityGroup(
             groupKey,
             groupRow == null ? first.getEntityName() : groupRow.getCanonicalName(),
@@ -471,7 +470,9 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             documentIds,
             taskIds,
             List.of(),
-            groupRow == null || groupRow.getRankScore() == null ? 0D : groupRow.getRankScore().doubleValue()
+            groupRow == null || groupRow.getRankScore() == null ? 0D : groupRow.getRankScore().doubleValue(),
+            qualityProfile,
+            rankProfile
         );
     }
 
@@ -490,6 +491,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         Map<String, Object> metadata = readMetadata(metadataJson);
         String naturalGroupKey = StrUtil.blankToDefault(stringValue(metadata.get("naturalGroupKey")), groupKey);
         Set<Long> evidenceIds = readLongSet(metadata, "evidenceIds");
+        GraphRagCrossDocumentIndex.QualityProfile qualityProfile = qualityProfile(metadata);
+        GraphRagCrossDocumentIndex.RankProfile rankProfile = rankProfile(metadata);
         Map<Long, Integer> evidenceCountByRelationId = members.stream()
             .filter(member -> member.getRelationId() != null)
             .collect(Collectors.toMap(
@@ -507,7 +510,59 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             evidenceIds,
             documentIds,
             evidenceCountByRelationId,
-            groupRow == null || groupRow.getRankScore() == null ? 0D : groupRow.getRankScore().doubleValue()
+            groupRow == null || groupRow.getRankScore() == null ? 0D : groupRow.getRankScore().doubleValue(),
+            qualityProfile,
+            rankProfile
+        );
+    }
+
+    private GraphRagCrossDocumentIndex.QualityProfile qualityProfile(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return GraphRagCrossDocumentIndex.QualityProfile.empty();
+        }
+        return new GraphRagCrossDocumentIndex.QualityProfile(
+            numberValue(metadata.get("qualityScore"), 0D),
+            readStringList(metadata.get("qualityReasons")),
+            readStringList(metadata.get("noiseReasons"))
+        );
+    }
+
+    private Map<String, Object> baseDerivedMetadata(GraphRagCrossDocumentIndex.QualityProfile qualityProfile,
+                                                    GraphRagCrossDocumentIndex.RankProfile rankProfile) {
+        GraphRagCrossDocumentIndex.QualityProfile safeQuality = qualityProfile == null
+            ? GraphRagCrossDocumentIndex.QualityProfile.empty()
+            : qualityProfile;
+        GraphRagCrossDocumentIndex.RankProfile safeRank = rankProfile == null
+            ? GraphRagCrossDocumentIndex.RankProfile.empty()
+            : rankProfile;
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("sourceType", DERIVED_INDEX_SOURCE_TYPE);
+        metadata.put("rankAlgorithm", "java.cross_document_pagerank.v1");
+        metadata.put("qualityScore", safeQuality.score());
+        metadata.put("qualityReasons", safeQuality.qualityReasons());
+        metadata.put("noiseReasons", safeQuality.noiseReasons());
+        metadata.put("pagerank", safeRank.pagerank());
+        metadata.put("rankBoost", safeRank.rankBoost());
+        metadata.put("rankPosition", safeRank.rankPosition());
+        metadata.put("degree", safeRank.degree());
+        metadata.put("inDegree", safeRank.inDegree());
+        metadata.put("outDegree", safeRank.outDegree());
+        metadata.put("weightedDegree", safeRank.weightedDegree());
+        return metadata;
+    }
+
+    private GraphRagCrossDocumentIndex.RankProfile rankProfile(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return GraphRagCrossDocumentIndex.RankProfile.empty();
+        }
+        return new GraphRagCrossDocumentIndex.RankProfile(
+            numberValue(metadata.get("pagerank"), 0D),
+            numberValue(metadata.get("rankBoost"), 0D),
+            integerValue(metadata.get("rankPosition")),
+            integerValue(metadata.get("degree")),
+            integerValue(metadata.get("inDegree")),
+            integerValue(metadata.get("outDegree")),
+            doubleValue(metadata.get("weightedDegree"), 0D)
         );
     }
 
@@ -538,6 +593,79 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             }
         }
         return result;
+    }
+
+    private List<String> readStringList(Object value) {
+        if (value == null) {
+            return List.of();
+        }
+        if (value instanceof Collection<?> collection) {
+            List<String> result = new ArrayList<>();
+            for (Object item : collection) {
+                if (item != null && StrUtil.isNotBlank(String.valueOf(item))) {
+                    result.add(String.valueOf(item));
+                }
+            }
+            return result;
+        }
+        if (value instanceof String text) {
+            if (StrUtil.isBlank(text)) {
+                return List.of();
+            }
+            List<String> result = new ArrayList<>();
+            for (String item : text.split("[\\n\\r,，;；、|]+")) {
+                if (StrUtil.isNotBlank(item)) {
+                    result.add(item.trim());
+                }
+            }
+            return result;
+        }
+        return List.of(String.valueOf(value));
+    }
+
+    private double numberValue(Object value, double defaultValue) {
+        if (value instanceof Number number) {
+            return Math.max(0D, Math.min(1D, number.doubleValue()));
+        }
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Math.max(0D, Math.min(1D, Double.parseDouble(String.valueOf(value))));
+        }
+        catch (Exception exception) {
+            return defaultValue;
+        }
+    }
+
+    private double doubleValue(Object value, double defaultValue) {
+        if (value instanceof Number number) {
+            return Math.max(0D, number.doubleValue());
+        }
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Math.max(0D, Double.parseDouble(String.valueOf(value)));
+        }
+        catch (Exception exception) {
+            return defaultValue;
+        }
+    }
+
+    private int integerValue(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(String.valueOf(value)));
+        }
+        catch (Exception exception) {
+            return 0;
+        }
     }
 
     private Map<String, Object> readMetadata(String metadataJson) {

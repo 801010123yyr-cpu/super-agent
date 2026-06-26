@@ -133,6 +133,18 @@ public class SearchReference {
 
     private Integer kgHopCount;
 
+    private Double kgQualityScore;
+
+    private String kgQualityReasons;
+
+    private String kgNoiseReasons;
+
+    private Double kgPagerank;
+
+    private Integer kgRankPosition;
+
+    private Integer kgDegree;
+
     private Long raptorNodeId;
 
     private String raptorNodeTitle;

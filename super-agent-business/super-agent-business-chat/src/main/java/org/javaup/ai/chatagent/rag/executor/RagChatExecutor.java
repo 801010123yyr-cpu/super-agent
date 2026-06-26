@@ -152,6 +152,12 @@ public class RagChatExecutor implements ConversationExecutor {
         item.put("kgEvidenceId", reference.getKgEvidenceId());
         item.put("kgGraphPath", StrUtil.blankToDefault(reference.getKgGraphPath(), ""));
         item.put("kgHopCount", reference.getKgHopCount());
+        item.put("kgQualityScore", reference.getKgQualityScore());
+        item.put("kgQualityReasons", StrUtil.blankToDefault(reference.getKgQualityReasons(), ""));
+        item.put("kgNoiseReasons", StrUtil.blankToDefault(reference.getKgNoiseReasons(), ""));
+        item.put("kgPagerank", reference.getKgPagerank());
+        item.put("kgRankPosition", reference.getKgRankPosition());
+        item.put("kgDegree", reference.getKgDegree());
         item.put("citationScore", reference.getCitationScore());
         item.put("citationRepaired", reference.isCitationRepaired());
         return item;

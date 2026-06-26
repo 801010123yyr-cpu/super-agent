@@ -523,8 +523,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .hopCount(hopCount)
                 .rankBoost(rankBoost)
                 .score(score);
-            builder = withRelationGroup(builder, relationGroup);
-            return withCanonicalEntity(builder, seed, crossDocumentIndex).build();
+            builder = withCanonicalEntity(builder, seed, crossDocumentIndex);
+            return withRelationGroup(builder, relationGroup).build();
         }
 
         if (evidence.getEntityId() != null) {
@@ -566,7 +566,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .relationGroupKey(group.key())
             .relationGroupRelationCount(group.relationCount())
             .relationGroupEvidenceCount(group.evidenceCount())
-            .relationGroupDocumentCount(group.documentCount());
+            .relationGroupDocumentCount(group.documentCount())
+            .kgQualityScore(group.qualityProfile() == null ? null : group.qualityProfile().score())
+            .kgQualityReasons(group.qualityProfile() == null ? "" : String.join(",", group.qualityProfile().qualityReasons()))
+            .kgNoiseReasons(group.qualityProfile() == null ? "" : String.join(",", group.qualityProfile().noiseReasons()))
+            .kgPagerank(group.rankProfile() == null ? null : group.rankProfile().pagerank())
+            .kgRankPosition(group.rankProfile() == null ? null : group.rankProfile().rankPosition())
+            .kgDegree(group.rankProfile() == null ? null : group.rankProfile().degree());
     }
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder withCanonicalEntity(GraphRagSearchResult.GraphRagSearchResultBuilder builder,
@@ -580,7 +586,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .canonicalEntityKey(group.key())
             .canonicalEntityName(group.name())
             .canonicalEntityCount(group.entityIds().size())
-            .canonicalDocumentCount(group.documentIds().size());
+            .canonicalDocumentCount(group.documentIds().size())
+            .kgQualityScore(group.qualityProfile() == null ? null : group.qualityProfile().score())
+            .kgQualityReasons(group.qualityProfile() == null ? "" : String.join(",", group.qualityProfile().qualityReasons()))
+            .kgNoiseReasons(group.qualityProfile() == null ? "" : String.join(",", group.qualityProfile().noiseReasons()))
+            .kgPagerank(group.rankProfile() == null ? null : group.rankProfile().pagerank())
+            .kgRankPosition(group.rankProfile() == null ? null : group.rankProfile().rankPosition())
+            .kgDegree(group.rankProfile() == null ? null : group.rankProfile().degree());
     }
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder baseResult(SuperAgentKgEvidence evidence) {

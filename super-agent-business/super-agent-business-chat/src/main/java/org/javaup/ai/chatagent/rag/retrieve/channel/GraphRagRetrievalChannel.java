@@ -105,6 +105,12 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, StrUtil.blankToDefault(result.getCommunityTitle(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, StrUtil.blankToDefault(result.getCommunitySummary(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RANK_BOOST, result.getRankBoost());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, result.getKgQualityScore());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, StrUtil.blankToDefault(result.getKgQualityReasons(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, StrUtil.blankToDefault(result.getKgNoiseReasons(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_PAGERANK, result.getKgPagerank());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, result.getKgRankPosition());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_DEGREE, result.getKgDegree());
 
         return Document.builder()
             .id(documentId(result))

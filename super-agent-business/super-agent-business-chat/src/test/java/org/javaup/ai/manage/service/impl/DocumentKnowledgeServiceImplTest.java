@@ -91,6 +91,82 @@ class DocumentKnowledgeServiceImplTest {
         assertThat(parentEvidence.getText()).contains("权限申请");
     }
 
+    @Test
+    void elevateToParentBlocksKeepsGraphRagMetadataWhenParentBecomesHybrid() {
+        SuperAgentDocumentParentBlock parentBlock = new SuperAgentDocumentParentBlock();
+        parentBlock.setId(1002L);
+        parentBlock.setDocumentId(10L);
+        parentBlock.setTaskId(20L);
+        parentBlock.setParentNo(5);
+        parentBlock.setSectionPath("异常权限扩散");
+        parentBlock.setParentText("异常权限扩散时，AuditTrail 必须保留操作人、审批人和处理时间。");
+
+        Document keywordChild = Document.builder()
+            .id("keyword-1")
+            .text("异常权限扩散字段")
+            .score(2.60D)
+            .metadata(metadata(
+                DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT",
+                DocumentKnowledgeMetadataKeys.CHANNEL, "keyword",
+                DocumentKnowledgeMetadataKeys.SCORE, 2.60D,
+                DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 1002L,
+                DocumentKnowledgeMetadataKeys.CHUNK_ID, 2101L,
+                DocumentKnowledgeMetadataKeys.SECTION_PATH, "异常权限扩散"
+            ))
+            .build();
+        Document graphRagChild = Document.builder()
+            .id("graph-rag-1")
+            .text("AuditTrail RECORDS 异常权限扩散")
+            .score(1.10D)
+            .metadata(metadata(
+                DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG",
+                DocumentKnowledgeMetadataKeys.CHANNEL, "graph-rag",
+                DocumentKnowledgeMetadataKeys.SCORE, 1.10D,
+                DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 1002L,
+                DocumentKnowledgeMetadataKeys.CHUNK_ID, 2102L,
+                DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 3101L,
+                DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "AuditTrail",
+                DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY, "CONCEPT:审计系统",
+                DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, "审计系统",
+                DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT, 4,
+                DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT, 2,
+                DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 4101L,
+                DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "RECORDS",
+                DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:异常权限扩散",
+                DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, 1,
+                DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 1,
+                DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 1,
+                DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 5101L,
+                DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "一跳：AuditTrail --RECORDS--> 异常权限扩散",
+                DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.81D,
+                DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,strongRelationSource",
+                DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, ""
+            ))
+            .build();
+
+        DocumentKnowledgeServiceImpl service = new DocumentKnowledgeServiceImpl(
+            mapper(SuperAgentDocumentMapper.class, List.<org.javaup.ai.manage.data.SuperAgentDocument>of()),
+            mapper(SuperAgentDocumentParentBlockMapper.class, List.of(parentBlock)),
+            null,
+            null,
+            null,
+            new GraphRagTypedChunkMetadataSupport(new ObjectMapper())
+        );
+
+        List<Document> elevated = service.elevateToParentBlocks(List.of(keywordChild, graphRagChild), 1024);
+
+        assertThat(elevated).hasSize(1);
+        Map<String, Object> metadata = elevated.get(0).getMetadata();
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL)).isEqualTo("hybrid");
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME)).isEqualTo("审计系统");
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT)).isEqualTo(2);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))
+            .isEqualTo("CONCEPT:审计系统->RECORDS->CONCEPT:异常权限扩散");
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE)).isEqualTo(0.81D);
+        assertThat(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS))
+            .isEqualTo("groundedEvidence,strongRelationSource");
+    }
+
     private static Map<String, Object> metadata(Object... values) {
         java.util.LinkedHashMap<String, Object> result = new java.util.LinkedHashMap<>();
         for (int index = 0; index + 1 < values.length; index += 2) {

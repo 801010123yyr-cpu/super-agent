@@ -82,6 +82,9 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_COMMUNITY_TITLE = "kgCommunityTitle";
     public static final String KG_COMMUNITY_SUMMARY = "kgCommunitySummary";
     public static final String KG_RANK_BOOST = "kgRankBoost";
+    public static final String KG_QUALITY_SCORE = "kgQualityScore";
+    public static final String KG_QUALITY_REASONS = "kgQualityReasons";
+    public static final String KG_NOISE_REASONS = "kgNoiseReasons";
     public static final String KG_PAGERANK = "kgPagerank";
     public static final String KG_RANK_POSITION = "kgRankPosition";
     public static final String KG_DEGREE = "kgDegree";
