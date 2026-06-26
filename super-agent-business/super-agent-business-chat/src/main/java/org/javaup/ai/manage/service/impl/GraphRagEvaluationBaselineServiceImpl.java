@@ -206,6 +206,31 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
                                                          Long documentId,
                                                          Long taskId) {
         boolean passed = score >= 0.85D;
+        GraphRagEvaluationReport.EntityResult entityResult = GraphRagEvaluationReport.EntityResult.builder()
+            .expectedName("审计系统/AuditTrail")
+            .expectedEntityType("SYSTEM")
+            .required(true)
+            .matched(passed)
+            .actualEntityId(matched == null ? null : matched.getEntityId())
+            .actualName(matched == null ? null : firstNonBlank(matched.getCanonicalEntityName(), matched.getEntityName()))
+            .reason(passed
+                ? "跨文档 canonical entity 命中，entities=" + matched.getCanonicalEntityCount()
+                    + " docs=" + matched.getCanonicalDocumentCount()
+                : summary)
+            .build();
+        GraphRagEvaluationReport.RelationResult relationResult = GraphRagEvaluationReport.RelationResult.builder()
+            .expectedSourceName("审计系统/AuditTrail")
+            .expectedTargetName("权限申请/权限审批/权限回收/临时权限延长")
+            .expectedRelationType("RECORDS")
+            .required(true)
+            .matched(passed)
+            .actualRelationId(matched == null ? null : matched.getRelationId())
+            .actualSourceEntityId(matched == null ? null : matched.getEntityId())
+            .actualSourceName(matched == null ? null : matched.getEntityName())
+            .actualTargetEntityId(matched == null ? null : matched.getRelatedEntityId())
+            .actualTargetName(matched == null ? null : matched.getRelatedEntityName())
+            .reason(summary)
+            .build();
         GraphRagEvaluationReport.EvidenceResult evidenceResult = GraphRagEvaluationReport.EvidenceResult.builder()
             .expectedQuoteKeywords(List.of("审计系统", "AuditTrail", "权限申请", "审批", "回收"))
             .expectedSourceName("审计系统/AuditTrail")
@@ -237,18 +262,22 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
             .evaluationLevel(passed ? GraphRagQualityReport.LEVEL_STRONG : GraphRagQualityReport.LEVEL_WEAK)
             .evaluationScore(score)
             .summary(summary)
-            .expectedEntityCount(0L)
-            .matchedEntityCount(0L)
-            .expectedRelationCount(0L)
-            .matchedRelationCount(0L)
+            .expectedEntityCount(1L)
+            .matchedEntityCount(passed ? 1L : 0L)
+            .expectedRelationCount(1L)
+            .matchedRelationCount(passed ? 1L : 0L)
+            .forbiddenRelationCount(0L)
+            .violatedForbiddenRelationCount(0L)
             .expectedEvidenceCount(1L)
             .matchedEvidenceCount(passed ? 1L : 0L)
-            .entityRecall(0D)
-            .relationRecall(0D)
+            .entityRecall(score)
+            .relationRecall(score)
+            .relationPrecision(1D)
             .evidenceRecall(score)
             .overallRecall(score)
-            .entityResults(List.of())
-            .relationResults(List.of())
+            .entityResults(List.of(entityResult))
+            .relationResults(List.of(relationResult))
+            .forbiddenRelationResults(List.of())
             .evidenceResults(List.of(evidenceResult))
             .build();
     }
@@ -272,14 +301,17 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
             .suiteCount(1L)
             .passedSuiteCount(passed ? 1L : 0L)
             .failedSuiteCount(passed ? 0L : 1L)
-            .expectedEntityCount(0L)
-            .matchedEntityCount(0L)
-            .expectedRelationCount(0L)
-            .matchedRelationCount(0L)
+            .expectedEntityCount(report.getExpectedEntityCount())
+            .matchedEntityCount(report.getMatchedEntityCount())
+            .expectedRelationCount(report.getExpectedRelationCount())
+            .matchedRelationCount(report.getMatchedRelationCount())
+            .forbiddenRelationCount(report.getForbiddenRelationCount())
+            .violatedForbiddenRelationCount(report.getViolatedForbiddenRelationCount())
             .expectedEvidenceCount(report.getExpectedEvidenceCount())
             .matchedEvidenceCount(report.getMatchedEvidenceCount())
-            .entityRecall(0D)
-            .relationRecall(0D)
+            .entityRecall(report.getEntityRecall())
+            .relationRecall(report.getRelationRecall())
+            .relationPrecision(report.getRelationPrecision())
             .evidenceRecall(recall)
             .overallRecall(recall)
             .passRate(passed ? 1D : 0D)
@@ -297,6 +329,18 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
                 .reason(report.getSummary())
                 .build()))
             .build();
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (StrUtil.isNotBlank(value)) {
+                return value;
+            }
+        }
+        return "";
     }
 
     private GraphRagEvaluationSourceBinding bindSource(String sourceDocument, List<SuperAgentDocument> indexedDocuments) {

@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -588,8 +589,9 @@ public class RagRetrievalEngine {
         if (finalDocuments == null || finalDocuments.isEmpty()) {
             return;
         }
-        LinkedHashSet<String> observations = new LinkedHashSet<>();
-        for (Document document : finalDocuments) {
+        LinkedHashMap<String, GraphRagCanonicalObservation> observationMap = new LinkedHashMap<>();
+        for (int index = 0; index < finalDocuments.size(); index++) {
+            Document document = finalDocuments.get(index);
             if (document == null || document.getMetadata() == null || !isGraphRagMetadata(document.getMetadata())) {
                 continue;
             }
@@ -632,18 +634,69 @@ public class RagRetrievalEngine {
             if (!documentName.isBlank()) {
                 builder.append(" doc=").append(documentName);
             }
-            observations.add(builder.toString());
+            String text = builder.toString();
+            observationMap.putIfAbsent(text, new GraphRagCanonicalObservation(
+                text,
+                graphRagObservationPriority(document, index, entityCount, documentCount, relationGroupEvidenceCount, relationGroupDocumentCount),
+                index
+            ));
         }
-        if (observations.isEmpty()) {
+        if (observationMap.isEmpty()) {
             return;
         }
-        List<String> limited = observations.stream().limit(4).toList();
+        List<String> limited = observationMap.values().stream()
+            .sorted(Comparator.comparingDouble(GraphRagCanonicalObservation::priority).reversed()
+                .thenComparingInt(GraphRagCanonicalObservation::originalIndex))
+            .map(GraphRagCanonicalObservation::text)
+            .limit(4)
+            .toList();
         String summary = String.join("；", limited);
         notes.add("子问题" + subQuestionIndex + " GraphRAG canonical 观测：" + summary);
         log.info("GraphRAG canonical 观测: subQuestionIndex={}, subQuestion='{}', observations={}",
             subQuestionIndex,
             subQuestion,
             summary);
+    }
+
+    private double graphRagObservationPriority(Document document,
+                                               int originalIndex,
+                                               Integer entityCount,
+                                               Integer documentCount,
+                                               Integer relationGroupEvidenceCount,
+                                               Integer relationGroupDocumentCount) {
+        double priority = Math.max(0D, finalDocumentScore(document));
+        if (relationGroupDocumentCount != null && relationGroupDocumentCount > 1) {
+            priority += 0.60D + Math.min(0.40D, relationGroupDocumentCount * 0.08D);
+        }
+        if (relationGroupEvidenceCount != null && relationGroupEvidenceCount > 1) {
+            priority += 0.30D + Math.min(0.30D, relationGroupEvidenceCount * 0.04D);
+        }
+        if (documentCount != null && documentCount > 1) {
+            priority += 0.25D + Math.min(0.25D, documentCount * 0.04D);
+        }
+        if (entityCount != null && entityCount > 1) {
+            priority += 0.10D + Math.min(0.15D, entityCount * 0.02D);
+        }
+        if (document != null && document.getMetadata() != null) {
+            if (document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null) {
+                priority += 0.08D;
+            }
+            if (document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID) != null) {
+                priority += 0.06D;
+            }
+        }
+        return priority - originalIndex * 0.0001D;
+    }
+
+    private double finalDocumentScore(Document document) {
+        if (document == null) {
+            return 0D;
+        }
+        Double score = resolveScore(document);
+        if (score != null) {
+            return score;
+        }
+        return document.getScore() == null ? 0D : document.getScore();
     }
 
     private boolean isGraphRagMetadata(Map<String, Object> metadata) {
@@ -666,6 +719,9 @@ public class RagRetrievalEngine {
             }
         }
         return "";
+    }
+
+    private record GraphRagCanonicalObservation(String text, double priority, int originalIndex) {
     }
 
     private Integer integerMetadataValue(Object value) {

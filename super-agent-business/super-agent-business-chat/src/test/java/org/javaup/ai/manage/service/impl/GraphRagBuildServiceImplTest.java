@@ -15,14 +15,17 @@ import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.model.graph.GraphRagBuildResult;
 import org.javaup.ai.manage.model.graph.GraphRagCommunityReportAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagCommunityReportContext;
+import org.javaup.ai.manage.model.graph.GraphRagCrossDocumentIndexBuildResult;
 import org.javaup.ai.manage.model.graph.GraphRagEntityResolutionAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagEntityResolutionContext;
 import org.javaup.ai.manage.model.graph.GraphRagExtractionAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagExtractionContext;
 import org.javaup.ai.manage.service.GraphRagBuildCheckpointService;
 import org.javaup.ai.manage.service.GraphRagCommunityReportAdvisor;
+import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.service.GraphRagEntityResolutionAdvisor;
 import org.javaup.ai.manage.service.GraphRagExtractionAdvisor;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.config.RagToolsProperties;
 import org.javaup.ai.ragtools.model.RagToolsGraphExtractRequest;
@@ -84,7 +87,7 @@ class GraphRagBuildServiceImplTest {
         Map<String, Object> metadata = objectMapper.readValue(mergedEntity.getMetadataJson(), Map.class);
         assertThat(metadata.get("sourceEntityIds")).isEqualTo(List.of("E1", "E2"));
         assertThat(String.valueOf(metadata.get("aliases"))).contains("超级智能体");
-        assertThat(String.valueOf(metadata.get("candidateSources"))).contains("textPhrase", "ner.pattern");
+        assertThat(String.valueOf(metadata.get("candidateSources"))).contains("parentheticalAlias", "ner.pattern");
         assertThat(String.valueOf(metadata.get("extractorSources"))).contains("rule", "ner");
         assertThat(metadata)
             .containsEntry("rankAlgorithm", "java.pagerank.v1")
@@ -96,7 +99,7 @@ class GraphRagBuildServiceImplTest {
         assertThat(mergedRelation.getRelationType()).isEqualTo("CALLS");
         Map<String, Object> relationMetadata = objectMapper.readValue(mergedRelation.getMetadataJson(), Map.class);
         assertThat(relationMetadata.get("sourceRelationIds")).isEqualTo(List.of("R1", "R2"));
-        assertThat(String.valueOf(relationMetadata.get("candidateSources"))).contains("rule.relationWord");
+        assertThat(String.valueOf(relationMetadata.get("candidateSources"))).contains("rule.structuredRelation");
         assertThat(String.valueOf(relationMetadata.get("extractorSources"))).contains("rule");
         assertThat(relationMetadata)
             .containsEntry("rankAlgorithm", "java.pagerank.v1")
@@ -150,6 +153,107 @@ class GraphRagBuildServiceImplTest {
         assertThat(leaseManager.renewCount()).isEqualTo(1);
         assertThat(leaseManager.releaseCount()).isEqualTo(1);
         assertThat(checkpointService.events()).contains("retry:EXTRACTING:1", "success:2");
+    }
+
+    @Test
+    void successfulBuildRefreshesCrossDocumentIndex() {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        RecordingCrossDocumentIndexService crossDocumentIndexService = new RecordingCrossDocumentIndexService();
+
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            new StaticRagToolsClient(graphResponse()),
+            new ObjectMapper(),
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            new RecordingCheckpointService(),
+            null,
+            null,
+            null,
+            crossDocumentIndexService
+        );
+
+        GraphRagBuildResult result = service.rebuildDocumentGraph(10L, 20L, List.of(orderPaymentChunk(101L)));
+
+        assertThat(result.getEntityCount()).isEqualTo(2);
+        assertThat(crossDocumentIndexService.rebuildCount()).isEqualTo(1);
+    }
+
+    @Test
+    void emptyValidChunkInputClearsGraphAndRefreshesCrossDocumentIndex() {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        StaticRagToolsClient ragToolsClient = new StaticRagToolsClient(graphResponse());
+        RecordingCrossDocumentIndexService crossDocumentIndexService = new RecordingCrossDocumentIndexService();
+
+        SuperAgentDocumentChunk blankChunk = chunk(101L);
+        blankChunk.setChunkText("  ");
+        blankChunk.setContentWithWeight("  ");
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            ragToolsClient,
+            new ObjectMapper(),
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            new RecordingCheckpointService(),
+            null,
+            null,
+            null,
+            crossDocumentIndexService
+        );
+
+        GraphRagBuildResult result = service.rebuildDocumentGraph(10L, 20L, List.of(blankChunk));
+
+        assertThat(result.getEntityCount()).isZero();
+        assertThat(entityCollector.deleteCount()).isEqualTo(1);
+        assertThat(relationCollector.deleteCount()).isEqualTo(1);
+        assertThat(evidenceCollector.deleteCount()).isEqualTo(1);
+        assertThat(communityCollector.deleteCount()).isEqualTo(1);
+        assertThat(ragToolsClient.callCount()).isZero();
+        assertThat(crossDocumentIndexService.rebuildCount()).isEqualTo(1);
+    }
+
+    @Test
+    void deleteByTaskRefreshesCrossDocumentIndex() {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        RecordingCrossDocumentIndexService crossDocumentIndexService = new RecordingCrossDocumentIndexService();
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            new StaticRagToolsClient(graphResponse()),
+            new ObjectMapper(),
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            new RecordingCheckpointService(),
+            null,
+            null,
+            null,
+            crossDocumentIndexService
+        );
+
+        service.deleteByTask(10L, 20L);
+
+        assertThat(entityCollector.deleteCount()).isEqualTo(1);
+        assertThat(relationCollector.deleteCount()).isEqualTo(1);
+        assertThat(evidenceCollector.deleteCount()).isEqualTo(1);
+        assertThat(communityCollector.deleteCount()).isEqualTo(1);
+        assertThat(crossDocumentIndexService.rebuildCount()).isEqualTo(1);
     }
 
     @Test
@@ -414,6 +518,58 @@ class GraphRagBuildServiceImplTest {
             assertThat(metadata)
                 .containsEntry("entityResolutionStrategy", "java.alias.v1")
                 .containsEntry("entityResolutionEnhanced", false);
+        }
+    }
+
+    @Test
+    void controlledEntityResolutionAdvisorRejectsTopicalSameTypeMergeWithoutAliasOverlap() throws Exception {
+        InsertCollector entityCollector = new InsertCollector();
+        InsertCollector relationCollector = new InsertCollector();
+        InsertCollector evidenceCollector = new InsertCollector();
+        InsertCollector communityCollector = new InsertCollector();
+        ObjectMapper objectMapper = new ObjectMapper();
+        RecordingEntityResolutionAdvisor entityResolutionAdvisor = new RecordingEntityResolutionAdvisor(context -> GraphRagEntityResolutionAdvice.builder()
+            .resolvable(true)
+            .mergeGroups(List.of(GraphRagEntityResolutionAdvice.MergeGroup.builder()
+                .entityIds(List.of("E1", "E2", "E3"))
+                .canonicalName("GraphRAG")
+                .aliases(List.of("GraphRAG", "验证 GraphRAG"))
+                .confidence(0.96D)
+                .reason("同处 GraphRAG 测试上下文，但不是别名等价实体")
+                .build()))
+            .confidence(0.96D)
+            .reason("测试同类型主题相关但非别名合并应被拒绝")
+            .build());
+
+        GraphRagBuildServiceImpl service = service(
+            entityCollector,
+            relationCollector,
+            evidenceCollector,
+            communityCollector,
+            new StaticRagToolsClient(topicalEntityResolutionGraphResponse()),
+            objectMapper,
+            properties(2, 0L),
+            new TestRedisLeaseManager(true),
+            new RecordingCheckpointService(),
+            null,
+            null,
+            entityResolutionAdvisor
+        );
+
+        GraphRagBuildResult result = service.rebuildDocumentGraph(10L, 20L, List.of(chunk(101L)));
+
+        assertThat(result.getEntityCount()).isEqualTo(4);
+        assertThat(result.getRelationCount()).isEqualTo(1);
+        assertThat(entityResolutionAdvisor.callCount()).isEqualTo(1);
+        assertThat(entityCollector.items(SuperAgentKgEntity.class))
+            .extracting(SuperAgentKgEntity::getName)
+            .contains("AuditTrail", "GraphRAG", "验证 GraphRAG", "临时权限延长");
+        for (SuperAgentKgEntity entity : entityCollector.items(SuperAgentKgEntity.class)) {
+            Map<String, Object> metadata = objectMapper.readValue(entity.getMetadataJson(), Map.class);
+            assertThat(metadata)
+                .containsEntry("entityResolutionStrategy", "java.alias.v1")
+                .containsEntry("entityResolutionEnhanced", false);
+            assertThat(String.valueOf(metadata.get("entityResolutionCanonicalName"))).doesNotContain("GraphRAG");
         }
     }
 
@@ -714,6 +870,24 @@ class GraphRagBuildServiceImplTest {
                                                     GraphRagExtractionAdvisor extractionAdvisor,
                                                     GraphRagCommunityReportAdvisor communityReportAdvisor,
                                                     GraphRagEntityResolutionAdvisor entityResolutionAdvisor) {
+        return service(entityCollector, relationCollector, evidenceCollector, communityCollector, ragToolsClient,
+            objectMapper, properties, leaseManager, checkpointService, extractionAdvisor, communityReportAdvisor,
+            entityResolutionAdvisor, null);
+    }
+
+    private static GraphRagBuildServiceImpl service(InsertCollector entityCollector,
+                                                    InsertCollector relationCollector,
+                                                    InsertCollector evidenceCollector,
+                                                    InsertCollector communityCollector,
+                                                    RagToolsClient ragToolsClient,
+                                                    ObjectMapper objectMapper,
+                                                    GraphRagBuildProperties properties,
+                                                    TestRedisLeaseManager leaseManager,
+                                                    GraphRagBuildCheckpointService checkpointService,
+                                                    GraphRagExtractionAdvisor extractionAdvisor,
+                                                    GraphRagCommunityReportAdvisor communityReportAdvisor,
+                                                    GraphRagEntityResolutionAdvisor entityResolutionAdvisor,
+                                                    GraphRagCrossDocumentIndexService crossDocumentIndexService) {
         return new GraphRagBuildServiceImpl(
             mapper(SuperAgentKgEntityMapper.class, entityCollector),
             mapper(SuperAgentKgRelationMapper.class, relationCollector),
@@ -728,7 +902,8 @@ class GraphRagBuildServiceImplTest {
             transactionTemplate(),
             extractionAdvisor,
             communityReportAdvisor,
-            entityResolutionAdvisor
+            entityResolutionAdvisor,
+            crossDocumentIndexService
         );
     }
 
@@ -812,6 +987,28 @@ class GraphRagBuildServiceImplTest {
         return response;
     }
 
+    private static RagToolsGraphExtractResponse topicalEntityResolutionGraphResponse() {
+        RagToolsGraphExtractResponse response = new RagToolsGraphExtractResponse();
+        response.setEntities(new ArrayList<>(List.of(
+            entity("E1", "AuditTrail", "audittrail", List.of(), "CONCEPT", List.of(101L), List.of("EV1")),
+            entity("E2", "GraphRAG", "graphrag", List.of(), "CONCEPT", List.of(101L), List.of("EV2")),
+            entity("E3", "验证 GraphRAG", "验证graphrag", List.of(), "CONCEPT", List.of(101L), List.of("EV3")),
+            entity("E4", "临时权限延长", "临时权限延长", List.of(), "CONCEPT", List.of(101L), List.of("EV4"))
+        )));
+        response.setRelations(new ArrayList<>(List.of(
+            relation("R1", "E1", "E4", "RECORDS", List.of("EV5"))
+        )));
+        response.setEvidences(new ArrayList<>(List.of(
+            evidence("EV1", "E1", "", 101L, 201L, "AuditTrail 需记录权限相关行为。"),
+            evidence("EV2", "E2", "", 101L, 201L, "GraphRAG 用于验证跨文档图谱。"),
+            evidence("EV3", "E3", "", 101L, 201L, "验证 GraphRAG 时会检查审计证据。"),
+            evidence("EV4", "E4", "", 101L, 201L, "临时权限延长属于权限相关行为。"),
+            evidence("EV5", "", "R1", 101L, 201L, "AuditTrail 需记录临时权限延长。")
+        )));
+        response.setCommunities(new ArrayList<>());
+        return response;
+    }
+
     private static RagToolsGraphExtractResponse.Entity entity(String id,
                                                               String name,
                                                               String normalizedName,
@@ -832,7 +1029,7 @@ class GraphRagBuildServiceImplTest {
         entity.setMetadata(Map.of(
             "mentionCount", 1,
             "candidateScore", 10D,
-            "candidateSources", List.of("textPhrase", "ner.pattern"),
+            "candidateSources", List.of("parentheticalAlias", "ner.pattern"),
             "extractorSources", List.of("rule", "ner")
         ));
         return entity;
@@ -853,7 +1050,7 @@ class GraphRagBuildServiceImplTest {
         relation.setEvidenceIds(new ArrayList<>(evidenceIds));
         relation.setMetadata(Map.of(
             "confidence", 0.9D,
-            "candidateSources", List.of("rule.relationWord"),
+            "candidateSources", List.of("rule.structuredRelation"),
             "extractorSources", List.of("rule")
         ));
         return relation;
@@ -1008,7 +1205,7 @@ class GraphRagBuildServiceImplTest {
         private final AtomicInteger callCount = new AtomicInteger();
 
         private StaticRagToolsClient(RagToolsGraphExtractResponse response) {
-            super(new RagToolsProperties());
+            super(new RagToolsProperties(), new ObjectMapper());
             this.response = response;
         }
 
@@ -1028,7 +1225,7 @@ class GraphRagBuildServiceImplTest {
         private final AtomicInteger callCount = new AtomicInteger();
 
         private FailingOnceRagToolsClient() {
-            super(new RagToolsProperties());
+            super(new RagToolsProperties(), new ObjectMapper());
         }
 
         @Override
@@ -1209,6 +1406,26 @@ class GraphRagBuildServiceImplTest {
 
         private int callCount() {
             return callCount.get();
+        }
+    }
+
+    private static final class RecordingCrossDocumentIndexService implements GraphRagCrossDocumentIndexService {
+
+        private final AtomicInteger rebuildCount = new AtomicInteger();
+
+        @Override
+        public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+            rebuildCount.incrementAndGet();
+            return List.of();
+        }
+
+        @Override
+        public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+            return GraphRagCrossDocumentIndex.empty();
+        }
+
+        private int rebuildCount() {
+            return rebuildCount.get();
         }
     }
 

@@ -16,8 +16,13 @@ import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.model.graph.GraphRagQueryCatalog;
 import org.javaup.ai.manage.model.graph.GraphRagQueryPlanAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagSearchResult;
+import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.service.GraphRagQueryPlanAdvisor;
 import org.javaup.ai.manage.service.GraphRagSearchService;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex.CanonicalEntityGroup;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex.RelationGroup;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndexSupport;
 import org.javaup.enums.BusinessStatus;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,17 +54,6 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     private static final int CATALOG_ENTITY_LIMIT = 80;
     private static final int CATALOG_RELATION_LIMIT = 120;
     private static final int CATALOG_COMMUNITY_LIMIT = 40;
-    private static final Set<String> TECHNICAL_ENTITY_LABELS = Set.of(
-        "title", "section", "content", "keywords", "questions", "chunktype", "chunk_type",
-        "text", "metadata", "page", "bbox", "ct"
-    );
-    private static final Set<String> GENERATED_ENTITY_SOURCES = Set.of(
-        "metadata.question", "metadata.keyword", "metadata.autoquestion", "metadata.autokeyword"
-    );
-    private static final Set<String> GENERATED_EVIDENCE_MARKERS = Set.of(
-        "[QUESTIONS]", "[KEYWORDS]"
-    );
-
     private final SuperAgentKgEntityMapper entityMapper;
 
     private final SuperAgentKgRelationMapper relationMapper;
@@ -72,20 +66,28 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
 
     private final GraphRagQueryPlanAdvisor queryPlanAdvisor;
 
+    private final GraphRagCrossDocumentIndexService crossDocumentIndexService;
+
+    private final GraphRagCrossDocumentIndexSupport crossDocumentIndexSupport;
+
     @Autowired
     public GraphRagSearchServiceImpl(SuperAgentKgEntityMapper entityMapper,
                                      SuperAgentKgRelationMapper relationMapper,
                                      SuperAgentKgEvidenceMapper evidenceMapper,
                                      SuperAgentKgCommunityMapper communityMapper,
                                      ObjectMapper objectMapper,
-                                     ObjectProvider<GraphRagQueryPlanAdvisor> queryPlanAdvisorProvider) {
+                                     ObjectProvider<GraphRagQueryPlanAdvisor> queryPlanAdvisorProvider,
+                                     ObjectProvider<GraphRagCrossDocumentIndexService> crossDocumentIndexServiceProvider,
+                                     GraphRagCrossDocumentIndexSupport crossDocumentIndexSupport) {
         this(
             entityMapper,
             relationMapper,
             evidenceMapper,
             communityMapper,
             objectMapper,
-            queryPlanAdvisorProvider == null ? null : queryPlanAdvisorProvider.getIfAvailable()
+            queryPlanAdvisorProvider == null ? null : queryPlanAdvisorProvider.getIfAvailable(),
+            crossDocumentIndexServiceProvider == null ? null : crossDocumentIndexServiceProvider.getIfAvailable(),
+            crossDocumentIndexSupport
         );
     }
 
@@ -103,12 +105,36 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                               SuperAgentKgCommunityMapper communityMapper,
                               ObjectMapper objectMapper,
                               GraphRagQueryPlanAdvisor queryPlanAdvisor) {
+        this(
+            entityMapper,
+            relationMapper,
+            evidenceMapper,
+            communityMapper,
+            objectMapper,
+            queryPlanAdvisor,
+            null,
+            new GraphRagCrossDocumentIndexSupport(objectMapper)
+        );
+    }
+
+    GraphRagSearchServiceImpl(SuperAgentKgEntityMapper entityMapper,
+                              SuperAgentKgRelationMapper relationMapper,
+                              SuperAgentKgEvidenceMapper evidenceMapper,
+                              SuperAgentKgCommunityMapper communityMapper,
+                              ObjectMapper objectMapper,
+                              GraphRagQueryPlanAdvisor queryPlanAdvisor,
+                              GraphRagCrossDocumentIndexService crossDocumentIndexService,
+                              GraphRagCrossDocumentIndexSupport crossDocumentIndexSupport) {
         this.entityMapper = entityMapper;
         this.relationMapper = relationMapper;
         this.evidenceMapper = evidenceMapper;
         this.communityMapper = communityMapper;
         this.objectMapper = objectMapper;
         this.queryPlanAdvisor = queryPlanAdvisor;
+        this.crossDocumentIndexService = crossDocumentIndexService;
+        this.crossDocumentIndexSupport = crossDocumentIndexSupport == null
+            ? new GraphRagCrossDocumentIndexSupport(objectMapper)
+            : crossDocumentIndexSupport;
     }
 
     @Override
@@ -128,11 +154,12 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         List<SuperAgentKgEntity> allEntities = listEntities(documentIds, taskIds);
         Map<Long, SuperAgentKgEntity> entityMap = allEntities.stream()
             .collect(Collectors.toMap(SuperAgentKgEntity::getId, item -> item, (left, right) -> left, LinkedHashMap::new));
-        CanonicalEntityIndex canonicalIndex = buildCanonicalEntityIndex(allEntities);
+        GraphRagCrossDocumentIndex crossDocumentIndex = loadCrossDocumentIndex(documentIds, taskIds, allEntities, List.of(), List.of());
         List<SuperAgentKgCommunity> allCommunities = listCommunities(documentIds, taskIds);
         List<SuperAgentKgRelation> loadedRelations = List.of();
         if (shouldAskAdvisor(question, queryProfile, allEntities, allCommunities)) {
             loadedRelations = listAllRelations(documentIds, taskIds);
+            crossDocumentIndex = ensureCrossDocumentIndex(documentIds, taskIds, allEntities, loadedRelations, List.of(), crossDocumentIndex);
             queryProfile = applyAdvisorProfile(
                 question,
                 queryProfile,
@@ -171,7 +198,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .collect(Collectors.toMap(item -> item.entity().getId(), ScoredEntity::score, Math::max, LinkedHashMap::new));
         Map<Long, Double> relationSeedScoreMap = seedRelations.stream()
             .collect(Collectors.toMap(item -> item.relation().getId(), ScoredRelation::score, Math::max, LinkedHashMap::new));
-        seedScoreMap = expandCanonicalSeedScores(seedScoreMap, canonicalIndex);
+        seedScoreMap = expandCanonicalSeedScores(seedScoreMap, crossDocumentIndex);
         Set<Long> frontierEntityIds = seedEntities.stream()
             .map(item -> item.entity().getId())
             .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -179,7 +206,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .flatMap(item -> relatedEntityIds(List.of(item.relation())).stream())
             .collect(Collectors.toCollection(LinkedHashSet::new)));
         frontierEntityIds.addAll(seedScoreMap.keySet());
-        frontierEntityIds = expandCanonicalEntityIds(frontierEntityIds, canonicalIndex);
+        frontierEntityIds = expandCanonicalEntityIds(frontierEntityIds, crossDocumentIndex);
 
         Map<Long, SuperAgentKgRelation> relationMap = new LinkedHashMap<>();
         Map<Long, Integer> relationHopMap = new LinkedHashMap<>();
@@ -213,14 +240,14 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return limitResults(communityResults, topK);
         }
 
-        RelationGroupIndex relationGroupIndex = buildRelationGroupIndex(relationMap.values(), evidences, entityMap, canonicalIndex);
+        crossDocumentIndex = ensureCrossDocumentIndex(documentIds, taskIds, allEntities, relationMap.values(), evidences, crossDocumentIndex);
         Map<Long, GraphRagSearchResult> resultMap = new LinkedHashMap<>();
         for (SuperAgentKgEvidence evidence : evidences) {
             if (!isGraphEvidenceUsable(evidence)) {
                 continue;
             }
             GraphRagSearchResult result = toResult(evidence, entityMap, relationMap, relationHopMap,
-                seedScoreMap, relationSeedScoreMap, canonicalIndex, relationGroupIndex, terms);
+                seedScoreMap, relationSeedScoreMap, crossDocumentIndex, terms);
             if (result == null) {
                 continue;
             }
@@ -241,6 +268,57 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .sorted(Comparator.comparingDouble(GraphRagSearchResult::getScore).reversed())
             .limit(topK)
             .toList();
+    }
+
+    private GraphRagCrossDocumentIndex loadCrossDocumentIndex(List<Long> documentIds,
+                                                              List<Long> taskIds,
+                                                              List<SuperAgentKgEntity> entities,
+                                                              Collection<SuperAgentKgRelation> relations,
+                                                              List<SuperAgentKgEvidence> evidences) {
+        if (crossDocumentIndexService != null) {
+            try {
+                GraphRagCrossDocumentIndex index = crossDocumentIndexService.loadIndex(documentIds, taskIds);
+                if (index != null && index.hasCanonicalGroups()) {
+                    return index;
+                }
+            }
+            catch (RuntimeException exception) {
+                log.warn("GraphRAG 跨文档持久化读模型读取失败，改用同源 KG 临时读模型: message={}", exception.getMessage());
+            }
+        }
+        return buildRuntimeCrossDocumentIndex(entities, relations, evidences);
+    }
+
+    private GraphRagCrossDocumentIndex ensureCrossDocumentIndex(List<Long> documentIds,
+                                                               List<Long> taskIds,
+                                                               List<SuperAgentKgEntity> entities,
+                                                               Collection<SuperAgentKgRelation> relations,
+                                                               List<SuperAgentKgEvidence> evidences,
+                                                               GraphRagCrossDocumentIndex currentIndex) {
+        if (currentIndex != null && currentIndex.hasCanonicalGroups() && currentIndex.hasRelationGroups()) {
+            return currentIndex;
+        }
+        if (currentIndex != null && currentIndex.hasCanonicalGroups() && CollUtil.isEmpty(relations)) {
+            return currentIndex;
+        }
+        if (crossDocumentIndexService != null && currentIndex != null && currentIndex.hasCanonicalGroups()) {
+            return currentIndex;
+        }
+        GraphRagCrossDocumentIndex runtimeIndex = buildRuntimeCrossDocumentIndex(entities, relations, evidences);
+        if (runtimeIndex.hasCanonicalGroups() || runtimeIndex.hasRelationGroups()) {
+            return runtimeIndex;
+        }
+        return currentIndex == null ? GraphRagCrossDocumentIndex.empty() : currentIndex;
+    }
+
+    private GraphRagCrossDocumentIndex buildRuntimeCrossDocumentIndex(List<SuperAgentKgEntity> entities,
+                                                                      Collection<SuperAgentKgRelation> relations,
+                                                                      List<SuperAgentKgEvidence> evidences) {
+        return crossDocumentIndexSupport.build(
+            entities == null ? List.of() : entities,
+            relations == null ? List.of() : relations,
+            evidences == null ? List.of() : evidences
+        );
     }
 
     private List<GraphRagSearchResult> searchCommunityReports(List<SuperAgentKgCommunity> communities,
@@ -398,8 +476,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                                           Map<Long, Integer> relationHopMap,
                                           Map<Long, Double> seedScoreMap,
                                           Map<Long, Double> relationSeedScoreMap,
-                                          CanonicalEntityIndex canonicalIndex,
-                                          RelationGroupIndex relationGroupIndex,
+                                          GraphRagCrossDocumentIndex crossDocumentIndex,
                                           List<String> terms) {
         if (evidence.getRelationId() != null) {
             SuperAgentKgRelation relation = relationMap.get(evidence.getRelationId());
@@ -426,7 +503,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             int hopCount = relationHopMap.getOrDefault(relation.getId(), 1);
             double hopPenalty = hopCount <= 1 ? 0D : 0.18D;
             double rankBoost = relationRankBoost(relation, source, target);
-            RelationGroup relationGroup = relationGroupIndex == null ? null : relationGroupIndex.groupOf(relation.getId());
+            RelationGroup relationGroup = crossDocumentIndex == null ? null : crossDocumentIndex.relationGroupOf(relation.getId());
             double groupBoost = relationGroupBoost(relationGroup);
             double score = seedScore
                 + relationWeight(relation.getWeight())
@@ -447,7 +524,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .rankBoost(rankBoost)
                 .score(score);
             builder = withRelationGroup(builder, relationGroup);
-            return withCanonicalEntity(builder, seed, canonicalIndex).build();
+            return withCanonicalEntity(builder, seed, crossDocumentIndex).build();
         }
 
         if (evidence.getEntityId() != null) {
@@ -469,121 +546,20 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .hopCount(0)
                 .rankBoost(rankBoost)
                 .score(score);
-            return withCanonicalEntity(builder, entity, canonicalIndex).build();
+            return withCanonicalEntity(builder, entity, crossDocumentIndex).build();
         }
         return null;
     }
 
-    private RelationGroupIndex buildRelationGroupIndex(Collection<SuperAgentKgRelation> relations,
-                                                       List<SuperAgentKgEvidence> evidences,
-                                                       Map<Long, SuperAgentKgEntity> entityMap,
-                                                       CanonicalEntityIndex canonicalIndex) {
-        if (CollUtil.isEmpty(relations)) {
-            return RelationGroupIndex.empty();
-        }
-        Map<Long, Set<Long>> evidenceIdsByRelationId = new LinkedHashMap<>();
-        Map<Long, Set<Long>> documentIdsByRelationId = new LinkedHashMap<>();
-        for (SuperAgentKgEvidence evidence : evidences) {
-            if (evidence == null || evidence.getRelationId() == null) {
-                continue;
-            }
-            if (!isGraphEvidenceUsable(evidence)) {
-                continue;
-            }
-            if (evidence.getId() != null) {
-                evidenceIdsByRelationId.computeIfAbsent(evidence.getRelationId(), ignored -> new LinkedHashSet<>())
-                    .add(evidence.getId());
-            }
-            if (evidence.getDocumentId() != null) {
-                documentIdsByRelationId.computeIfAbsent(evidence.getRelationId(), ignored -> new LinkedHashSet<>())
-                    .add(evidence.getDocumentId());
-            }
-        }
-
-        Map<String, RelationGroupAccumulator> accumulators = new LinkedHashMap<>();
-        for (SuperAgentKgRelation relation : relations) {
-            if (relation == null || relation.getId() == null) {
-                continue;
-            }
-            SuperAgentKgEntity source = entityMap.get(relation.getSourceEntityId());
-            SuperAgentKgEntity target = entityMap.get(relation.getTargetEntityId());
-            if (source == null || target == null) {
-                continue;
-            }
-            if (!isGraphSearchEntityUsable(source) || !isGraphSearchEntityUsable(target)) {
-                continue;
-            }
-            String groupKey = relationGroupKey(relation, source, target, canonicalIndex);
-            RelationGroupAccumulator accumulator = accumulators.computeIfAbsent(groupKey, RelationGroupAccumulator::new);
-            accumulator.addRelation(relation);
-            accumulator.addEvidenceIds(evidenceIdsByRelationId.get(relation.getId()));
-            accumulator.addDocumentIds(documentIdsByRelationId.get(relation.getId()));
-            if (relation.getDocumentId() != null) {
-                accumulator.addDocumentId(relation.getDocumentId());
-            }
-        }
-
-        Map<Long, RelationGroup> groupByRelationId = new LinkedHashMap<>();
-        for (RelationGroupAccumulator accumulator : accumulators.values()) {
-            RelationGroup group = accumulator.toGroup();
-            for (Long relationId : accumulator.relationIds()) {
-                groupByRelationId.put(relationId, group);
-            }
-        }
-        return new RelationGroupIndex(groupByRelationId);
-    }
-
-    private String relationGroupKey(SuperAgentKgRelation relation,
-                                    SuperAgentKgEntity source,
-                                    SuperAgentKgEntity target,
-                                    CanonicalEntityIndex canonicalIndex) {
-        String sourceKey = canonicalEntityGroupKey(source, canonicalIndex);
-        String targetKey = canonicalEntityGroupKey(target, canonicalIndex);
-        String relationType = StrUtil.blankToDefault(relation.getRelationType(), "ASSOCIATED_WITH")
-            .trim()
-            .toUpperCase(Locale.ROOT);
-        return sourceKey + "->" + relationType + "->" + targetKey;
-    }
-
-    private String canonicalEntityGroupKey(SuperAgentKgEntity entity, CanonicalEntityIndex canonicalIndex) {
-        CanonicalEntityGroup group = canonicalIndex == null ? null : canonicalIndex.groupOf(entity == null ? null : entity.getId());
-        if (group != null && StrUtil.isNotBlank(group.key())) {
-            return group.key();
-        }
-        String entityType = canonicalEntityType(entity);
-        String name = entity == null ? "" : StrUtil.blankToDefault(entity.getNormalizedName(), entity.getName());
-        String normalizedName = normalizeCanonicalVariant(name);
-        String key = entityType + ":" + normalizedName;
-        if (!isCanonicalVariantUsable(normalizedName)) {
-            Long entityId = entity == null ? null : entity.getId();
-            key += "#" + (entityId == null ? "unknown" : entityId);
-        }
-        return key;
-    }
-
     private double relationGroupBoost(RelationGroup group) {
-        if (group == null) {
-            return 0D;
-        }
-        double boost = 0D;
-        if (group.relationCount() > 1) {
-            boost += Math.min(0.16D, (group.relationCount() - 1) * 0.06D);
-        }
-        if (group.evidenceCount() > 1) {
-            boost += Math.min(0.12D, (group.evidenceCount() - 1) * 0.04D);
-        }
-        if (group.documentCount() > 1) {
-            boost += Math.min(0.18D, (group.documentCount() - 1) * 0.09D);
-        }
-        return Math.min(0.32D, boost);
+        return crossDocumentIndexSupport.relationGroupBoost(group);
     }
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder withRelationGroup(
         GraphRagSearchResult.GraphRagSearchResultBuilder builder,
         RelationGroup group
     ) {
-        if (group == null
-            || (group.relationCount() <= 1 && group.evidenceCount() <= 1 && group.documentCount() <= 1)) {
+        if (group == null) {
             return builder;
         }
         return builder
@@ -595,8 +571,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder withCanonicalEntity(GraphRagSearchResult.GraphRagSearchResultBuilder builder,
                                                                                 SuperAgentKgEntity entity,
-                                                                                CanonicalEntityIndex canonicalIndex) {
-        CanonicalEntityGroup group = canonicalIndex == null ? null : canonicalIndex.groupOf(entity == null ? null : entity.getId());
+                                                                                GraphRagCrossDocumentIndex crossDocumentIndex) {
+        CanonicalEntityGroup group = crossDocumentIndex == null ? null : crossDocumentIndex.canonicalGroupOf(entity == null ? null : entity.getId());
         if (group == null || group.entityIds().size() <= 1) {
             return builder;
         }
@@ -637,185 +613,26 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         return entityIds;
     }
 
-    private CanonicalEntityIndex buildCanonicalEntityIndex(List<SuperAgentKgEntity> entities) {
-        if (CollUtil.isEmpty(entities)) {
-            return CanonicalEntityIndex.empty();
-        }
-        Map<Long, Long> parent = new LinkedHashMap<>();
-        Map<Long, SuperAgentKgEntity> entityById = new LinkedHashMap<>();
-        for (SuperAgentKgEntity entity : entities) {
-            if (entity == null || entity.getId() == null) {
-                continue;
-            }
-            parent.put(entity.getId(), entity.getId());
-            entityById.put(entity.getId(), entity);
-        }
-        Map<String, Long> firstEntityByVariant = new LinkedHashMap<>();
-        for (SuperAgentKgEntity entity : entityById.values()) {
-            for (String variantKey : canonicalEntityVariantKeys(entity)) {
-                Long firstEntityId = firstEntityByVariant.putIfAbsent(variantKey, entity.getId());
-                if (firstEntityId != null) {
-                    union(parent, firstEntityId, entity.getId());
-                }
-            }
-        }
-
-        Map<Long, List<SuperAgentKgEntity>> grouped = new LinkedHashMap<>();
-        for (SuperAgentKgEntity entity : entityById.values()) {
-            grouped.computeIfAbsent(find(parent, entity.getId()), ignored -> new ArrayList<>()).add(entity);
-        }
-        Map<Long, CanonicalEntityGroup> groupByEntityId = new LinkedHashMap<>();
-        for (List<SuperAgentKgEntity> groupEntities : grouped.values()) {
-            if (groupEntities.isEmpty()) {
-                continue;
-            }
-            String name = chooseCanonicalEntityName(groupEntities);
-            String key = canonicalEntityGroupKey(groupEntities.get(0), name);
-            Set<Long> entityIds = groupEntities.stream()
-                .map(SuperAgentKgEntity::getId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-            Set<Long> groupDocumentIds = groupEntities.stream()
-                .map(SuperAgentKgEntity::getDocumentId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-            CanonicalEntityGroup group = new CanonicalEntityGroup(key, name, entityIds, groupDocumentIds);
-            for (Long entityId : entityIds) {
-                groupByEntityId.put(entityId, group);
-            }
-        }
-        return new CanonicalEntityIndex(groupByEntityId);
-    }
-
-    private String canonicalEntityGroupKey(SuperAgentKgEntity representative, String name) {
-        String entityType = canonicalEntityType(representative);
-        String normalizedName = normalizeCanonicalVariant(name);
-        String key = entityType + ":" + normalizedName;
-        if (!isCanonicalVariantUsable(normalizedName)) {
-            Long entityId = representative == null ? null : representative.getId();
-            key += "#" + (entityId == null ? "unknown" : entityId);
-        }
-        return key;
-    }
-
-    private Set<String> canonicalEntityVariantKeys(SuperAgentKgEntity entity) {
-        LinkedHashSet<String> variants = new LinkedHashSet<>();
-        LinkedHashSet<String> lexicalVariants = new LinkedHashSet<>();
-        if (!isGraphSearchEntityUsable(entity)) {
-            return variants;
-        }
-        String entityType = canonicalEntityType(entity);
-        addCanonicalNameVariant(lexicalVariants, entityType, entity.getName());
-        addCanonicalNameVariant(lexicalVariants, entityType, entity.getNormalizedName());
-        Map<String, Object> metadata = readMap(entity.getMetadataJson());
-        addCanonicalNameVariant(lexicalVariants, entityType, stringValue(metadata.get("entityResolutionCanonicalName")));
-        for (String alias : readStringList(metadata.get("aliases"))) {
-            addCanonicalNameVariant(lexicalVariants, entityType, alias);
-        }
-        variants.addAll(lexicalVariants);
-        if (!lexicalVariants.isEmpty()) {
-            addCanonicalKeyVariant(variants, entity.getEntityKey());
-            addCanonicalKeyVariant(variants, stringValue(metadata.get("canonicalKey")));
-        }
-        return variants;
-    }
-
-    private void addCanonicalNameVariant(Set<String> variants, String entityType, String value) {
-        String normalized = normalizeCanonicalVariant(value);
-        if (isCanonicalVariantUsable(normalized)) {
-            variants.add(entityType + ":" + normalized);
-            if (isCrossTypeCanonicalVariantUsable(normalized)) {
-                variants.add("NAME:" + normalized);
-            }
-        }
-    }
-
-    private void addCanonicalKeyVariant(Set<String> variants, String value) {
-        if (StrUtil.isNotBlank(value)) {
-            variants.add("KEY:" + value.trim());
-        }
-    }
-
-    private boolean isCanonicalVariantUsable(String normalized) {
-        if (StrUtil.isBlank(normalized) || normalized.length() < 2 || normalized.length() > 80) {
-            return false;
-        }
-        return !isTechnicalEntityName(normalized) && isDistinctiveCanonicalVariant(normalized);
-    }
-
-    private boolean isCrossTypeCanonicalVariantUsable(String normalized) {
-        return isCanonicalVariantUsable(normalized)
-            && normalized.length() >= 3
-            && normalized.chars().anyMatch(ch -> (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'));
-    }
-
     private boolean isDistinctiveCanonicalVariant(String normalized) {
-        if (StrUtil.isBlank(normalized)) {
-            return false;
-        }
-        boolean hasLatinOrDigit = normalized.chars()
-            .anyMatch(ch -> (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'));
-        if (hasLatinOrDigit) {
-            return normalized.length() >= 2;
-        }
-        return normalized.codePointCount(0, normalized.length()) >= 3;
+        return crossDocumentIndexSupport.isDistinctiveCanonicalVariant(normalized);
     }
 
     private String canonicalEntityType(SuperAgentKgEntity entity) {
-        return StrUtil.blankToDefault(entity == null ? null : entity.getEntityType(), "CONCEPT")
-            .trim()
-            .toUpperCase(Locale.ROOT);
-    }
-
-    private String chooseCanonicalEntityName(List<SuperAgentKgEntity> entities) {
-        for (SuperAgentKgEntity entity : entities) {
-            String advisedName = stringValue(readMap(entity.getMetadataJson()).get("entityResolutionCanonicalName"));
-            if (StrUtil.isNotBlank(advisedName)) {
-                return advisedName;
-            }
-        }
-        return entities.stream()
-            .map(SuperAgentKgEntity::getName)
-            .filter(StrUtil::isNotBlank)
-            .findFirst()
-            .orElse("unknown");
+        return crossDocumentIndexSupport.canonicalEntityType(entity);
     }
 
     private String normalizeCanonicalVariant(String value) {
-        return normalize(value).replaceAll("[<>《》/\\\\|?？!！]+", "");
-    }
-
-    private void union(Map<Long, Long> parent, Long left, Long right) {
-        Long leftRoot = find(parent, left);
-        Long rightRoot = find(parent, right);
-        if (!Objects.equals(leftRoot, rightRoot)) {
-            parent.put(rightRoot, leftRoot);
-        }
-    }
-
-    private Long find(Map<Long, Long> parent, Long entityId) {
-        if (entityId == null) {
-            return null;
-        }
-        Long current = parent.get(entityId);
-        if (current == null) {
-            return entityId;
-        }
-        if (!Objects.equals(current, parent.get(current))) {
-            current = find(parent, current);
-            parent.put(entityId, current);
-        }
-        return current;
+        return crossDocumentIndexSupport.normalizeCanonicalVariant(value);
     }
 
     private Map<Long, Double> expandCanonicalSeedScores(Map<Long, Double> seedScoreMap,
-                                                        CanonicalEntityIndex canonicalIndex) {
-        if (seedScoreMap.isEmpty() || canonicalIndex == null || canonicalIndex.groupByEntityId().isEmpty()) {
+                                                        GraphRagCrossDocumentIndex crossDocumentIndex) {
+        if (seedScoreMap.isEmpty() || crossDocumentIndex == null || !crossDocumentIndex.hasCanonicalGroups()) {
             return seedScoreMap;
         }
         Map<Long, Double> expanded = new LinkedHashMap<>(seedScoreMap);
         for (Map.Entry<Long, Double> entry : seedScoreMap.entrySet()) {
-            CanonicalEntityGroup group = canonicalIndex.groupOf(entry.getKey());
+            CanonicalEntityGroup group = crossDocumentIndex.canonicalGroupOf(entry.getKey());
             if (group == null || group.entityIds().size() <= 1) {
                 continue;
             }
@@ -827,13 +644,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         return expanded;
     }
 
-    private Set<Long> expandCanonicalEntityIds(Set<Long> entityIds, CanonicalEntityIndex canonicalIndex) {
-        if (CollUtil.isEmpty(entityIds) || canonicalIndex == null || canonicalIndex.groupByEntityId().isEmpty()) {
+    private Set<Long> expandCanonicalEntityIds(Set<Long> entityIds, GraphRagCrossDocumentIndex crossDocumentIndex) {
+        if (CollUtil.isEmpty(entityIds) || crossDocumentIndex == null || !crossDocumentIndex.hasCanonicalGroups()) {
             return entityIds;
         }
         Set<Long> expanded = new LinkedHashSet<>(entityIds);
         for (Long entityId : entityIds) {
-            CanonicalEntityGroup group = canonicalIndex.groupOf(entityId);
+            CanonicalEntityGroup group = crossDocumentIndex.canonicalGroupOf(entityId);
             if (group != null && group.entityIds().size() > 1) {
                 expanded.addAll(group.entityIds());
             }
@@ -928,107 +745,15 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private boolean isGraphSearchEntityUsable(SuperAgentKgEntity entity) {
-        if (entity == null) {
-            return false;
-        }
-        String name = normalizeCanonicalVariant(entity.getName());
-        String normalizedName = normalizeCanonicalVariant(StrUtil.blankToDefault(entity.getNormalizedName(), entity.getName()));
-        return !isTechnicalEntityName(name)
-            && !isTechnicalEntityName(normalizedName)
-            && !isGeneratedQuestionEntity(entity, name)
-            && !isGeneratedQuestionEntity(entity, normalizedName);
-    }
-
-    private boolean isTechnicalEntityName(String normalizedName) {
-        if (StrUtil.isBlank(normalizedName)) {
-            return false;
-        }
-        if (TECHNICAL_ENTITY_LABELS.contains(normalizedName)) {
-            return true;
-        }
-        if (normalizedName.startsWith("type")) {
-            String afterType = normalizedName.substring("type".length());
-            if (TECHNICAL_ENTITY_LABELS.contains(afterType) || hasTechnicalLabelPrefix(afterType)) {
-                return true;
-            }
-        }
-        return hasTechnicalLabelPrefix(normalizedName);
-    }
-
-    private boolean hasTechnicalLabelPrefix(String normalizedName) {
-        for (String label : TECHNICAL_ENTITY_LABELS) {
-            if (!normalizedName.startsWith(label) || normalizedName.length() <= label.length()) {
-                continue;
-            }
-            char next = normalizedName.charAt(label.length());
-            boolean alphaNumericPayload = (next >= 'a' && next <= 'z') || (next >= '0' && next <= '9');
-            if (!alphaNumericPayload) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean isGeneratedQuestionEntity(SuperAgentKgEntity entity, String normalizedName) {
-        if (StrUtil.isBlank(normalizedName)) {
-            return false;
-        }
-        if (isQuestionLikeEntityName(normalizedName)) {
-            return true;
-        }
-        if (!hasGeneratedEntitySource(entity)) {
-            return false;
-        }
-        return normalizedName.startsWith("关于")
-            || normalizedName.contains("核心内容")
-            || normalizedName.contains("要求或注意事项");
-    }
-
-    private boolean hasGeneratedEntitySource(SuperAgentKgEntity entity) {
-        for (String source : entityCandidateSources(entity)) {
-            String normalizedSource = StrUtil.blankToDefault(source, "").trim().toLowerCase(Locale.ROOT);
-            if (GENERATED_ENTITY_SOURCES.contains(normalizedSource)) {
-                return true;
-            }
-        }
-        return false;
+        return crossDocumentIndexSupport.isGraphSearchEntityUsable(entity);
     }
 
     private Set<String> entityCandidateSources(SuperAgentKgEntity entity) {
-        if (entity == null) {
-            return Set.of();
-        }
-        LinkedHashSet<String> sources = new LinkedHashSet<>();
-        Map<String, Object> metadata = readMap(entity.getMetadataJson());
-        sources.addAll(readStringList(metadata.get("candidateSources")));
-        Object sourceMetadata = metadata.get("sourceMetadata");
-        if (sourceMetadata instanceof Collection<?> collection) {
-            for (Object item : collection) {
-                if (item instanceof Map<?, ?> map) {
-                    sources.addAll(readStringList(map.get("candidateSources")));
-                }
-            }
-        }
-        return sources;
+        return crossDocumentIndexSupport.entityCandidateSources(entity);
     }
 
     private boolean isGraphEvidenceUsable(SuperAgentKgEvidence evidence) {
-        if (evidence == null || StrUtil.isBlank(evidence.getQuoteText())) {
-            return false;
-        }
-        String upperQuote = evidence.getQuoteText().toUpperCase(Locale.ROOT);
-        for (String marker : GENERATED_EVIDENCE_MARKERS) {
-            if (upperQuote.contains(marker)) {
-                return false;
-            }
-        }
-        Map<String, Object> metadata = readMap(evidence.getMetadataJson());
-        Object sourceMetadata = metadata.get("sourceMetadata");
-        if (sourceMetadata instanceof Map<?, ?> map) {
-            String relationPhrase = stringValue(map.get("relationPhrase"));
-            return !isQuestionLikeEntityName(normalizeCanonicalVariant(relationPhrase));
-        }
-        return true;
+        return crossDocumentIndexSupport.isGraphEvidenceUsable(evidence);
     }
 
     private boolean isQuestionLikeEntityName(String normalizedName) {
@@ -1114,19 +839,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private double entityRankBoost(SuperAgentKgEntity entity) {
-        Map<String, Object> metadata = readMap(entity == null ? null : entity.getMetadataJson());
-        return numberValue(metadata.get("rankBoost"), 0D);
+        return crossDocumentIndexSupport.entityRankBoost(entity);
     }
 
     private double relationRankBoost(SuperAgentKgRelation relation,
                                      SuperAgentKgEntity source,
                                      SuperAgentKgEntity target) {
-        Map<String, Object> metadata = readMap(relation == null ? null : relation.getMetadataJson());
-        double relationRankBoost = numberValue(metadata.get("rankBoost"), -1D);
-        if (relationRankBoost >= 0D) {
-            return relationRankBoost;
-        }
-        return Math.max(entityRankBoost(source), entityRankBoost(target));
+        return crossDocumentIndexSupport.relationRankBoost(relation, source, target);
     }
 
     private double evidenceBoost(String quoteText, List<String> terms) {
@@ -1572,8 +1291,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private List<String> entityAliases(SuperAgentKgEntity entity) {
-        Map<String, Object> metadata = readMap(entity.getMetadataJson());
-        return readStringList(metadata.get("aliases"));
+        return crossDocumentIndexSupport.entityAliases(entity);
     }
 
     private double metadataConfidence(String metadataJson) {
@@ -1582,63 +1300,19 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private double numberValue(Object value, double defaultValue) {
-        if (value instanceof Number number) {
-            return Math.max(0D, Math.min(1D, number.doubleValue()));
-        }
-        if (value == null) {
-            return defaultValue;
-        }
-        try {
-            return Math.max(0D, Math.min(1D, Double.parseDouble(String.valueOf(value))));
-        }
-        catch (Exception exception) {
-            return defaultValue;
-        }
+        return crossDocumentIndexSupport.numberValue(value, defaultValue);
     }
 
     private String stringValue(Object value) {
-        return value == null ? "" : String.valueOf(value);
+        return crossDocumentIndexSupport.stringValue(value);
     }
 
     private Map<String, Object> readMap(String json) {
-        if (StrUtil.isBlank(json)) {
-            return Map.of();
-        }
-        try {
-            return objectMapper.readValue(json,
-                objectMapper.getTypeFactory().constructMapType(Map.class, String.class, Object.class));
-        }
-        catch (Exception exception) {
-            return Map.of();
-        }
+        return crossDocumentIndexSupport.readMap(json);
     }
 
     private List<String> readStringList(Object value) {
-        if (value == null) {
-            return List.of();
-        }
-        if (value instanceof Collection<?> collection) {
-            List<String> result = new ArrayList<>();
-            for (Object item : collection) {
-                if (item != null && StrUtil.isNotBlank(String.valueOf(item))) {
-                    result.add(String.valueOf(item));
-                }
-            }
-            return result;
-        }
-        if (value instanceof String text) {
-            if (StrUtil.isBlank(text)) {
-                return List.of();
-            }
-            List<String> result = new ArrayList<>();
-            for (String item : text.split("[\\n\\r,，;；、|]+")) {
-                if (StrUtil.isNotBlank(item)) {
-                    result.add(item.trim());
-                }
-            }
-            return result;
-        }
-        return List.of(String.valueOf(value));
+        return crossDocumentIndexSupport.readStringList(value);
     }
 
     private List<String> extractTerms(String question) {
@@ -1664,9 +1338,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private String normalize(String text) {
-        return StrUtil.blankToDefault(text, "")
-            .replaceAll("[\\s>`*#_\\-，,。；;：:（）()“”\"'\\[\\]{}]+", "")
-            .toLowerCase(Locale.ROOT);
+        return crossDocumentIndexSupport.normalize(text);
     }
 
     private List<Long> readLongList(String json) {
@@ -1689,93 +1361,6 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private record ScoredCommunity(SuperAgentKgCommunity community, double score) {
-    }
-
-    private record CanonicalEntityIndex(Map<Long, CanonicalEntityGroup> groupByEntityId) {
-
-        private static CanonicalEntityIndex empty() {
-            return new CanonicalEntityIndex(Map.of());
-        }
-
-        private CanonicalEntityGroup groupOf(Long entityId) {
-            return entityId == null ? null : groupByEntityId.get(entityId);
-        }
-    }
-
-    private record CanonicalEntityGroup(String key,
-                                        String name,
-                                        Set<Long> entityIds,
-                                        Set<Long> documentIds) {
-    }
-
-    private record RelationGroupIndex(Map<Long, RelationGroup> groupByRelationId) {
-
-        private static RelationGroupIndex empty() {
-            return new RelationGroupIndex(Map.of());
-        }
-
-        private RelationGroup groupOf(Long relationId) {
-            return relationId == null ? null : groupByRelationId.get(relationId);
-        }
-    }
-
-    private record RelationGroup(String key,
-                                 int relationCount,
-                                 int evidenceCount,
-                                 int documentCount) {
-    }
-
-    private static class RelationGroupAccumulator {
-
-        private final String key;
-
-        private final Set<Long> relationIds = new LinkedHashSet<>();
-
-        private final Set<Long> evidenceIds = new LinkedHashSet<>();
-
-        private final Set<Long> documentIds = new LinkedHashSet<>();
-
-        private RelationGroupAccumulator(String key) {
-            this.key = key;
-        }
-
-        private void addRelation(SuperAgentKgRelation relation) {
-            if (relation == null || relation.getId() == null) {
-                return;
-            }
-            relationIds.add(relation.getId());
-        }
-
-        private void addEvidenceIds(Collection<Long> values) {
-            if (CollUtil.isNotEmpty(values)) {
-                evidenceIds.addAll(values);
-            }
-        }
-
-        private void addDocumentIds(Collection<Long> values) {
-            if (CollUtil.isNotEmpty(values)) {
-                documentIds.addAll(values);
-            }
-        }
-
-        private void addDocumentId(Long documentId) {
-            if (documentId != null) {
-                documentIds.add(documentId);
-            }
-        }
-
-        private Set<Long> relationIds() {
-            return relationIds;
-        }
-
-        private RelationGroup toGroup() {
-            return new RelationGroup(
-                key,
-                relationIds.size(),
-                evidenceIds.size(),
-                documentIds.size()
-            );
-        }
     }
 
     private record QueryProfile(Set<String> relationTypes,

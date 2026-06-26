@@ -12,11 +12,17 @@ import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.model.graph.GraphRagQueryCatalog;
 import org.javaup.ai.manage.model.graph.GraphRagQueryPlanAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagSearchResult;
+import org.javaup.ai.manage.model.graph.GraphRagCrossDocumentIndexBuildResult;
+import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.service.GraphRagQueryPlanAdvisor;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex;
+import org.javaup.ai.manage.support.GraphRagCrossDocumentIndexSupport;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -432,6 +438,192 @@ class GraphRagSearchServiceImplTest {
                 assertThat(result.getGraphPath()).doesNotContain("核心内容是");
                 assertThat(result.getEntityName()).doesNotContain("TEXT");
             });
+    }
+
+    @Test
+    void persistedCrossDocumentIndexExpandsFrontierAndRelationGroup() {
+        SuperAgentKgEntity aliasEntity = entity(1601L, 16L, 26L, "审计系统", "AuditTrail", "SYSTEM", "审计系统别名说明。");
+        SuperAgentKgEntity canonicalEntity = entity(1701L, 17L, 27L, "AuditTrail", null, "SYSTEM", "审计记录系统。");
+        SuperAgentKgEntity permissionApply = entity(1702L, 17L, 27L, "权限申请", null, "PROCESS", "权限申请。");
+        SuperAgentKgRelation relation = relation(2701L, 17L, 27L, 1701L, 1702L, "RECORDS",
+            "AuditTrail 记录权限申请。", 0.86D);
+        SuperAgentKgEvidence evidence = evidence(3701L, 17L, 27L, 4701L, 5701L, 2701L, null,
+            "AuditTrail 记录权限申请、审批和权限回收。", 6);
+
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup canonicalGroup = new GraphRagCrossDocumentIndex.CanonicalEntityGroup(
+            "SYSTEM:audittrail",
+            "AuditTrail",
+            "SYSTEM",
+            new LinkedHashSet<>(List.of(1601L, 1701L)),
+            new LinkedHashSet<>(List.of(16L, 17L)),
+            new LinkedHashSet<>(List.of(26L, 27L)),
+            List.of("SYSTEM:audittrail", "SYSTEM:审计系统", "NAME:audittrail"),
+            0.75D
+        );
+        GraphRagCrossDocumentIndex.RelationGroup relationGroup = new GraphRagCrossDocumentIndex.RelationGroup(
+            "SYSTEM:audittrail->RECORDS->PROCESS:权限申请",
+            "SYSTEM:audittrail",
+            "PROCESS:权限申请",
+            "RECORDS",
+            new LinkedHashSet<>(List.of(2701L, 2702L)),
+            new LinkedHashSet<>(List.of(3701L, 3702L)),
+            new LinkedHashSet<>(List.of(17L, 18L)),
+            Map.of(2701L, 1, 2702L, 1),
+            0.75D
+        );
+        GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
+            Map.of(1601L, canonicalGroup, 1701L, canonicalGroup),
+            Map.of(2701L, relationGroup)
+        );
+        AtomicInteger indexLoadCount = new AtomicInteger();
+        GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
+
+            @Override
+            public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+                return List.of();
+            }
+
+            @Override
+            public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+                indexLoadCount.incrementAndGet();
+                return persistedIndex;
+            }
+        };
+
+        AtomicInteger relationSelectCount = new AtomicInteger();
+        SuperAgentKgRelationMapper relationMapper = (SuperAgentKgRelationMapper) Proxy.newProxyInstance(
+            SuperAgentKgRelationMapper.class.getClassLoader(),
+            new Class<?>[]{SuperAgentKgRelationMapper.class},
+            (proxy, method, args) -> {
+                if ("selectList".equals(method.getName())) {
+                    relationSelectCount.incrementAndGet();
+                    if (relationSelectCount.get() == 1) {
+                        return List.of(relation);
+                    }
+                    return List.of();
+                }
+                if ("toString".equals(method.getName())) {
+                    return "SuperAgentKgRelationMapperProxy";
+                }
+                if ("hashCode".equals(method.getName())) {
+                    return System.identityHashCode(proxy);
+                }
+                if ("equals".equals(method.getName())) {
+                    return proxy == args[0];
+                }
+                return defaultValue(method.getReturnType());
+            }
+        );
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(aliasEntity, canonicalEntity, permissionApply), null),
+            relationMapper,
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(evidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            null,
+            indexService,
+            new GraphRagCrossDocumentIndexSupport(new ObjectMapper())
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统有哪些权限要求？",
+            List.of(16L, 17L),
+            List.of(26L, 27L),
+            3,
+            1
+        );
+
+        assertThat(indexLoadCount).hasValue(1);
+        assertThat(results).isNotEmpty();
+        GraphRagSearchResult result = results.get(0);
+        assertThat(result.getRelationId()).isEqualTo(2701L);
+        assertThat(result.getEntityName()).isEqualTo("AuditTrail");
+        assertThat(result.getCanonicalEntityName()).isEqualTo("AuditTrail");
+        assertThat(result.getCanonicalEntityCount()).isEqualTo(2);
+        assertThat(result.getCanonicalDocumentCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupKey()).isEqualTo("SYSTEM:audittrail->RECORDS->PROCESS:权限申请");
+        assertThat(result.getRelationGroupRelationCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupEvidenceCount()).isEqualTo(2);
+        assertThat(result.getRelationGroupDocumentCount()).isEqualTo(2);
+        assertThat(relationSelectCount).hasValue(1);
+    }
+
+    @Test
+    void persistedRelationGroupMetadataIsExposedEvenForSingleRelationGroup() {
+        SuperAgentKgEntity aliasEntity = entity(1801L, 18L, 28L, "审计系统", "AuditTrail", "SYSTEM", "审计系统别名说明。");
+        SuperAgentKgEntity canonicalEntity = entity(1901L, 19L, 29L, "AuditTrail", null, "SYSTEM", "审计记录系统。");
+        SuperAgentKgEntity temporaryPermissionExtend = entity(1902L, 19L, 29L, "临时权限延长", null, "PROCESS", "临时权限延长。");
+        SuperAgentKgRelation relation = relation(2901L, 19L, 29L, 1901L, 1902L, "RECORDS",
+            "AuditTrail 记录临时权限延长。", 0.86D);
+        SuperAgentKgEvidence evidence = evidence(3901L, 19L, 29L, 4901L, 5901L, 2901L, null,
+            "AuditTrail 需记录临时权限延长。", 6);
+
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup canonicalGroup = new GraphRagCrossDocumentIndex.CanonicalEntityGroup(
+            "SYSTEM:audittrail",
+            "AuditTrail",
+            "SYSTEM",
+            new LinkedHashSet<>(List.of(1801L, 1901L)),
+            new LinkedHashSet<>(List.of(18L, 19L)),
+            new LinkedHashSet<>(List.of(28L, 29L)),
+            List.of("SYSTEM:audittrail", "SYSTEM:审计系统", "NAME:audittrail"),
+            0.75D
+        );
+        GraphRagCrossDocumentIndex.RelationGroup singleRelationGroup = new GraphRagCrossDocumentIndex.RelationGroup(
+            "SYSTEM:audittrail->RECORDS->PROCESS:临时权限延长",
+            "SYSTEM:audittrail",
+            "PROCESS:临时权限延长",
+            "RECORDS",
+            new LinkedHashSet<>(List.of(2901L)),
+            new LinkedHashSet<>(List.of(3901L)),
+            new LinkedHashSet<>(List.of(19L)),
+            Map.of(2901L, 1),
+            0.75D
+        );
+        GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
+            Map.of(1801L, canonicalGroup, 1901L, canonicalGroup),
+            Map.of(2901L, singleRelationGroup)
+        );
+        GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
+
+            @Override
+            public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+                return List.of();
+            }
+
+            @Override
+            public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+                return persistedIndex;
+            }
+        };
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(aliasEntity, canonicalEntity, temporaryPermissionExtend), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(relation), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(evidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            null,
+            indexService,
+            new GraphRagCrossDocumentIndexSupport(new ObjectMapper())
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统记录哪些临时权限要求？",
+            List.of(18L, 19L),
+            List.of(28L, 29L),
+            3,
+            1
+        );
+
+        assertThat(results).isNotEmpty();
+        GraphRagSearchResult result = results.get(0);
+        assertThat(result.getRelationId()).isEqualTo(2901L);
+        assertThat(result.getRelatedEntityName()).isEqualTo("临时权限延长");
+        assertThat(result.getRelationGroupKey()).isEqualTo("SYSTEM:audittrail->RECORDS->PROCESS:临时权限延长");
+        assertThat(result.getRelationGroupRelationCount()).isEqualTo(1);
+        assertThat(result.getRelationGroupEvidenceCount()).isEqualTo(1);
+        assertThat(result.getRelationGroupDocumentCount()).isEqualTo(1);
     }
 
     @Test

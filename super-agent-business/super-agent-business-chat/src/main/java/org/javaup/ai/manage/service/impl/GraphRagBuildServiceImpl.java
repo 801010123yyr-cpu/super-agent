@@ -27,6 +27,7 @@ import org.javaup.ai.manage.model.graph.GraphRagExtractionContext;
 import org.javaup.ai.manage.service.GraphRagBuildService;
 import org.javaup.ai.manage.service.GraphRagBuildCheckpointService;
 import org.javaup.ai.manage.service.GraphRagCommunityReportAdvisor;
+import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.service.GraphRagEntityResolutionAdvisor;
 import org.javaup.ai.manage.service.GraphRagExtractionAdvisor;
 import org.javaup.ai.ragtools.client.RagToolsClient;
@@ -38,6 +39,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -113,6 +116,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
 
     private final GraphRagEntityResolutionAdvisor entityResolutionAdvisor;
 
+    private final GraphRagCrossDocumentIndexService crossDocumentIndexService;
+
     @Autowired
     public GraphRagBuildServiceImpl(SuperAgentKgEntityMapper entityMapper,
                                     SuperAgentKgRelationMapper relationMapper,
@@ -127,7 +132,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                                     TransactionTemplate transactionTemplate,
                                     ObjectProvider<GraphRagExtractionAdvisor> extractionAdvisorProvider,
                                     ObjectProvider<GraphRagCommunityReportAdvisor> communityReportAdvisorProvider,
-                                    ObjectProvider<GraphRagEntityResolutionAdvisor> entityResolutionAdvisorProvider) {
+                                    ObjectProvider<GraphRagEntityResolutionAdvisor> entityResolutionAdvisorProvider,
+                                    ObjectProvider<GraphRagCrossDocumentIndexService> crossDocumentIndexServiceProvider) {
         this(
             entityMapper,
             relationMapper,
@@ -142,7 +148,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             transactionTemplate,
             extractionAdvisorProvider == null ? null : (GraphRagExtractionAdvisor) extractionAdvisorProvider.getIfAvailable(),
             communityReportAdvisorProvider == null ? null : (GraphRagCommunityReportAdvisor) communityReportAdvisorProvider.getIfAvailable(),
-            entityResolutionAdvisorProvider == null ? null : (GraphRagEntityResolutionAdvisor) entityResolutionAdvisorProvider.getIfAvailable()
+            entityResolutionAdvisorProvider == null ? null : (GraphRagEntityResolutionAdvisor) entityResolutionAdvisorProvider.getIfAvailable(),
+            crossDocumentIndexServiceProvider == null ? null : crossDocumentIndexServiceProvider.getIfAvailable()
         );
     }
 
@@ -171,7 +178,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             transactionTemplate,
             (GraphRagExtractionAdvisor) null,
             (GraphRagCommunityReportAdvisor) null,
-            (GraphRagEntityResolutionAdvisor) null
+            (GraphRagEntityResolutionAdvisor) null,
+            null
         );
     }
 
@@ -188,7 +196,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                              TransactionTemplate transactionTemplate,
                              GraphRagExtractionAdvisor extractionAdvisor,
                              GraphRagCommunityReportAdvisor communityReportAdvisor,
-                             GraphRagEntityResolutionAdvisor entityResolutionAdvisor) {
+                             GraphRagEntityResolutionAdvisor entityResolutionAdvisor,
+                             GraphRagCrossDocumentIndexService crossDocumentIndexService) {
         this.entityMapper = entityMapper;
         this.relationMapper = relationMapper;
         this.evidenceMapper = evidenceMapper;
@@ -203,12 +212,18 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         this.extractionAdvisor = extractionAdvisor;
         this.communityReportAdvisor = communityReportAdvisor;
         this.entityResolutionAdvisor = entityResolutionAdvisor;
+        this.crossDocumentIndexService = crossDocumentIndexService;
     }
 
     @Override
     public GraphRagBuildResult rebuildDocumentGraph(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks) {
-        if (documentId == null || taskId == null || CollUtil.isEmpty(chunks)) {
+        if (documentId == null || taskId == null) {
             return GraphRagBuildResult.builder().build();
+        }
+        if (CollUtil.isEmpty(chunks)) {
+            GraphRagBuildResult result = replaceGraph(documentId, taskId, new RagToolsGraphExtractResponse());
+            refreshCrossDocumentIndex(documentId, taskId);
+            return result;
         }
 
         int maxAttempts = maxAttempts();
@@ -238,6 +253,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 "chunkCount", 0
             ));
             GraphRagBuildResult result = replaceGraph(documentId, taskId, new RagToolsGraphExtractResponse());
+            refreshCrossDocumentIndex(documentId, taskId);
             checkpointService.markSuccess(documentId, taskId, result, 0, maxAttempts);
             return result;
         }
@@ -265,6 +281,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                 checkpointService.markRunning(documentId, taskId, stage, attempt, maxAttempts, extractionCheckpointMetadata(response));
 
                 GraphRagBuildResult result = replaceGraph(documentId, taskId, response);
+                refreshCrossDocumentIndex(documentId, taskId);
                 checkpointService.markSuccess(documentId, taskId, result, attempt, maxAttempts);
                 log.info("GraphRAG 实体关系图谱构建完成: documentId={}, taskId={}, attempt={}, result={}",
                     documentId, taskId, attempt, result);
@@ -288,12 +305,25 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         throw lastException == null ? new IllegalStateException("GraphRAG 构建未执行。") : lastException;
     }
 
+    private void refreshCrossDocumentIndex(Long documentId, Long taskId) {
+        if (crossDocumentIndexService == null) {
+            return;
+        }
+        try {
+            crossDocumentIndexService.rebuildAll();
+        }
+        catch (RuntimeException exception) {
+            log.warn("GraphRAG 跨文档派生索引刷新失败，保留本次文档 KG 入库结果: documentId={}, taskId={}, message={}",
+                documentId, taskId, exception.getMessage());
+        }
+    }
+
     private GraphRagBuildResult replaceGraph(Long documentId,
                                              Long taskId,
                                              RagToolsGraphExtractResponse response) {
         PreparedGraph preparedGraph = prepareGraph(documentId, taskId, response);
         return transactionTemplate.execute(status -> {
-            deleteByTask(documentId, taskId);
+            deleteByTaskInternal(documentId, taskId);
             insertEntities(preparedGraph.entities().entitiesById().values());
             insertRelations(preparedGraph.relations().relationsById().values());
             insertEvidences(preparedGraph.evidences().evidencesById().values());
@@ -1217,6 +1247,14 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         if (documentId == null || taskId == null) {
             return;
         }
+        deleteByTaskInternal(documentId, taskId);
+        refreshCrossDocumentIndexAfterCommit(documentId, taskId);
+    }
+
+    private void deleteByTaskInternal(Long documentId, Long taskId) {
+        if (documentId == null || taskId == null) {
+            return;
+        }
         communityMapper.delete(new LambdaQueryWrapper<SuperAgentKgCommunity>()
             .eq(SuperAgentKgCommunity::getDocumentId, documentId)
             .eq(SuperAgentKgCommunity::getTaskId, taskId));
@@ -1245,6 +1283,38 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             .eq(SuperAgentKgRelation::getDocumentId, documentId));
         entityMapper.delete(new LambdaQueryWrapper<SuperAgentKgEntity>()
             .eq(SuperAgentKgEntity::getDocumentId, documentId));
+        refreshCrossDocumentIndexAfterCommit(documentId);
+    }
+
+    private void refreshCrossDocumentIndexAfterCommit(Long documentId) {
+        refreshCrossDocumentIndexAfterCommit(documentId, null);
+    }
+
+    private void refreshCrossDocumentIndexAfterCommit(Long documentId, Long taskId) {
+        if (crossDocumentIndexService == null) {
+            return;
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+
+                @Override
+                public void afterCommit() {
+                    rebuildCrossDocumentIndexAfterDelete(documentId, taskId);
+                }
+            });
+            return;
+        }
+        rebuildCrossDocumentIndexAfterDelete(documentId, taskId);
+    }
+
+    private void rebuildCrossDocumentIndexAfterDelete(Long documentId, Long taskId) {
+        try {
+            crossDocumentIndexService.rebuildAll();
+        }
+        catch (RuntimeException exception) {
+            log.warn("GraphRAG 删除后跨文档派生索引刷新失败，源 KG 删除已完成: documentId={}, taskId={}, message={}",
+                documentId, taskId, exception.getMessage());
+        }
     }
 
     private RagToolsGraphExtractRequest buildRequest(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks) {
@@ -2128,6 +2198,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
 
         String entityType = null;
         Set<String> allowedNameVariants = new LinkedHashSet<>();
+        Map<String, Set<String>> variantsByEntityId = new LinkedHashMap<>();
         for (String sourceEntityId : sourceEntityIds) {
             RagToolsGraphExtractResponse.Entity entity = entityById.get(sourceEntityId);
             String currentType = limit(StrUtil.blankToDefault(entity.getType(), "CONCEPT"), 64);
@@ -2137,9 +2208,17 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             else if (!entityType.equals(currentType)) {
                 return EntityResolutionGroupValidation.rejected();
             }
-            allowedNameVariants.addAll(entityVariants(entity));
+            Set<String> variants = entityResolutionVariants(entity);
+            if (variants.isEmpty()) {
+                return EntityResolutionGroupValidation.rejected();
+            }
+            allowedNameVariants.addAll(variants);
+            variantsByEntityId.put(sourceEntityId, variants);
         }
         if (!canonicalNameAllowed(group.getCanonicalName(), group.getAliases(), allowedNameVariants)) {
+            return EntityResolutionGroupValidation.rejected();
+        }
+        if (!entityResolutionGroupHasAliasOverlap(variantsByEntityId)) {
             return EntityResolutionGroupValidation.rejected();
         }
 
@@ -2157,6 +2236,80 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             ));
         }
         return EntityResolutionGroupValidation.accepted(decisions);
+    }
+
+    private Set<String> entityResolutionVariants(RagToolsGraphExtractResponse.Entity entity) {
+        LinkedHashSet<String> variants = new LinkedHashSet<>();
+        for (String variant : entityVariants(entity)) {
+            if (isEntityResolutionVariantUsable(variant)) {
+                variants.add(variant);
+            }
+        }
+        return variants;
+    }
+
+    private boolean isEntityResolutionVariantUsable(String normalizedVariant) {
+        if (StrUtil.isBlank(normalizedVariant) || normalizedVariant.length() > 80) {
+            return false;
+        }
+        boolean hasLatinOrDigit = normalizedVariant.chars()
+            .anyMatch(ch -> (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9'));
+        if (hasLatinOrDigit) {
+            return normalizedVariant.length() >= 2;
+        }
+        return normalizedVariant.codePointCount(0, normalizedVariant.length()) >= 2;
+    }
+
+    private boolean entityResolutionGroupHasAliasOverlap(Map<String, Set<String>> variantsByEntityId) {
+        if (variantsByEntityId == null || variantsByEntityId.size() < 2) {
+            return false;
+        }
+        List<String> entityIds = new ArrayList<>(variantsByEntityId.keySet());
+        Set<String> connectedEntityIds = new LinkedHashSet<>();
+        connectedEntityIds.add(entityIds.get(0));
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (String candidateEntityId : entityIds) {
+                if (connectedEntityIds.contains(candidateEntityId)) {
+                    continue;
+                }
+                if (hasOverlapWithConnectedEntities(candidateEntityId, connectedEntityIds, variantsByEntityId)) {
+                    connectedEntityIds.add(candidateEntityId);
+                    changed = true;
+                }
+            }
+        }
+        return connectedEntityIds.size() == variantsByEntityId.size();
+    }
+
+    private boolean hasOverlapWithConnectedEntities(String candidateEntityId,
+                                                    Set<String> connectedEntityIds,
+                                                    Map<String, Set<String>> variantsByEntityId) {
+        Set<String> candidateVariants = variantsByEntityId.get(candidateEntityId);
+        if (CollUtil.isEmpty(candidateVariants)) {
+            return false;
+        }
+        for (String connectedEntityId : connectedEntityIds) {
+            if (variantsIntersect(candidateVariants, variantsByEntityId.get(connectedEntityId))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean variantsIntersect(Set<String> left, Set<String> right) {
+        if (CollUtil.isEmpty(left) || CollUtil.isEmpty(right)) {
+            return false;
+        }
+        Set<String> smaller = left.size() <= right.size() ? left : right;
+        Set<String> larger = left.size() <= right.size() ? right : left;
+        for (String variant : smaller) {
+            if (larger.contains(variant)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean canonicalNameAllowed(String canonicalName,

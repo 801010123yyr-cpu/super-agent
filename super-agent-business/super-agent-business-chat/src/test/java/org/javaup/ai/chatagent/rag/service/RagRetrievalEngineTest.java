@@ -249,6 +249,73 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void graphRagCanonicalObservationPrioritizesRelationGroupSupport() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document lexicalOnly = graphRagDocument(
+            "graph-low",
+            "审计系统别名说明。",
+            0.95D,
+            "审计系统",
+            "审计系统",
+            1,
+            1,
+            null,
+            null,
+            null
+        );
+        Document relationGroupSupported = graphRagDocument(
+            "graph-strong",
+            "AuditTrail 需记录权限申请、权限审批、权限回收、临时权限延长。",
+            0.80D,
+            "AuditTrail",
+            "审计系统",
+            2,
+            2,
+            "SYSTEM:audittrail->RECORDS->PROCESS:permission",
+            4,
+            2
+        );
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(lexicalOnly, relationGroupSupported))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("审计系统有哪些权限相关要求？")
+                .retrievalSubQuestions(List.of("审计系统有哪些权限相关要求？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            String note = context.getRetrievalNotes().stream()
+                .filter(item -> item.contains("GraphRAG canonical 观测"))
+                .findFirst()
+                .orElseThrow();
+            assertThat(note)
+                .contains("relationGroup evidence=4, docs=2")
+                .contains("AuditTrail");
+            assertThat(note.indexOf("relationGroup evidence=4, docs=2"))
+                .isLessThan(note.indexOf("entities=1, docs=1"));
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);
@@ -256,6 +323,43 @@ class RagRetrievalEngineTest {
             .id(id)
             .text(text)
             .metadata(metadata)
+            .build();
+    }
+
+    private static Document graphRagDocument(String id,
+                                             String text,
+                                             double score,
+                                             String entityName,
+                                             String canonicalName,
+                                             int canonicalEntityCount,
+                                             int canonicalDocumentCount,
+                                             String relationGroupKey,
+                                             Integer relationGroupEvidenceCount,
+                                             Integer relationGroupDocumentCount) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, id + ".md");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, id.hashCode());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, entityName);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_KEY, "SYSTEM:" + canonicalName);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, canonicalName);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_COUNT, canonicalEntityCount);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_DOCUMENT_COUNT, canonicalDocumentCount);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, entityName + " --RECORDS--> 权限要求");
+        if (relationGroupKey != null) {
+            metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, Math.abs(id.hashCode()));
+            metadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, Math.abs(id.hashCode()) + 1L);
+            metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, relationGroupKey);
+            metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, relationGroupEvidenceCount);
+            metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, relationGroupDocumentCount);
+        }
+        return Document.builder()
+            .id(id)
+            .text(text)
+            .metadata(metadata)
+            .score(score)
             .build();
     }
 

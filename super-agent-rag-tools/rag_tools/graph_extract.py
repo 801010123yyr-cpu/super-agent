@@ -3,7 +3,6 @@ import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from itertools import combinations
 from typing import Any
 
 import networkx as nx
@@ -18,7 +17,6 @@ from rag_tools.schemas.graph_extract import (
 )
 
 MAX_ENTITIES_PER_CHUNK = 16
-MAX_RELATIONS_PER_CHUNK = 12
 MAX_QUOTE_LENGTH = 260
 EXTRACTOR_RULE = "rule"
 EXTRACTOR_NER = "ner"
@@ -38,125 +36,6 @@ _NER_MODEL_PIPELINE = None
 _NER_MODEL_LOAD_ATTEMPTED = False
 _NER_MODEL_STATUS: dict[str, Any] | None = None
 _NER_MODEL_CONFIG_KEY: tuple[Any, ...] | None = None
-
-CHINESE_STOPWORDS = {
-    "可以",
-    "需要",
-    "进行",
-    "通过",
-    "根据",
-    "如果",
-    "以及",
-    "或者",
-    "并且",
-    "然后",
-    "其中",
-    "这个",
-    "这些",
-    "一种",
-    "相关",
-    "当前",
-    "用户",
-    "系统",
-    "模块",
-    "服务",
-    "抽取",
-    "社区",
-    "检测",
-    "文档",
-    "问题",
-    "内容",
-    "说明",
-    "信息",
-    "功能",
-    "权限",
-    "要求",
-    "范围",
-    "适用范围",
-    "审计",
-    "标题",
-    "正文",
-    "行为",
-    "事项",
-    "注意事项",
-    "关于",
-    "以下权限相关行为",
-    "核心内容",
-    "简称",
-    "又称",
-    "也称",
-    "别名",
-    "英文名",
-    "英文名称",
-    "缩写",
-    "完成",
-}
-
-ENGLISH_STOPWORDS = {
-    "and",
-    "agent",
-    "are",
-    "can",
-    "for",
-    "from",
-    "into",
-    "super",
-    "that",
-    "the",
-    "this",
-    "with",
-    "your",
-    "chunk_type",
-    "content",
-    "ct",
-    "keywords",
-    "metadata",
-    "questions",
-    "section",
-    "text",
-    "title",
-}
-
-QUESTION_LIKE_MARKERS = ("哪些", "什么", "如何", "怎么", "是否", "有没有", "吗", "？", "?")
-
-RELATION_WORDS = [
-    ("依赖", "DEPENDS_ON", 0.92),
-    ("调用", "CALLS", 0.9),
-    ("使用", "USES", 0.86),
-    ("采用", "USES", 0.84),
-    ("支持", "SUPPORTS", 0.82),
-    ("包含", "CONTAINS", 0.86),
-    ("包括", "CONTAINS", 0.84),
-    ("组成", "PART_OF", 0.8),
-    ("属于", "BELONGS_TO", 0.86),
-    ("负责", "RESPONSIBLE_FOR", 0.86),
-    ("审批", "APPROVES", 0.84),
-    ("批准", "APPROVES", 0.84),
-    ("审核", "APPROVES", 0.84),
-    ("执行", "EXECUTES", 0.86),
-    ("触发", "TRIGGERS", 0.84),
-    ("发起", "TRIGGERS", 0.84),
-    ("记录", "RECORDS", 0.84),
-    ("存放", "STORES", 0.82),
-    ("归档", "ARCHIVES", 0.82),
-    ("回收", "REVOKES", 0.82),
-    ("关联", "RELATED_TO", 0.74),
-    ("映射", "MAPS_TO", 0.86),
-    ("生成", "PRODUCES", 0.82),
-    ("输出", "PRODUCES", 0.82),
-    ("输入", "CONSUMES", 0.8),
-    ("is a", "IS_A", 0.84),
-    ("depends on", "DEPENDS_ON", 0.92),
-    ("calls", "CALLS", 0.9),
-    ("uses", "USES", 0.86),
-    ("supports", "SUPPORTS", 0.82),
-    ("contains", "CONTAINS", 0.84),
-    ("belongs to", "BELONGS_TO", 0.86),
-    ("maps to", "MAPS_TO", 0.86),
-    ("produces", "PRODUCES", 0.82),
-]
-
-REVERSE_HINTS = {"由", "被", "来自"}
 
 
 @dataclass
@@ -334,23 +213,6 @@ def extract_graph(request: GraphExtractRequest) -> GraphExtractResponse:
                 quote_text=structured_relation.quote_text,
                 sources=structured_relation.sources,
             ))
-
-        relation_count = len(chunk_relation_ids.get(chunk.chunk_id, []))
-        associated_count = 0
-        for left_id, right_id in combinations(chunk_entity_ids[chunk.chunk_id], 2):
-            if relation_count >= MAX_RELATIONS_PER_CHUNK:
-                break
-            relation_candidate = _relation_candidate(evidence_text, entity_map[left_id], entity_map[right_id])
-            if relation_candidate is None:
-                if associated_count >= 4:
-                    continue
-                relation_candidate = _associated_relation_candidate(evidence_text, entity_map[left_id], entity_map[right_id])
-            if relation_candidate is None:
-                continue
-            associated_count += 1
-
-            if upsert_relation_candidate(relation_candidate):
-                relation_count += 1
 
     entities = _sort_entities(entity_map.values())
     relations = _sort_relations(relation_map.values())
@@ -536,7 +398,7 @@ def _structured_relations_from_table_row(
     action_text = "、".join(cells[1:])
     if _policy_actor_like(first_cell):
         source_aliases = _policy_actor_aliases(cells)
-        for phrase, relation_type, confidence in _policy_action_words():
+        for phrase, relation_type, confidence in _structured_table_actions():
             for target, target_aliases in _targets_after_policy_action(action_text, phrase, relation_type):
                 relations.append(StructuredRelationCandidate(
                     source_name=first_cell,
@@ -695,62 +557,6 @@ def _structured_relations_from_policy_text(text: str) -> list[StructuredRelation
                     target_mention=target,
                 ))
 
-    for sentence in re.split(r"(?<=[。！？；;])|\n", text or ""):
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        if "发布负责人" in sentence and ("触发回滚" in sentence or "发起回滚" in sentence):
-            relations.append(StructuredRelationCandidate(
-                source_name="发布负责人",
-                target_name="回滚",
-                relation_type="TRIGGERS",
-                phrase="触发" if "触发回滚" in sentence else "发起",
-                confidence=0.9,
-                quote_text=sentence,
-                source_mention="发布负责人",
-                target_mention="回滚",
-            ))
-        if "值班 SRE" in sentence and "执行流量切换" in sentence:
-            relations.append(StructuredRelationCandidate(
-                source_name="值班 SRE",
-                target_name="流量切换",
-                relation_type="EXECUTES",
-                phrase="执行",
-                confidence=0.9,
-                quote_text=sentence,
-                source_aliases={"SRE"},
-                source_mention="值班 SRE",
-                target_mention="流量切换",
-            ))
-        if "AuditTrail" in sentence and "记录" in sentence and "权限申请" in sentence:
-            relations.append(StructuredRelationCandidate(
-                source_name="AuditTrail",
-                target_name="权限申请",
-                relation_type="RECORDS",
-                phrase="记录",
-                confidence=0.9,
-                quote_text=sentence,
-                source_mention="AuditTrail",
-                target_mention="权限申请",
-            ))
-        if re.search(r"\bL[0-9]{1,2}\b", sentence) and "信息安全部" in sentence and any(word in sentence for word in ("审批", "批准", "审核")):
-            grade = re.search(r"\b(L[0-9]{1,2})\b", sentence).group(1)
-            aliases = {grade}
-            if "高敏感信息" in sentence:
-                aliases.add("高敏感信息")
-            if "高敏感数据" in sentence:
-                aliases.add("高敏感数据")
-            relations.append(StructuredRelationCandidate(
-                source_name=f"{grade} 数据",
-                target_name="信息安全部",
-                relation_type="APPROVES",
-                phrase="审批",
-                confidence=0.9,
-                quote_text=sentence,
-                source_aliases=aliases,
-                source_mention=grade,
-                target_mention="信息安全部",
-            ))
     return relations
 
 
@@ -768,7 +574,7 @@ def _policy_actor_aliases(cells: list[str]) -> set[str]:
     return aliases
 
 
-def _policy_action_words() -> list[tuple[str, str, float]]:
+def _structured_table_actions() -> list[tuple[str, str, float]]:
     return [
         ("触发", "TRIGGERS", 0.9),
         ("发起", "TRIGGERS", 0.88),
@@ -910,19 +716,9 @@ def _candidate_names(chunk, text: str) -> list[CandidateName]:
         add(part, 8, "sectionPath")
     add(chunk.title, 10, "title")
 
-    for keyword in _metadata_terms(chunk.metadata, "keywords", "autoKeywords"):
-        add(keyword, 8, "metadata.keyword")
-    for question_term in _metadata_terms(chunk.metadata, "questions", "autoQuestions"):
-        for part in _split_query_like_phrase(question_term):
-            add(part, 4, "metadata.question")
-
     for primary, alias in _alias_pairs(text + "\n" + (chunk.title or "")):
         add(primary, 10, "parentheticalAlias", {alias})
         add(alias, 4, "parentheticalAlias", {primary})
-
-    for term in re.findall(r"[\u4e00-\u9fffA-Za-z0-9_（）()·./-]{2,40}", text):
-        for item in _split_chinese_phrase(term):
-            add(item, 3, "textPhrase")
 
     for term in re.findall(r"\b(?:[A-Z][A-Za-z0-9]+(?:[\s/-]+|$)){2,5}", text):
         add(term, 5, "englishPhrase")
@@ -1203,7 +999,7 @@ def _pattern_ner_terms(text: str) -> list[str]:
         r"\b[A-Z]{2,}(?:[A-Z0-9._/-]{0,20})\b",
         r"\b[A-Za-z][A-Za-z0-9._/-]{1,24}(?:Service|Server|Client|Gateway|Engine|API|SDK|DB|SQL)\b",
         r"\bL[0-9]{1,2}\s*(?:数据|信息)?\b",
-        r"[\u4e00-\u9fffA-Za-z0-9_（）()·./-]{2,24}(?:系统|平台|服务|模块|组件|接口|API|SDK|引擎|链路|流程|策略|规范|制度|文档|库|环境)",
+        r"[\u4e00-\u9fffA-Za-z0-9_（）()·./-]{2,24}(?:系统|平台|服务|模块|组件|接口|API|SDK|引擎|链路|流程|策略|规范|制度|文档|库|环境|事件)",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text or "", re.IGNORECASE):
@@ -1229,30 +1025,9 @@ def _role_ner_terms(text: str) -> list[str]:
     return terms[:40]
 
 
-def _metadata_terms(metadata: dict[str, Any] | None, *keys: str) -> list[str]:
-    if not metadata:
-        return []
-    terms: list[str] = []
-    for key in keys:
-        value = metadata.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str):
-            parts = re.split(r"[\n\r,，;；、|]+", value)
-        elif isinstance(value, list):
-            parts = [str(item) for item in value if item is not None]
-        else:
-            parts = [str(value)]
-        for part in parts:
-            cleaned = _clean_name(part)
-            if cleaned:
-                terms.append(cleaned)
-    return terms
-
-
 def _candidate_name_priority(candidate: CandidateName) -> int:
     priority = len(candidate.name)
-    if candidate.sources.intersection({"title", "sectionPath", "metadata.keyword", "mixedPhrase"}):
+    if candidate.sources.intersection({"title", "sectionPath", "mixedPhrase"}):
         priority += 8
     if _is_acronym(candidate.name):
         priority -= 4
@@ -1305,29 +1080,6 @@ def _split_section_path(section_path: str) -> list[str]:
     ]
 
 
-def _split_query_like_phrase(phrase: str) -> list[str]:
-    return [
-        item.strip()
-        for item in re.split(r"(?:怎么|如何|为什么|哪些|什么|是否|以及|或者|并且|的|和|与|及|或|、|，|,|；|;|：|:)", phrase or "")
-        if 2 <= len(item.strip()) <= 32
-    ]
-
-
-def _split_chinese_phrase(phrase: str) -> list[str]:
-    parts: list[str] = []
-    normalized = phrase.strip()
-    if 2 <= len(normalized) <= 12:
-        parts.append(normalized)
-    for item in re.split(
-        r"(?:的|和|与|及|或|并|在|对|通过|根据|用于|可以|需要|进行|实现|提供|支持|包括|包含|属于|作为|由|向|从|到|将|把|及其|以及|审批|批准|审核|执行|触发|发起|记录|存放|归档|回收|简称为|缩写为|简称|又称|也称|别名为|英文名|英文名称|完成)",
-        normalized,
-    ):
-        item = item.strip()
-        if 2 <= len(item) <= 18:
-            parts.append(item)
-    return parts
-
-
 def _clean_name(name: str) -> str:
     if not name:
         return ""
@@ -1342,24 +1094,15 @@ def _valid_name(name: str) -> bool:
     if not name or len(name) < 2 or len(name) > 40:
         return False
     lowered = name.lower()
-    if lowered in ENGLISH_STOPWORDS or name in CHINESE_STOPWORDS:
+    if _metadata_label_like(name):
         return False
-    if any(marker in name for marker in QUESTION_LIKE_MARKERS):
-        return False
-    if re.match(r"^(以下|如下|上述|相关).{0,12}(行为|要求|内容|事项)$", name):
+    if _question_like_name(name):
         return False
     if any(marker in name for marker in ("简称", "又称", "也称", "别名", "英文名", "英文名称", "缩写")):
         return False
-    if name in {"权限审批", "权限回收"}:
-        return True
-    if lowered in {word for word, _, _ in RELATION_WORDS}:
-        return False
-    for word, _, _ in RELATION_WORDS:
-        if word == "负责" and name.endswith("负责人"):
-            continue
-        if re.search(r"[\u4e00-\u9fff]", word) and word in name and len(name) > len(word) + 1:
-            return False
     if re.fullmatch(r"[0-9._/-]+", name):
+        return False
+    if re.fullmatch(r"[_\-*/#`~!@#$%^&+=]+", name):
         return False
     if re.fullmatch(r"L[0-9]{1,2}", name, re.IGNORECASE):
         return True
@@ -1370,6 +1113,18 @@ def _valid_name(name: str) -> bool:
     if len(re.findall(r"[\u4e00-\u9fffA-Za-z]", name)) < 2:
         return False
     return True
+
+
+def _metadata_label_like(name: str) -> bool:
+    return bool(re.fullmatch(
+        r"\[?(?:title|section|chunk_type|keywords|questions|content|text|metadata|ct)\]?",
+        name or "",
+        re.IGNORECASE,
+    ))
+
+
+def _question_like_name(name: str) -> bool:
+    return bool(re.search(r"[?？]$", name or ""))
 
 
 def _classify_entity(name: str, chunk) -> str:
@@ -1552,168 +1307,6 @@ def _entity_evidence(evidence_id: str, entity_id: str, chunk, text: str, candida
     )
 
 
-def _relation_candidate(text: str, left: GraphEntity, right: GraphEntity) -> RelationCandidate | None:
-    left_mentions = _find_entity_mentions(text, left)
-    right_mentions = _find_entity_mentions(text, right)
-    if not left_mentions or not right_mentions:
-        return None
-
-    candidates: list[tuple[int, int, int, RelationCandidate]] = []
-    for order, (phrase, relation_type, confidence) in enumerate(RELATION_WORDS):
-        relation_window = _best_relation_window(text, left_mentions, right_mentions, phrase)
-        if relation_window is None:
-            continue
-        priority, distance, left_position, right_position, _ = relation_window
-        left_before_right = left_position[0] <= right_position[0]
-        source = left if left_before_right else right
-        target = right if left_before_right else left
-        source_name = left_position[1] if left_before_right else right_position[1]
-        target_name = right_position[1] if left_before_right else left_position[1]
-        between = _mention_gap(text, left_position, right_position)
-        if relation_type in {
-            "RESPONSIBLE_FOR",
-            "PRODUCES",
-            "CONSUMES",
-            "APPROVES",
-            "EXECUTES",
-            "TRIGGERS",
-            "RECORDS",
-            "STORES",
-            "ARCHIVES",
-            "REVOKES",
-        } and any(hint in between for hint in REVERSE_HINTS):
-            source, target = target, source
-            source_name, target_name = target_name, source_name
-        candidates.append(
-            (
-                priority,
-                distance,
-                order,
-                RelationCandidate(
-                    source_id=source.id,
-                    target_id=target.id,
-                    source_name=source_name,
-                    target_name=target_name,
-                    relation_type=relation_type,
-                    phrase=phrase,
-                    confidence=confidence,
-                    sources={"rule.relationWord"},
-                ),
-            )
-        )
-    if not candidates:
-        return None
-    return min(candidates, key=lambda item: (item[0], item[1], item[2]))[3]
-
-
-def _associated_relation_candidate(text: str, left: GraphEntity, right: GraphEntity) -> RelationCandidate | None:
-    left_position = _find_entity_mention(text, left)
-    right_position = _find_entity_mention(text, right)
-    if left_position is None or right_position is None:
-        return None
-    if abs(left_position[0] - right_position[0]) > 100:
-        return None
-    if left.confidence < 0.55 and right.confidence < 0.55:
-        return None
-    return RelationCandidate(
-        source_id=left.id,
-        target_id=right.id,
-        source_name=left_position[1],
-        target_name=right_position[1],
-        relation_type="ASSOCIATED_WITH",
-        phrase="co_occurrence",
-        confidence=0.45,
-        sources={"rule.coOccurrence"},
-    )
-
-
-def _find_entity_mention(text: str, entity: GraphEntity) -> tuple[int, str] | None:
-    found = _find_entity_mentions(text, entity)
-    return found[0] if found else None
-
-
-def _find_entity_mentions(text: str, entity: GraphEntity) -> list[tuple[int, str]]:
-    mentions = [entity.name, *(entity.aliases or [])]
-    found: list[tuple[int, str]] = []
-    for mention in mentions:
-        for position in _find_name_positions(text, mention):
-            found.append((position, mention))
-    return sorted(found, key=lambda item: (item[0], -len(item[1])))
-
-
-def _best_relation_window(
-    text: str,
-    left_mentions: list[tuple[int, str]],
-    right_mentions: list[tuple[int, str]],
-    phrase: str,
-) -> tuple[int, int, tuple[int, str], tuple[int, str], str] | None:
-    candidates: list[tuple[int, int, int, tuple[int, str], tuple[int, str], str]] = []
-    for left_position in left_mentions:
-        for right_position in right_mentions:
-            start = min(left_position[0], right_position[0])
-            end = max(left_position[0] + len(left_position[1]), right_position[0] + len(right_position[1]))
-            distance = end - start
-            if distance > 160:
-                continue
-            gap = _mention_gap(text, left_position, right_position)
-            if phrase.lower() in gap.lower():
-                window = text[start:end]
-                candidates.append((0, distance, _phrase_offset(gap, phrase), left_position, right_position, window))
-                continue
-            context_start = max(0, start - 24)
-            context_end = min(len(text), end + 24)
-            window = text[context_start:context_end]
-            phrase_position = _first_phrase_outside_mentions(text, phrase, context_start, context_end, left_position, right_position)
-            if phrase_position < 0:
-                continue
-            center = (start + end) // 2
-            candidates.append((1, distance, abs(phrase_position - center), left_position, right_position, window))
-    if not candidates:
-        return None
-    priority, distance, _, left_position, right_position, window = min(
-        candidates,
-        key=lambda item: (item[0], item[1], item[2], item[3][0], item[4][0]),
-    )
-    return priority, distance, left_position, right_position, window
-
-
-def _mention_gap(text: str, left_position: tuple[int, str], right_position: tuple[int, str]) -> str:
-    left_start = left_position[0]
-    left_end = left_start + len(left_position[1])
-    right_start = right_position[0]
-    right_end = right_start + len(right_position[1])
-    if left_start <= right_start:
-        return text[left_end:right_start]
-    return text[right_end:left_start]
-
-
-def _phrase_offset(text: str, phrase: str) -> int:
-    return text.lower().find(phrase.lower())
-
-
-def _first_phrase_outside_mentions(
-    text: str,
-    phrase: str,
-    start: int,
-    end: int,
-    left_position: tuple[int, str],
-    right_position: tuple[int, str],
-) -> int:
-    lowered_window = text[start:end].lower()
-    lowered_phrase = phrase.lower()
-    mention_ranges = [
-        (left_position[0], left_position[0] + len(left_position[1])),
-        (right_position[0], right_position[0] + len(right_position[1])),
-    ]
-    for match in re.finditer(re.escape(lowered_phrase), lowered_window):
-        absolute_start = start + match.start()
-        absolute_end = start + match.end()
-        if any(absolute_start < mention_end and absolute_end > mention_start for mention_start, mention_end in mention_ranges):
-            continue
-        return absolute_start
-    return -1
-
-
 def _relation_description(candidate: RelationCandidate, entity_map: dict[str, GraphEntity]) -> str:
     source = entity_map[candidate.source_id]
     target = entity_map[candidate.target_id]
@@ -1811,17 +1404,6 @@ def _find_name(text: str, name: str) -> int:
     if index >= 0:
         return index
     return text.lower().find(name.lower())
-
-
-def _find_name_positions(text: str, name: str) -> list[int]:
-    if not text or not name:
-        return []
-    positions = [match.start() for match in re.finditer(re.escape(name), text)]
-    if positions:
-        return positions
-    lowered_text = text.lower()
-    lowered_name = name.lower()
-    return [match.start() for match in re.finditer(re.escape(lowered_name), lowered_text)]
 
 
 def _build_communities(

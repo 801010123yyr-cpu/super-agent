@@ -51,7 +51,7 @@ class RagRerankServiceTest {
         private RagToolsRerankRequest lastRequest;
 
         private CapturingRagToolsClient() {
-            super(new RagToolsProperties());
+            super(new RagToolsProperties(), new com.fasterxml.jackson.databind.ObjectMapper());
         }
 
         @Override

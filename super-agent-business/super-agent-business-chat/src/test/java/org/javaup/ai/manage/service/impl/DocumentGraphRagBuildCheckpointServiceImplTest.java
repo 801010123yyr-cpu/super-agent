@@ -4,9 +4,13 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.javaup.ai.manage.data.SuperAgentDocumentTask;
+import org.javaup.ai.manage.data.SuperAgentDocumentTaskLog;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.model.graph.GraphRagBuildResult;
+import org.javaup.ai.manage.service.DocumentIndexBuildProgressCacheService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
+import org.javaup.ai.manage.vo.DocumentIndexBuildProgressVo;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Proxy;
@@ -30,7 +34,9 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
 
         DocumentGraphRagBuildCheckpointServiceImpl service = new DocumentGraphRagBuildCheckpointServiceImpl(
             taskMapper(task),
+            documentMapper(),
             logService,
+            new NoopProgressCacheService(),
             objectMapper
         );
 
@@ -83,7 +89,9 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
 
         DocumentGraphRagBuildCheckpointServiceImpl service = new DocumentGraphRagBuildCheckpointServiceImpl(
             taskMapper(task),
+            documentMapper(),
             logService,
+            new NoopProgressCacheService(),
             new ObjectMapper()
         );
 
@@ -139,6 +147,29 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
         );
     }
 
+    @SuppressWarnings("unchecked")
+    private static SuperAgentDocumentMapper documentMapper() {
+        return (SuperAgentDocumentMapper) Proxy.newProxyInstance(
+            SuperAgentDocumentMapper.class.getClassLoader(),
+            new Class<?>[]{SuperAgentDocumentMapper.class},
+            (proxy, method, args) -> {
+                if ("selectById".equals(method.getName())) {
+                    return null;
+                }
+                if ("toString".equals(method.getName())) {
+                    return "SuperAgentDocumentMapperProxy";
+                }
+                if ("hashCode".equals(method.getName())) {
+                    return System.identityHashCode(proxy);
+                }
+                if ("equals".equals(method.getName())) {
+                    return proxy == args[0];
+                }
+                return defaultValue(method.getReturnType());
+            }
+        );
+    }
+
     private static Object defaultValue(Class<?> returnType) {
         if (!returnType.isPrimitive()) {
             return null;
@@ -157,20 +188,47 @@ class DocumentGraphRagBuildCheckpointServiceImplTest {
         private final List<LogRecord> logs = new ArrayList<>();
 
         @Override
-        public void saveLog(Long taskId,
-                            Long documentId,
-                            Integer stageType,
-                            Integer eventType,
-                            Integer logLevel,
-                            Integer operatorType,
-                            Long operatorId,
-                            String content,
-                            Object detail) {
+        public SuperAgentDocumentTaskLog saveLog(Long taskId,
+                                                 Long documentId,
+                                                 Integer stageType,
+                                                 Integer eventType,
+                                                 Integer logLevel,
+                                                 Integer operatorType,
+                                                 Long operatorId,
+                                                 String content,
+                                                 Object detail) {
             logs.add(new LogRecord(taskId, documentId, stageType, eventType, logLevel, content, detail));
+            SuperAgentDocumentTaskLog log = new SuperAgentDocumentTaskLog();
+            log.setTaskId(taskId);
+            log.setDocumentId(documentId);
+            log.setContent(content);
+            return log;
         }
 
         private List<LogRecord> logs() {
             return logs;
+        }
+    }
+
+    private static final class NoopProgressCacheService implements DocumentIndexBuildProgressCacheService {
+
+        @Override
+        public DocumentIndexBuildProgressVo get(Long taskId) {
+            return null;
+        }
+
+        @Override
+        public void init(org.javaup.ai.manage.data.SuperAgentDocument document, SuperAgentDocumentTask task) {
+        }
+
+        @Override
+        public void update(org.javaup.ai.manage.data.SuperAgentDocument document,
+                           SuperAgentDocumentTask task,
+                           SuperAgentDocumentTaskLog latestLog) {
+        }
+
+        @Override
+        public void update(org.javaup.ai.manage.data.SuperAgentDocument document, SuperAgentDocumentTask task) {
         }
     }
 

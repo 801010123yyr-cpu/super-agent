@@ -22,7 +22,7 @@ class GraphExtractTest(unittest.TestCase):
         graph_extract._NER_MODEL_STATUS = None
         graph_extract._NER_MODEL_CONFIG_KEY = None
 
-    def test_extract_graph_merges_aliases_and_builds_relation_community(self) -> None:
+    def test_extract_graph_merges_aliases_without_relation_word_edges(self) -> None:
         response = extract_graph(
             GraphExtractRequest(
                 documentId=10,
@@ -48,32 +48,17 @@ class GraphExtractTest(unittest.TestCase):
             )
         )
 
-        entity_by_id = {entity.id: entity for entity in response.entities}
         super_agent = self._entity_by_alias(response.entities, "超级智能体")
         self.assertEqual("SuperAgent", super_agent.name)
         self.assertIn("超级智能体", super_agent.aliases)
         self.assertEqual([1001, 1002], sorted(super_agent.source_chunk_ids))
         self.assertGreaterEqual(super_agent.confidence, 0.6)
 
-        relation_pairs = {
-            (
-                entity_by_id[relation.source_entity_id].name,
-                relation.relation_type,
-                entity_by_id[relation.target_entity_id].name,
-            )
-            for relation in response.relations
-        }
-        self.assertIn(("SuperAgent", "CALLS", "RagTools"), relation_pairs)
-        self.assertIn(("SuperAgent", "DEPENDS_ON", "GraphRAG"), relation_pairs)
+        self.assertFalse(response.relations)
+        self.assertFalse(response.communities)
+        self.assert_no_lexical_relation_sources(response)
 
-        self.assertTrue(response.communities)
-        community = response.communities[0]
-        self.assertIn("GraphRAG", community.title)
-        self.assertIn("主要关系", community.summary)
-        self.assertEqual("networkx.greedy_modularity", community.metadata.get("communityAlgorithm"))
-        self.assertGreaterEqual(community.metadata.get("relationCount"), 2)
-
-    def test_extract_graph_uses_explicit_alias_patterns_for_entities_and_relations(self) -> None:
+    def test_extract_graph_uses_explicit_alias_patterns_for_entities(self) -> None:
         response = extract_graph(
             GraphExtractRequest(
                 documentId=10,
@@ -105,16 +90,8 @@ class GraphExtractTest(unittest.TestCase):
         rag_tools = self._entity_by_alias(response.entities, "RT")
         self.assertEqual("RagTools", rag_tools.name)
 
-        entity_by_id = {entity.id: entity for entity in response.entities}
-        relation_pairs = {
-            (
-                entity_by_id[relation.source_entity_id].name,
-                relation.relation_type,
-                entity_by_id[relation.target_entity_id].name,
-            )
-            for relation in response.relations
-        }
-        self.assertIn(("SuperAgent", "CALLS", "RagTools"), relation_pairs)
+        self.assertFalse(response.relations)
+        self.assert_no_lexical_relation_sources(response)
 
     def test_extract_graph_handles_punctuated_alias_markers(self) -> None:
         response = extract_graph(
@@ -229,16 +206,8 @@ class GraphExtractTest(unittest.TestCase):
         self.assertIn("ner", order_service.metadata.get("extractorSources"))
         self.assertIn("ner", payment_owner.metadata.get("extractorSources"))
 
-        entity_by_id = {entity.id: entity for entity in response.entities}
-        relation_pairs = {
-            (
-                entity_by_id[relation.source_entity_id].name,
-                relation.relation_type,
-                entity_by_id[relation.target_entity_id].name,
-            )
-            for relation in response.relations
-        }
-        self.assertIn(("BillingGateway", "CALLS", "OrderService"), relation_pairs)
+        self.assertFalse(response.relations)
+        self.assert_no_lexical_relation_sources(response)
         self.assertTrue(all("[TITLE]" not in evidence.quote_text and "[QUESTIONS]" not in evidence.quote_text for evidence in response.evidences))
         self.assertTrue(all(evidence.metadata.get("sourceType") in {"rule", "ner"} for evidence in response.evidences))
         self.assertIn("extractorLayers", response.metadata)
@@ -349,7 +318,7 @@ class GraphExtractTest(unittest.TestCase):
         self.assertIn(("AuditTrail", "RECORDS", "权限回收"), relation_pairs)
         self.assertIn(("AuditTrail", "RECORDS", "临时权限延长"), relation_pairs)
 
-    def test_extract_graph_captures_policy_action_relation_words(self) -> None:
+    def test_extract_graph_does_not_create_relations_from_plain_action_sentences(self) -> None:
         response = extract_graph(
             GraphExtractRequest(
                 documentId=10,
@@ -384,10 +353,117 @@ class GraphExtractTest(unittest.TestCase):
             )
             for relation in response.relations
         }
-        self.assertIn(("发布负责人", "TRIGGERS", "回滚"), relation_pairs)
-        self.assertIn(("值班 SRE", "EXECUTES", "流量切换"), relation_pairs)
-        self.assertIn(("信息安全部", "APPROVES", "高敏感数据"), relation_pairs)
-        self.assertIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+        self.assertNotIn(("发布负责人", "TRIGGERS", "回滚"), relation_pairs)
+        self.assertNotIn(("值班 SRE", "EXECUTES", "流量切换"), relation_pairs)
+        self.assertNotIn(("信息安全部", "APPROVES", "高敏感数据"), relation_pairs)
+        self.assertNotIn(("AuditTrail", "RECORDS", "权限申请"), relation_pairs)
+        self.assertNotIn(("AuditTrail", "APPROVES", "回收"), relation_pairs)
+        self.assert_no_lexical_relation_sources(response)
+
+    def test_extract_graph_lexical_relation_words_do_not_create_edges(self) -> None:
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=221,
+                chunks=[
+                    GraphChunk(
+                        chunkId=3101,
+                        chunkNo=1,
+                        title="适用范围",
+                        sectionPath="一、适用范围",
+                        text=(
+                            "本文档规定 `AuditTrail` 在客户数据权限流转场景中的审计留痕要求。"
+                            "该规范适用于权限申请、权限审批、权限回收、临时权限延长和异常权限复核。"
+                        ),
+                        contentWithWeight=(
+                            "本文档规定 `AuditTrail` 在客户数据权限流转场景中的审计留痕要求。"
+                            "该规范适用于权限申请、权限审批、权限回收、临时权限延长和异常权限复核。"
+                        ),
+                    ),
+                    GraphChunk(
+                        chunkId=3102,
+                        chunkNo=2,
+                        title="系统职责",
+                        sectionPath="二、系统职责",
+                        text=(
+                            "审计系统负责接收权限变更事件、数据访问事件、导出事件和共享链接事件，"
+                            "并把事件写入统一审计流水。审计系统本身不审批权限，也不直接回收权限。"
+                        ),
+                        contentWithWeight=(
+                            "审计系统负责接收权限变更事件、数据访问事件、导出事件和共享链接事件，"
+                            "并把事件写入统一审计流水。审计系统本身不审批权限，也不直接回收权限。"
+                        ),
+                    ),
+                ],
+            )
+        )
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertNotIn(("AuditTrail", "APPROVES", "临时权限延长"), relation_pairs)
+        self.assertNotIn(("审计系统", "RESPONSIBLE_FOR", "数据访问事件"), relation_pairs)
+        self.assertNotIn(("AuditTrail", "RESPONSIBLE_FOR", "事件"), relation_pairs)
+        self.assert_no_lexical_relation_sources(response)
+
+    def test_extract_graph_ignores_generic_metadata_keyword_event_as_relation_target(self) -> None:
+        text = (
+            "审计系统负责接收权限变更事件、数据访问事件、导出事件和共享链接事件，"
+            "并把事件写入统一审计流水。审计系统本身不审批权限，也不直接回收权限。"
+        )
+        response = extract_graph(
+            GraphExtractRequest(
+                documentId=10,
+                taskId=222,
+                chunks=[
+                    GraphChunk(
+                        chunkId=3103,
+                        chunkNo=6,
+                        title="二、系统职责",
+                        sectionPath="二、系统职责",
+                        text=text,
+                        contentWithWeight=(
+                            "[TITLE]\n二、系统职责\n\n"
+                            "[SECTION]\n二、系统职责\n\n"
+                            "[CHUNK_TYPE]\nTEXT\n\n"
+                            "[KEYWORDS]\n二、系统职责；审计系统负责接收；事件；数据访问事件；导出事件和共享链\n\n"
+                            "[QUESTIONS]\n关于二、系统职责的核心内容是什么？\n\n"
+                            "[CONTENT]\nsection: 二、系统职责\n"
+                            f"type: TEXT\n{text}"
+                        ),
+                        metadata={
+                            "keywords": [
+                                "二、系统职责",
+                                "审计系统负责接收",
+                                "事件",
+                                "数据访问事件",
+                                "导出事件和共享链",
+                            ]
+                        },
+                    )
+                ],
+            )
+        )
+
+        entity_by_id = {entity.id: entity for entity in response.entities}
+        entity_names = {entity.name for entity in response.entities}
+        relation_pairs = {
+            (
+                entity_by_id[relation.source_entity_id].name,
+                relation.relation_type,
+                entity_by_id[relation.target_entity_id].name,
+            )
+            for relation in response.relations
+        }
+        self.assertNotIn("事件", entity_names)
+        self.assertNotIn(("审计系统", "RESPONSIBLE_FOR", "事件"), relation_pairs)
+        self.assert_no_lexical_relation_sources(response)
 
     def test_extract_graph_captures_o6_structured_policy_rows(self) -> None:
         response = extract_graph(
@@ -496,6 +572,7 @@ class GraphExtractTest(unittest.TestCase):
         self.assertIn(("客户数据", "STORES", "VaultDocs"), relation_pairs)
         self.assertIn(("客户数据", "STORES", "DataCleanRoom"), relation_pairs)
         self.assertIn(("系统管理员", "REVOKES", "异常权限"), relation_pairs)
+        self.assert_no_lexical_relation_sources(response)
 
         l4_data = self._entity_by_alias(response.entities, "高敏感信息")
         self.assertEqual("L4 数据", l4_data.name)
@@ -539,6 +616,13 @@ class GraphExtractTest(unittest.TestCase):
             if alias in entity.aliases:
                 return entity
         self.fail(f"Missing entity alias: {alias}")
+
+    def assert_no_lexical_relation_sources(self, response) -> None:
+        forbidden_sources = {"rule.relationWord", "rule.coOccurrence"}
+        for relation in response.relations:
+            self.assertTrue(forbidden_sources.isdisjoint(set(relation.metadata.get("candidateSources") or [])))
+        for evidence in response.evidences:
+            self.assertTrue(forbidden_sources.isdisjoint(set(evidence.metadata.get("candidateSources") or [])))
 
 
 if __name__ == "__main__":
