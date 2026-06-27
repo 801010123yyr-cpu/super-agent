@@ -1,5 +1,6 @@
 package org.javaup.ai.chatagent.rag.retrieve.channel;
 
+import cn.hutool.core.collection.CollectionUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.service.DocumentRetrieveRequestFactory;
@@ -39,7 +40,7 @@ public class VectorRetrievalChannel implements RetrievalChannel {
     @Override
     public boolean supports(ConversationExecutionPlan plan) {
 
-        return plan.getSelectedDocumentId() != null;
+        return hasDocumentScope(plan);
     }
 
     @Override
@@ -51,5 +52,16 @@ public class VectorRetrievalChannel implements RetrievalChannel {
         return new RetrievalChannelResult(
             channelName(), documentList
         );
+    }
+
+    private boolean hasDocumentScope(ConversationExecutionPlan plan) {
+        if (plan == null) {
+            return false;
+        }
+        if (plan.getSelectedDocumentId() != null) {
+            return true;
+        }
+        return CollectionUtil.isNotEmpty(plan.getRetrievalDocumentIds())
+            && CollectionUtil.isNotEmpty(plan.getRetrievalTaskIds());
     }
 }

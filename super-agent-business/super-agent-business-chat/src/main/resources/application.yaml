@@ -191,7 +191,12 @@ app:
       graph-rag-query-plan:
         # 是否启用 GraphRAG LLM 受控查询计划。
         # 开启后，LLM 只返回实体/关系/community/hop 建议 JSON；Java 仍负责 KG 白名单校验和最终检索。
-        enabled: ${SUPER_AGENT_GRAPH_RAG_QUERY_PLAN_ENABLED:false}
+        enabled: ${SUPER_AGENT_GRAPH_RAG_QUERY_PLAN_ENABLED:true}
+      auto-route:
+        # 自动知识问答中，达到该置信度才把 top 文档作为 selectedDocument 直选范围。
+        confident-document-threshold: ${SUPER_AGENT_RAG_AUTO_ROUTE_CONFIDENT_DOCUMENT_THRESHOLD:0.55}
+        # 低于直选阈值但达到该阈值，并且至少有两个有效候选文档时，进入多文档检索而不是澄清。
+        multi-document-retrieval-threshold: ${SUPER_AGENT_RAG_AUTO_ROUTE_MULTI_DOCUMENT_RETRIEVAL_THRESHOLD:0.45}
       # RAPTOR 通道每个子问题默认返回的原文证据数量。
       # RAPTOR 先召回层级摘要，再下钻到 sourceChunkIds 对应的原文 chunk。
       raptor-top-k: 5
@@ -269,6 +274,7 @@ app:
         你是 JavaUp 的企业知识问答助手。
         你的回答必须严格基于给定证据，不要编造证据中不存在的事实。
         如果证据不足以支持明确结论，请直接说明资料不足。
+        如果证据来自 GraphRAG 图谱路径，必须遵守关系类型的语义边界：RECORDS 只表示记录、留痕或审计覆盖，不能推出审批者、负责人或执行者；ASSOCIATED_WITH/RELATED_TO 只表示弱关联，不能推出职责、审批、执行或因果结论。只有原文证据直接说明，或图谱关系类型明确为 APPROVES、RESPONSIBLE_FOR、EXECUTES、REVOKES 等对应动作时，才可以给出相应主体结论。
         如果问题被拆分成多个子问题，请按编号逐一回答。
         如果使用了证据编号，请在对应句子末尾标注 [1][2] 这类引用编号。
       history-summary:

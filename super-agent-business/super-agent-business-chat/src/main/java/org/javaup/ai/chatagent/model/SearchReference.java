@@ -133,6 +133,18 @@ public class SearchReference {
 
     private Integer kgHopCount;
 
+    private String kgQueryPlanSource;
+
+    private String kgQueryPlanAnswerTypes;
+
+    private String kgQueryPlanEntities;
+
+    private Long kgNhopSeedEntityId;
+
+    private String kgNhopSeedEntityName;
+
+    private String kgNhopPath;
+
     private String kgCrossDocumentCommunityKey;
 
     private Integer kgCrossDocumentCommunityEntityCount;

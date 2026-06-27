@@ -26,6 +26,12 @@ public class GraphRagQueryPlanAdvice {
     private List<String> relationTypes = new ArrayList<>();
 
     @Builder.Default
+    private List<String> answerTypeKeywords = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> entitiesFromQuery = new ArrayList<>();
+
+    @Builder.Default
     private List<Long> entityIds = new ArrayList<>();
 
     @Builder.Default

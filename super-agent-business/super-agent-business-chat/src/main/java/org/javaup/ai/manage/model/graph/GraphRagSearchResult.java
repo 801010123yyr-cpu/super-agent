@@ -91,6 +91,18 @@ public class GraphRagSearchResult {
 
     private Integer hopCount;
 
+    private String queryPlanSource;
+
+    private String queryPlanAnswerTypes;
+
+    private String queryPlanEntities;
+
+    private Long nHopSeedEntityId;
+
+    private String nHopSeedEntityName;
+
+    private String nHopPath;
+
     private Double rankBoost;
 
     private double score;

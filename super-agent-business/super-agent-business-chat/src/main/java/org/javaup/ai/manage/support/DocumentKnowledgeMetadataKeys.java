@@ -80,6 +80,12 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_EVIDENCE_ID = "kgEvidenceId";
     public static final String KG_GRAPH_PATH = "kgGraphPath";
     public static final String KG_HOP_COUNT = "kgHopCount";
+    public static final String KG_QUERY_PLAN_SOURCE = "kgQueryPlanSource";
+    public static final String KG_QUERY_PLAN_ANSWER_TYPES = "kgQueryPlanAnswerTypes";
+    public static final String KG_QUERY_PLAN_ENTITIES = "kgQueryPlanEntities";
+    public static final String KG_NHOP_SEED_ENTITY_ID = "kgNhopSeedEntityId";
+    public static final String KG_NHOP_SEED_ENTITY_NAME = "kgNhopSeedEntityName";
+    public static final String KG_NHOP_PATH = "kgNhopPath";
     public static final String KG_COMMUNITY_ID = "kgCommunityId";
     public static final String KG_COMMUNITY_TITLE = "kgCommunityTitle";
     public static final String KG_COMMUNITY_SUMMARY = "kgCommunitySummary";
@@ -113,6 +119,12 @@ public final class DocumentKnowledgeMetadataKeys {
         KG_EVIDENCE_ID,
         KG_GRAPH_PATH,
         KG_HOP_COUNT,
+        KG_QUERY_PLAN_SOURCE,
+        KG_QUERY_PLAN_ANSWER_TYPES,
+        KG_QUERY_PLAN_ENTITIES,
+        KG_NHOP_SEED_ENTITY_ID,
+        KG_NHOP_SEED_ENTITY_NAME,
+        KG_NHOP_PATH,
         KG_COMMUNITY_ID,
         KG_COMMUNITY_TITLE,
         KG_COMMUNITY_SUMMARY,

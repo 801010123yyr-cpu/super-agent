@@ -91,6 +91,12 @@ public final class SearchReferenceMapper {
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
+        reference.setKgQueryPlanSource(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE), ""));
+        reference.setKgQueryPlanAnswerTypes(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES), ""));
+        reference.setKgQueryPlanEntities(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES), ""));
+        reference.setKgNhopSeedEntityId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_ID)));
+        reference.setKgNhopSeedEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME), ""));
+        reference.setKgNhopPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH), ""));
         reference.setKgCrossDocumentCommunityKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY), ""));
         reference.setKgCrossDocumentCommunityEntityCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT)));
         reference.setKgCrossDocumentCommunityRelationGroupCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)));

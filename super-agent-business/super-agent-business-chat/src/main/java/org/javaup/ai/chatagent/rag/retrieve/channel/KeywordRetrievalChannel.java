@@ -41,7 +41,7 @@ public class KeywordRetrievalChannel implements RetrievalChannel {
     public boolean supports(ConversationExecutionPlan plan) {
 
         return properties.isKeywordChannelEnabled()
-            && plan.getSelectedDocumentId() != null;
+            && hasDocumentScope(plan);
     }
 
     @Override
@@ -53,5 +53,16 @@ public class KeywordRetrievalChannel implements RetrievalChannel {
         return new RetrievalChannelResult(
             channelName(), documentList
         );
+    }
+
+    private boolean hasDocumentScope(ConversationExecutionPlan plan) {
+        if (plan == null) {
+            return false;
+        }
+        if (plan.getSelectedDocumentId() != null) {
+            return true;
+        }
+        return CollectionUtil.isNotEmpty(plan.getRetrievalDocumentIds())
+            && CollectionUtil.isNotEmpty(plan.getRetrievalTaskIds());
     }
 }

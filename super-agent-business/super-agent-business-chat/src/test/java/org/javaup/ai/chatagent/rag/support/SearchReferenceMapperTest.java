@@ -21,6 +21,12 @@ class SearchReferenceMapperTest {
         metadata.put(DocumentKnowledgeMetadataKeys.KG_CANONICAL_ENTITY_NAME, "审计系统");
         metadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
         metadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 5001L);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "SYSTEM,PROCESS");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "审计系统");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_ID, 1001L);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME, "审计系统");
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "审计系统 --RECORDS--> 权限申请");
         metadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.81D);
         metadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,strongRelationSource");
         metadata.put(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, "");
@@ -45,6 +51,12 @@ class SearchReferenceMapperTest {
         assertThat(reference.getKgCanonicalEntityName()).isEqualTo("审计系统");
         assertThat(reference.getKgRelationGroupKey()).isEqualTo("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
         assertThat(reference.getKgEvidenceId()).isEqualTo(5001L);
+        assertThat(reference.getKgQueryPlanSource()).isEqualTo("java.graph_query_profile.v2,llm.controlled.query_plan.v1");
+        assertThat(reference.getKgQueryPlanAnswerTypes()).isEqualTo("SYSTEM,PROCESS");
+        assertThat(reference.getKgQueryPlanEntities()).isEqualTo("审计系统");
+        assertThat(reference.getKgNhopSeedEntityId()).isEqualTo(1001L);
+        assertThat(reference.getKgNhopSeedEntityName()).isEqualTo("审计系统");
+        assertThat(reference.getKgNhopPath()).isEqualTo("审计系统 --RECORDS--> 权限申请");
         assertThat(reference.getKgQualityScore()).isEqualTo(0.81D);
         assertThat(reference.getKgQualityReasons()).isEqualTo("groundedEvidence,strongRelationSource");
         assertThat(reference.getKgNoiseReasons()).isEmpty();

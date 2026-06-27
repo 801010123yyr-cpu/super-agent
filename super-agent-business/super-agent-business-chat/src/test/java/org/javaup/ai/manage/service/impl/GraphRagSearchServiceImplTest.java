@@ -170,7 +170,7 @@ class GraphRagSearchServiceImplTest {
         assertThat(results).isNotEmpty();
         GraphRagSearchResult result = results.get(0);
         assertThat(result.getRelationType()).isEqualTo("CALLS");
-        assertThat(result.getGraphPath()).contains("关系匹配");
+        assertThat(result.getGraphPath()).contains("一跳");
         assertThat(result.getEntityName()).isEqualTo("SuperAgent");
         assertThat(result.getRelatedEntityName()).isEqualTo("RagTools");
         assertThat(result.getRankBoost()).isEqualTo(0.75D);
@@ -178,7 +178,7 @@ class GraphRagSearchServiceImplTest {
     }
 
     @Test
-    void policyRelationQuestionsUseControlledRelationTypeSeeds() {
+    void policyRelationQuestionsUseControlledQueryPlanRelationTypeSeeds() {
         SuperAgentKgEntity l4Data = entity(1001L, 10L, 20L, "L4 数据", "高敏感信息", "CONCEPT", "客户高敏感数据。");
         SuperAgentKgEntity securityDept = entity(1002L, 10L, 20L, "信息安全部", null, "ORG", "审批高敏感数据访问。");
         SuperAgentKgEntity auditTrail = entity(1003L, 10L, 20L, "AuditTrail", null, "SYSTEM", "审计系统。");
@@ -187,13 +187,42 @@ class GraphRagSearchServiceImplTest {
         SuperAgentKgRelation records = relation(2002L, 10L, 20L, 1003L, 1004L, "RECORDS", "AuditTrail 记录权限申请、审批、回收。", 0.88D);
         SuperAgentKgEvidence approvalEvidence = evidence(3001L, 10L, 20L, 4001L, 5001L, 2001L, null, "L4 权限申请需信息安全部三级审批。", 8);
         SuperAgentKgEvidence recordEvidence = evidence(3002L, 10L, 20L, 4002L, 5002L, 2002L, null, "AuditTrail 需记录权限申请、审批、回收和延长。", 9);
+        AtomicInteger advisorCallCount = new AtomicInteger();
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> {
+            advisorCallCount.incrementAndGet();
+            if (question.contains("L4")) {
+                return Optional.of(GraphRagQueryPlanAdvice.builder()
+                    .graphQuery(true)
+                    .answerTypeKeywords(List.of("ORG"))
+                    .entitiesFromQuery(List.of("L4 数据"))
+                    .entityNames(List.of("L4 数据"))
+                    .relationTypes(List.of("APPROVES"))
+                    .relationQuestion(true)
+                    .maxHops(1)
+                    .confidence(0.9D)
+                    .reason("问题询问 L4 数据审批责任方，Java 只接受 KG 中真实存在的 APPROVES")
+                    .build());
+            }
+            return Optional.of(GraphRagQueryPlanAdvice.builder()
+                .graphQuery(true)
+                .answerTypeKeywords(List.of("PROCESS"))
+                .entitiesFromQuery(List.of("AuditTrail"))
+                .entityNames(List.of("AuditTrail"))
+                .relationTypes(List.of("RECORDS"))
+                .relationQuestion(true)
+                .maxHops(1)
+                .confidence(0.9D)
+                .reason("问题询问 AuditTrail 记录行为，Java 只接受 KG 中真实存在的 RECORDS")
+                .build());
+        };
 
         GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
             mapper(SuperAgentKgEntityMapper.class, List.of(l4Data, securityDept, auditTrail, permissionApply), null),
             mapper(SuperAgentKgRelationMapper.class, List.of(approves, records), null),
             mapper(SuperAgentKgEvidenceMapper.class, List.of(approvalEvidence, recordEvidence), null),
             mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
-            new ObjectMapper()
+            new ObjectMapper(),
+            advisor
         );
 
         List<GraphRagSearchResult> approvalResults = service.search(
@@ -211,12 +240,72 @@ class GraphRagSearchServiceImplTest {
             2
         );
 
+        assertThat(advisorCallCount).hasValue(2);
         assertThat(approvalResults).isNotEmpty();
         assertThat(approvalResults.get(0).getRelationType()).isEqualTo("APPROVES");
         assertThat(approvalResults.get(0).getGraphPath()).contains("关系匹配");
+        assertThat(approvalResults.get(0).getQueryPlanSource()).contains("llm.controlled.query_plan.v1");
+        assertThat(approvalResults.get(0).getQueryPlanAnswerTypes()).contains("ORG");
+        assertThat(approvalResults.get(0).getQueryPlanEntities()).contains("l4数据");
         assertThat(recordResults).isNotEmpty();
         assertThat(recordResults.get(0).getRelationType()).isEqualTo("RECORDS");
         assertThat(recordResults.get(0).getGraphPath()).contains("关系匹配");
+    }
+
+    @Test
+    void nHopExpansionUsesKgEdgesAndKeepsSeedPathMetadata() {
+        SuperAgentKgEntity auditTrail = entity(1001L, 10L, 20L, "AuditTrail", "审计系统", "SYSTEM", "审计系统。");
+        SuperAgentKgEntity permissionApply = entity(1002L, 10L, 20L, "权限申请", null, "PROCESS", "权限申请。");
+        SuperAgentKgEntity securityDept = entity(1003L, 10L, 20L, "信息安全部", null, "ORG", "负责权限审批复核。");
+        SuperAgentKgRelation records = relation(2001L, 10L, 20L, 1001L, 1002L, "RECORDS",
+            "AuditTrail 记录权限申请。", 0.9D);
+        SuperAgentKgRelation approves = relation(2002L, 10L, 20L, 1002L, 1003L, "APPROVES",
+            "权限申请由信息安全部审批。", 0.9D);
+        SuperAgentKgEvidence firstHopEvidence = evidence(3001L, 10L, 20L, 4001L, 5001L, 2001L, null,
+            "AuditTrail 需记录权限申请。", 4);
+        SuperAgentKgEvidence secondHopEvidence = evidence(3002L, 10L, 20L, 4002L, 5002L, 2002L, null,
+            "权限申请需要信息安全部审批。", 5);
+
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> Optional.of(GraphRagQueryPlanAdvice.builder()
+            .graphQuery(true)
+            .answerTypeKeywords(List.of("ORG"))
+            .entitiesFromQuery(List.of("审计系统"))
+            .entityNames(List.of("AuditTrail"))
+            .relationQuestion(true)
+            .maxHops(2)
+            .confidence(0.9D)
+            .reason("从审计系统出发扩展到权限申请和审批部门")
+            .build());
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(auditTrail, permissionApply, securityDept), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(records, approves), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(firstHopEvidence, secondHopEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            advisor
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统相关的权限审批部门是谁？",
+            List.of(10L),
+            List.of(20L),
+            5,
+            2
+        );
+
+        GraphRagSearchResult secondHop = results.stream()
+            .filter(item -> Long.valueOf(2002L).equals(item.getRelationId()))
+            .findFirst()
+            .orElseThrow();
+        assertThat(secondHop.getHopCount()).isEqualTo(2);
+        assertThat(secondHop.getGraphPath()).contains("二跳：AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        assertThat(secondHop.getNHopSeedEntityId()).isEqualTo(1001L);
+        assertThat(secondHop.getNHopSeedEntityName()).isEqualTo("AuditTrail");
+        assertThat(secondHop.getNHopPath()).contains("AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        assertThat(secondHop.getQueryPlanSource()).contains("llm.controlled.query_plan.v1");
+        assertThat(secondHop.getQueryPlanAnswerTypes()).contains("ORG");
+        assertThat(secondHop.getQueryPlanEntities()).contains("审计系统");
     }
 
     @Test

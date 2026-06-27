@@ -46,6 +46,12 @@ class GraphRagRetrievalChannelTest {
             .quoteText("检索命中率突然下降时，需要先确认最近一次构建任务是否成功。")
             .sectionPath("14.1 场景一：检索命中率突然下降")
             .graphPath("检索命中率")
+            .queryPlanSource("java.graph_query_profile.v2,llm.controlled.query_plan.v1")
+            .queryPlanAnswerTypes("SYSTEM")
+            .queryPlanEntities("检索命中率")
+            .nHopSeedEntityId(200L)
+            .nHopSeedEntityName("检索命中率")
+            .nHopPath("检索命中率 --RECORDS--> 构建任务")
             .score(0.92D)
             .build();
         GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
@@ -63,6 +69,9 @@ class GraphRagRetrievalChannelTest {
         Document document = result.getDocuments().get(0);
         assertThat(document.getId()).isEqualTo("graphrag-300");
         assertThat(document.getText()).contains("检索命中率突然下降");
+        assertThat(document.getText()).contains("关系类型：RECORDS");
+        assertThat(document.getText()).contains("不能单独证明目标事项的执行者、审批者、负责人或决策主体");
+        assertThat(document.getText()).contains("n-hop路径：检索命中率 --RECORDS--> 构建任务");
         assertThat(document.getText()).contains("跨文档社区：2 份文档 / 1 个关系组 / 3 条证据支撑");
         assertThat(document.getMetadata().values()).doesNotContainNull();
         assertThat(document.getMetadata())
@@ -80,6 +89,12 @@ class GraphRagRetrievalChannelTest {
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_RELATION_COUNT, 2)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 3)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 2)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "SYSTEM")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "检索命中率")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_ID, 200L)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME, "检索命中率")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "检索命中率 --RECORDS--> 构建任务")
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.86D)
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "groundedEvidence,crossDocument")
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS, "")

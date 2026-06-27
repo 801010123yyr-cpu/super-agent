@@ -198,7 +198,16 @@ public class ChatPreparationOrchestrator {
             KnowledgeRouteDecision routeDecision = knowledgeRouteService.route(question, rewriteQuestion);
             knowledgeRouteService.recordAutoRoute(conversationId, taskInfo.exchangeId(), question, rewriteQuestion, routeDecision);
             List<DocumentRouteCandidate> candidateDocuments = selectAutoCandidates(routeDecision, question, rewriteQuestion);
-            if (shouldAskClarification(routeDecision, candidateDocuments)) {
+            boolean lowConfidenceMultiDocumentRetrieval = shouldAllowLowConfidenceMultiDocumentRetrieval(routeDecision, candidateDocuments);
+            if (lowConfidenceMultiDocumentRetrieval) {
+                log.info("自动知识路由低置信多文档候选进入检索: conversationId={}, confidence={}, candidateDocumentCount={}, threshold=[{}, {})",
+                    conversationId,
+                    routeDecision == null || routeDecision.getConfidence() == null ? "" : routeDecision.getConfidence().toPlainString(),
+                    candidateDocuments.size(),
+                    multiDocumentRetrievalThreshold(),
+                    confidentDocumentThreshold());
+            }
+            if (shouldAskClarification(routeDecision, candidateDocuments, lowConfidenceMultiDocumentRetrieval)) {
                 recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, true, false, null);
                 return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
                     requiresCurrentDateAnchoring, requiresFreshSearch)
@@ -224,7 +233,7 @@ public class ChatPreparationOrchestrator {
             }
             boolean confidentTopDocument = routeDecision != null
                 && routeDecision.getConfidence() != null
-                && routeDecision.getConfidence().doubleValue() >= 0.55D;
+                && routeDecision.getConfidence().doubleValue() >= confidentDocumentThreshold();
             DocumentRouteCandidate topDocument = confidentTopDocument && !candidateDocuments.isEmpty() ? candidateDocuments.get(0) : null;
             if (topDocument != null && StrUtil.isNotBlank(topDocument.getDocumentId()) && StrUtil.isNotBlank(topDocument.getLastIndexTaskId())) {
                 routedDocumentId = Long.valueOf(topDocument.getDocumentId());
@@ -246,7 +255,8 @@ public class ChatPreparationOrchestrator {
                 .filter(StrUtil::isNotBlank)
                 .map(Long::valueOf)
                 .toList();
-            recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, false, confidentTopDocument, topDocument);
+            recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, false, confidentTopDocument, topDocument,
+                lowConfidenceMultiDocumentRetrieval);
         }
         else if (chatMode == ChatQueryMode.DOCUMENT) {
             knowledgeRouteService.recordShadowRoute(conversationId, taskInfo.exchangeId(), selectedDocumentId, question, rewriteQuestion);
@@ -362,6 +372,16 @@ public class ChatPreparationOrchestrator {
                                               boolean clarificationRequired,
                                               boolean confidentTopDocument,
                                               DocumentRouteCandidate topDocument) {
+        recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, clarificationRequired, confidentTopDocument, topDocument, false);
+    }
+
+    private void recordAutoDocumentRouteTrace(ConversationTraceRecorder traceRecorder,
+                                              KnowledgeRouteDecision routeDecision,
+                                              List<DocumentRouteCandidate> candidateDocuments,
+                                              boolean clarificationRequired,
+                                              boolean confidentTopDocument,
+                                              DocumentRouteCandidate topDocument,
+                                              boolean lowConfidenceMultiDocumentRetrieval) {
         if (traceRecorder == null) {
             return;
         }
@@ -370,7 +390,8 @@ public class ChatPreparationOrchestrator {
             candidateDocuments,
             clarificationRequired,
             confidentTopDocument,
-            topDocument
+            topDocument,
+            lowConfidenceMultiDocumentRetrieval
         );
         ConversationTraceRecorder.StageHandle autoRouteStage = traceRecorder.startStage(
             ConversationTraceStageCode.ROUTE,
@@ -390,12 +411,24 @@ public class ChatPreparationOrchestrator {
                                                                boolean clarificationRequired,
                                                                boolean confidentTopDocument,
                                                                DocumentRouteCandidate topDocument) {
+        return buildAutoDocumentRouteSnapshot(routeDecision, candidateDocuments, clarificationRequired, confidentTopDocument, topDocument, false);
+    }
+
+    private Map<String, Object> buildAutoDocumentRouteSnapshot(KnowledgeRouteDecision routeDecision,
+                                                               List<DocumentRouteCandidate> candidateDocuments,
+                                                               boolean clarificationRequired,
+                                                               boolean confidentTopDocument,
+                                                               DocumentRouteCandidate topDocument,
+                                                               boolean lowConfidenceMultiDocumentRetrieval) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("routeStatus", routeDecision == null ? "" : StrUtil.blankToDefault(routeDecision.getRouteStatus(), ""));
         snapshot.put("confidence", routeDecision == null || routeDecision.getConfidence() == null ? "" : routeDecision.getConfidence().toPlainString());
         snapshot.put("reason", routeDecision == null ? "" : StrUtil.blankToDefault(routeDecision.getReason(), ""));
         snapshot.put("clarificationRequired", clarificationRequired);
         snapshot.put("confidentTopDocument", confidentTopDocument);
+        snapshot.put("lowConfidenceMultiDocumentRetrieval", lowConfidenceMultiDocumentRetrieval);
+        snapshot.put("confidentDocumentThreshold", confidentDocumentThreshold());
+        snapshot.put("multiDocumentRetrievalThreshold", multiDocumentRetrievalThreshold());
         snapshot.put("topDocumentId", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentId(), ""));
         snapshot.put("topDocumentName", topDocument == null ? "" : StrUtil.blankToDefault(topDocument.getDocumentName(), ""));
         snapshot.put("scopeCandidates", buildScopeRouteTrace(routeDecision));
@@ -613,7 +646,7 @@ public class ChatPreparationOrchestrator {
         if (candidates.isEmpty()) {
             return expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit);
         }
-        if (routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() < 0.55D) {
+        if (routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() < confidentDocumentThreshold()) {
             return mergeCandidates(candidates, expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit), candidateLimit);
         }
         return candidates;
@@ -657,15 +690,19 @@ public class ChatPreparationOrchestrator {
     }
 
     private boolean shouldAskClarification(KnowledgeRouteDecision routeDecision,
-                                           List<DocumentRouteCandidate> candidateDocuments) {
+                                           List<DocumentRouteCandidate> candidateDocuments,
+                                           boolean lowConfidenceMultiDocumentRetrieval) {
         if (candidateDocuments == null || candidateDocuments.isEmpty()) {
             return true;
         }
         if (routeDecision == null || routeDecision.getDocuments() == null || routeDecision.getDocuments().isEmpty()) {
             return true;
         }
-        if (routeDecision.getConfidence() == null || routeDecision.getConfidence().doubleValue() < 0.55D) {
+        if (routeDecision.getConfidence() == null) {
             return true;
+        }
+        if (routeDecision.getConfidence().doubleValue() < confidentDocumentThreshold()) {
+            return !lowConfidenceMultiDocumentRetrieval;
         }
         if (candidateDocuments.size() < 2) {
             return false;
@@ -677,6 +714,43 @@ public class ChatPreparationOrchestrator {
         }
         return topScore.subtract(secondScore).doubleValue() <= 3D
             && !Objects.equals(candidateDocuments.get(0).getKnowledgeScopeCode(), candidateDocuments.get(1).getKnowledgeScopeCode());
+    }
+
+    private boolean shouldAllowLowConfidenceMultiDocumentRetrieval(KnowledgeRouteDecision routeDecision,
+                                                                   List<DocumentRouteCandidate> candidateDocuments) {
+        if (routeDecision == null || routeDecision.getConfidence() == null || candidateDocuments == null || candidateDocuments.size() < 2) {
+            return false;
+        }
+        double confidence = routeDecision.getConfidence().doubleValue();
+        if (confidence < multiDocumentRetrievalThreshold() || confidence >= confidentDocumentThreshold()) {
+            return false;
+        }
+        long validCandidateCount = candidateDocuments.stream()
+            .filter(candidate -> candidate != null
+                && StrUtil.isNotBlank(candidate.getDocumentId())
+                && StrUtil.isNotBlank(candidate.getLastIndexTaskId())
+                && candidate.getScore() != null
+                && candidate.getScore().doubleValue() > 0D)
+            .count();
+        return validCandidateCount >= 2;
+    }
+
+    private double confidentDocumentThreshold() {
+        ChatRagProperties.AutoRouteProperties autoRoute = properties == null ? null : properties.getAutoRoute();
+        return autoRoute == null ? 0.55D : clampThreshold(autoRoute.getConfidentDocumentThreshold(), 0.55D);
+    }
+
+    private double multiDocumentRetrievalThreshold() {
+        ChatRagProperties.AutoRouteProperties autoRoute = properties == null ? null : properties.getAutoRoute();
+        double threshold = autoRoute == null ? 0.45D : clampThreshold(autoRoute.getMultiDocumentRetrievalThreshold(), 0.45D);
+        return Math.min(threshold, confidentDocumentThreshold());
+    }
+
+    private double clampThreshold(double threshold, double fallback) {
+        if (Double.isNaN(threshold) || Double.isInfinite(threshold)) {
+            return fallback;
+        }
+        return Math.max(0D, Math.min(1D, threshold));
     }
 
     private String buildClarificationReply(String originalQuestion,

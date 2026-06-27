@@ -13,13 +13,19 @@ import org.springframework.ai.document.Document;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class GraphRagRetrievalChannel implements RetrievalChannel {
 
     private static final String SOURCE_TYPE = "GRAPH_RAG";
+
+    private static final Pattern GRAPH_PATH_RELATION_PATTERN = Pattern.compile("(?:--|\\-\\[)([A-Z][A-Z0-9_]{1,63})(?:-->|\\]->)");
 
     private final GraphRagSearchService graphRagSearchService;
     private final DocumentKnowledgeService documentKnowledgeService;
@@ -101,6 +107,12 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, StrUtil.blankToDefault(result.getGraphPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, StrUtil.blankToDefault(result.getQueryPlanSource(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, StrUtil.blankToDefault(result.getQueryPlanAnswerTypes(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, StrUtil.blankToDefault(result.getQueryPlanEntities(), ""));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_ID, result.getNHopSeedEntityId());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME, StrUtil.blankToDefault(result.getNHopSeedEntityName(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, StrUtil.blankToDefault(result.getNHopPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID, result.getCommunityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, StrUtil.blankToDefault(result.getCommunityTitle(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, StrUtil.blankToDefault(result.getCommunitySummary(), ""));
@@ -130,8 +142,19 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         builder.append("[GraphRAG 图谱检索]\n");
         builder.append("用户问题：").append(StrUtil.blankToDefault(subQuestion, "")).append('\n');
         builder.append("图谱路径：").append(StrUtil.blankToDefault(result.getGraphPath(), result.getEntityName())).append('\n');
+        Set<String> relationTypes = resolveRelationTypes(result);
+        if (!relationTypes.isEmpty()) {
+            builder.append("关系类型：").append(String.join(", ", relationTypes)).append('\n');
+            for (String relationType : relationTypes) {
+                builder.append("关系语义边界[").append(relationType).append("]：")
+                    .append(relationSemanticBoundary(relationType)).append('\n');
+            }
+        }
         if (StrUtil.isNotBlank(result.getCommunitySummary())) {
             builder.append("社区报告：").append(result.getCommunitySummary()).append('\n');
+        }
+        if (StrUtil.isNotBlank(result.getNHopPath())) {
+            builder.append("n-hop路径：").append(result.getNHopPath()).append('\n');
         }
         if (StrUtil.isNotBlank(result.getSectionPath())) {
             builder.append("章节：").append(result.getSectionPath()).append('\n');
@@ -155,6 +178,51 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         }
         builder.append("原文证据：").append(StrUtil.blankToDefault(result.getQuoteText(), "")).append('\n');
         return builder.toString().trim();
+    }
+
+    private Set<String> resolveRelationTypes(GraphRagSearchResult result) {
+        LinkedHashSet<String> relationTypes = new LinkedHashSet<>();
+        addRelationType(relationTypes, result.getRelationType());
+        addRelationTypesFromPath(relationTypes, result.getGraphPath());
+        addRelationTypesFromPath(relationTypes, result.getNHopPath());
+        return relationTypes;
+    }
+
+    private void addRelationTypesFromPath(Set<String> relationTypes, String path) {
+        if (StrUtil.isBlank(path)) {
+            return;
+        }
+        Matcher matcher = GRAPH_PATH_RELATION_PATTERN.matcher(path);
+        while (matcher.find()) {
+            addRelationType(relationTypes, matcher.group(1));
+        }
+    }
+
+    private void addRelationType(Set<String> relationTypes, String relationType) {
+        String normalized = StrUtil.blankToDefault(relationType, "")
+            .trim()
+            .toUpperCase();
+        if (StrUtil.isNotBlank(normalized)) {
+            relationTypes.add(normalized);
+        }
+    }
+
+    private String relationSemanticBoundary(String relationType) {
+        String normalized = StrUtil.blankToDefault(relationType, "")
+            .trim()
+            .toUpperCase();
+        return switch (normalized) {
+            case "RECORDS" -> "表示记录、留痕或审计覆盖，只能证明源实体记录了目标事项；不能单独证明目标事项的执行者、审批者、负责人或决策主体。";
+            case "APPROVES" -> "表示审批、批准或授权关系，可用于支持审批主体判断，但仍必须由原文证据支撑。";
+            case "RESPONSIBLE_FOR" -> "表示负责、归口或责任边界关系，可用于支持责任主体判断，但仍必须由原文证据支撑。";
+            case "EXECUTES" -> "表示执行或操作关系，可用于支持执行主体判断，但不能自动推出审批或最终负责主体。";
+            case "REVOKES" -> "表示回收、撤销或取消关系，可用于支持回收主体判断，但不能自动推出审批主体。";
+            case "STORES" -> "表示存放、保存或落库关系，可用于支持数据存储位置判断。";
+            case "TRIGGERS" -> "表示触发或引发关系，可用于支持事件因果或流程触发判断。";
+            case "DEPENDS_ON" -> "表示依赖关系，可用于支持系统、流程或能力依赖判断。";
+            case "ASSOCIATED_WITH", "RELATED_TO" -> "表示弱关联，只能作为线索，不能单独支持职责、审批、执行或因果结论。";
+            default -> "表示图谱中的受控关系类型；结论仍必须以原文证据为准，不能超出关系类型本身的语义。";
+        };
     }
 
     private List<Long> resolvedDocumentIds(ConversationExecutionPlan plan) {

@@ -33,6 +33,10 @@ public class ChatRagProperties {
 
     private int graphRagMaxHops = 2;
 
+    private GraphRagQueryPlanProperties graphRagQueryPlan = new GraphRagQueryPlanProperties();
+
+    private AutoRouteProperties autoRoute = new AutoRouteProperties();
+
     private int raptorTopK = 5;
 
     private int raptorSourceChunkTopK = 3;
@@ -105,6 +109,20 @@ public class ChatRagProperties {
         private Double topP = 0.3D;
 
         private Boolean thinking = Boolean.FALSE;
+    }
+
+    @Data
+    public static class GraphRagQueryPlanProperties {
+
+        private boolean enabled = true;
+    }
+
+    @Data
+    public static class AutoRouteProperties {
+
+        private double confidentDocumentThreshold = 0.55D;
+
+        private double multiDocumentRetrievalThreshold = 0.45D;
     }
 
     @Data
