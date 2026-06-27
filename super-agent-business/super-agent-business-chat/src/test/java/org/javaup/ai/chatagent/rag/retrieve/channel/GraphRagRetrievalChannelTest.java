@@ -2,6 +2,8 @@ package org.javaup.ai.chatagent.rag.retrieve.channel;
 
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
+import org.javaup.ai.chatagent.rag.service.DocumentRetrieveRequestFactory;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.model.graph.GraphRagSearchResult;
@@ -57,7 +59,8 @@ class GraphRagRetrievalChannelTest {
         GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
             new StaticGraphRagSearchService(List.of(entityEvidence)),
             new StaticDocumentKnowledgeService(),
-            new ChatRagProperties()
+            new ChatRagProperties(),
+            new DocumentRetrieveRequestFactory()
         );
 
         RetrievalChannelResult result = channel.retrieve(
@@ -114,6 +117,49 @@ class GraphRagRetrievalChannelTest {
             );
     }
 
+    @Test
+    void graphSearchUsesRetrievalQueryWithHistoryHintsButKeepsOriginalQuestionInEvidenceText() {
+        GraphRagSearchResult evidence = GraphRagSearchResult.builder()
+            .documentId(100L)
+            .taskId(900L)
+            .entityId(200L)
+            .entityName("AuditTrail")
+            .relationId(300L)
+            .relationType("RECORDS")
+            .relatedEntityId(201L)
+            .relatedEntityName("权限审批")
+            .evidenceId(400L)
+            .quoteText("AuditTrail 需记录权限申请、权限审批、权限回收和临时权限延长。")
+            .sectionPath("二、审计记录要求")
+            .graphPath("关系匹配：AuditTrail --RECORDS--> 权限审批")
+            .score(0.91D)
+            .build();
+        CapturingGraphRagSearchService graphRagSearchService = new CapturingGraphRagSearchService(List.of(evidence));
+        GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
+            graphRagSearchService,
+            new StaticDocumentKnowledgeService(),
+            new ChatRagProperties(),
+            new DocumentRetrieveRequestFactory()
+        );
+        ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+            .selectedDocumentId(100L)
+            .selectedTaskId(900L)
+            .historyPlanningContext(HistoryPlanningContext.builder()
+                .queryContextHints(List.of("审计系统", "AuditTrail", "权限审批"))
+                .build())
+            .build();
+
+        RetrievalChannelResult result = channel.retrieve("这个相关部门是谁？", plan);
+
+        assertThat(graphRagSearchService.question).contains("这个相关部门是谁？", "审计系统", "AuditTrail", "权限审批");
+        assertThat(graphRagSearchService.documentIds).containsExactly(100L);
+        assertThat(graphRagSearchService.taskIds).containsExactly(900L);
+        assertThat(result.getDocuments()).hasSize(1);
+        assertThat(result.getDocuments().get(0).getText())
+            .contains("用户问题：这个相关部门是谁？")
+            .doesNotContain("用户问题：这个相关部门是谁？ 审计系统 AuditTrail 权限审批");
+    }
+
     private record StaticGraphRagSearchService(List<GraphRagSearchResult> results) implements GraphRagSearchService {
 
         @Override
@@ -122,6 +168,33 @@ class GraphRagRetrievalChannelTest {
                                                  List<Long> taskIds,
                                                  int topK,
                                                  int maxHops) {
+            return results;
+        }
+    }
+
+    private static class CapturingGraphRagSearchService implements GraphRagSearchService {
+
+        private final List<GraphRagSearchResult> results;
+
+        private String question;
+
+        private List<Long> documentIds;
+
+        private List<Long> taskIds;
+
+        private CapturingGraphRagSearchService(List<GraphRagSearchResult> results) {
+            this.results = results;
+        }
+
+        @Override
+        public List<GraphRagSearchResult> search(String question,
+                                                 List<Long> documentIds,
+                                                 List<Long> taskIds,
+                                                 int topK,
+                                                 int maxHops) {
+            this.question = question;
+            this.documentIds = documentIds;
+            this.taskIds = taskIds;
             return results;
         }
     }

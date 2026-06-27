@@ -3,6 +3,8 @@ package org.javaup.ai.chatagent.rag.retrieve.channel;
 import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.service.DocumentRetrieveRequestFactory;
+import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.model.graph.GraphRagSearchResult;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
@@ -30,13 +32,16 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
     private final GraphRagSearchService graphRagSearchService;
     private final DocumentKnowledgeService documentKnowledgeService;
     private final ChatRagProperties properties;
+    private final DocumentRetrieveRequestFactory documentRetrieveRequestFactory;
 
     public GraphRagRetrievalChannel(GraphRagSearchService graphRagSearchService,
                                     DocumentKnowledgeService documentKnowledgeService,
-                                    ChatRagProperties properties) {
+                                    ChatRagProperties properties,
+                                    DocumentRetrieveRequestFactory documentRetrieveRequestFactory) {
         this.graphRagSearchService = graphRagSearchService;
         this.documentKnowledgeService = documentKnowledgeService;
         this.properties = properties;
+        this.documentRetrieveRequestFactory = documentRetrieveRequestFactory;
     }
 
     @Override
@@ -53,10 +58,11 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
 
     @Override
     public RetrievalChannelResult retrieve(String subQuestion, ConversationExecutionPlan plan) {
+        DocumentRetrieveRequest request = documentRetrieveRequestFactory.build(subQuestion, plan, properties.getGraphRagTopK());
         List<GraphRagSearchResult> results = graphRagSearchService.search(
-            subQuestion,
-            resolvedDocumentIds(plan),
-            resolvedTaskIds(plan),
+            StrUtil.blankToDefault(request.getRetrievalQuery(), subQuestion),
+            request.resolvedDocumentIds(),
+            request.resolvedTaskIds(),
             properties.getGraphRagTopK(),
             properties.getGraphRagMaxHops()
         );
