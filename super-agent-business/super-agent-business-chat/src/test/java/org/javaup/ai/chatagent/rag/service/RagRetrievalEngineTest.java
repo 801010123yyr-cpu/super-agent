@@ -503,6 +503,279 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void weightedHybridBoostsQueryPlannedGraphRagEvidenceByKgMetadata() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(0D);
+        properties.getHybrid().setMetadataBoostWeight(1D);
+
+        LinkedHashMap<String, Object> plannedMetadata = new LinkedHashMap<>();
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.60D);
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 2001L);
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "审计系统");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->APPROVES->ORG:信息安全部");
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.90D);
+        plannedMetadata.put(DocumentKnowledgeMetadataKeys.KG_RANK_BOOST, 0.70D);
+        Document plannedGraphDoc = Document.builder()
+            .id("graph-planned")
+            .text("GraphRAG: 权限申请 APPROVES 信息安全部。")
+            .metadata(plannedMetadata)
+            .score(0.60D)
+            .build();
+
+        LinkedHashMap<String, Object> plainMetadata = new LinkedHashMap<>();
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.60D);
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 1001L);
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "AuditTrail");
+        plainMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "AuditTrail");
+        Document plainGraphDoc = Document.builder()
+            .id("graph-plain")
+            .text("GraphRAG: AuditTrail。")
+            .metadata(plainMetadata)
+            .score(0.60D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(plainGraphDoc, plannedGraphDoc))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GRAPH_RAG)
+                .retrievalQuestion("审计系统相关的权限审批部门是谁？")
+                .retrievalSubQuestions(List.of("审计系统相关的权限审批部门是谁？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).containsExactly("graph-planned", "graph-plain");
+            double plannedBoost = ((Number) documents.get(0).getMetadata()
+                .get(DocumentKnowledgeMetadataKeys.METADATA_BOOST)).doubleValue();
+            double plainBoost = ((Number) documents.get(1).getMetadata()
+                .get(DocumentKnowledgeMetadataKeys.METADATA_BOOST)).doubleValue();
+            assertThat(plannedBoost).isGreaterThan(plainBoost);
+            assertThat(documents.get(0).getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalEvidenceBudgetReservesCrossDocumentCommunityEvidenceForCommunityReportQuestion() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document vectorHigh = document("vector-high", "普通原文证据一，描述审计系统背景。", 0.99D);
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.VECTOR.getName());
+        Document keywordHigh = document("keyword-high", "普通原文证据二，描述跨文档图谱背景。", 0.98D);
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.KEYWORD.getName());
+
+        LinkedHashMap<String, Object> communityMetadata = new LinkedHashMap<>();
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.58D);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "O6跨文档图谱-审计证据规范A.md");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 2);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "跨文档社区：审计系统 / 权限申请 / 权限审批");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, "跨文档图谱社区：审计系统 / 权限申请 / 权限审批");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, "社区报告覆盖审计系统、权限申请、权限审批和留痕证据。");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 6);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 1.0D);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "crossDocument,groundedEvidence,memberQuality");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_PAGERANK, 0.08D);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RANK_POSITION, 1);
+        Document communityDoc = Document.builder()
+            .id("graph-community")
+            .text("GraphRAG: 跨文档图谱社区报告，覆盖审计系统权限留痕证据。")
+            .metadata(communityMetadata)
+            .score(0.58D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(3);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(
+                    new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(keywordHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(communityDoc))
+                ),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.RAPTOR)
+                .retrievalQuestion("审计系统相关的跨文档图谱社区总结是什么？")
+                .retrievalSubQuestions(List.of("审计系统相关的跨文档图谱社区总结是什么？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).hasSize(2);
+            assertThat(documents)
+                .extracting(Document::getId)
+                .contains("graph-community");
+            Document reservedCommunityDocument = documents.stream()
+                .filter(document -> "graph-community".equals(document.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(reservedCommunityDocument.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 1.0D);
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note)
+                    .contains("GraphRAG canonical 观测")
+                    .contains("community=跨文档图谱社区：审计系统 / 权限申请 / 权限审批")
+                    .contains("relationGroups=5")
+                    .contains("docs=2"));
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .anySatisfy(reference -> {
+                    assertThat(reference.getKgCrossDocumentCommunityKey()).isEqualTo("xdoc-community:concept审计系统");
+                    assertThat(reference.getKgCrossDocumentCommunityDocumentCount()).isEqualTo(2);
+                    assertThat(reference.getKgRelationGroupKey()).isEqualTo("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+                    assertThat(reference.getKgQualityScore()).isEqualTo(1.0D);
+                });
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void hybridCandidateBudgetReservesCrossDocumentCommunityEvidenceForCommunityReportQuestion() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(2);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document vectorHigh = document("vector-high", "普通原文证据一，描述审计系统背景。", 0.99D);
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.VECTOR.getName());
+        Document keywordHigh = document("keyword-high", "普通原文证据二，描述跨文档图谱背景。", 0.98D);
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.KEYWORD.getName());
+
+        LinkedHashMap<String, Object> communityMetadata = new LinkedHashMap<>();
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.40D);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "O6跨文档图谱-审计证据规范A.md");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, 1);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "跨文档社区：审计系统 / 权限申请 / 权限审批");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, "跨文档图谱社区：审计系统 / 权限申请 / 权限审批");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, "社区报告覆盖审计系统、权限申请、权限审批和留痕证据。");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统");
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, 6);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 5);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 1.0D);
+        communityMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS, "crossDocument,groundedEvidence,memberQuality");
+        Document communityDoc = Document.builder()
+            .id("graph-community")
+            .text("GraphRAG: 跨文档图谱社区报告，覆盖审计系统权限留痕证据。")
+            .metadata(communityMetadata)
+            .score(0.40D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(3);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(
+                    new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(keywordHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(communityDoc))
+                ),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.RAPTOR)
+                .retrievalQuestion("审计系统相关的跨文档图谱社区总结是什么？")
+                .retrievalSubQuestions(List.of("审计系统相关的跨文档图谱社区总结是什么？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).hasSize(2);
+            assertThat(documents)
+                .extracting(Document::getId)
+                .contains("graph-community");
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .anySatisfy(reference -> {
+                    assertThat(reference.getKgCrossDocumentCommunityKey()).isEqualTo("xdoc-community:concept审计系统");
+                    assertThat(reference.getKgCrossDocumentCommunityDocumentCount()).isEqualTo(2);
+                    assertThat(reference.getKgRelationGroupKey()).isEqualTo("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请");
+                    assertThat(reference.getKgQualityScore()).isEqualTo(1.0D);
+                });
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note)
+                    .contains("GraphRAG canonical 观测")
+                    .contains("community=跨文档图谱社区：审计系统 / 权限申请 / 权限审批"));
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);

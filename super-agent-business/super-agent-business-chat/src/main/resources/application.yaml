@@ -161,6 +161,10 @@ app:
       # 是否启用“当前文档问答”的前置编排。
       # 开启后，系统会在进入最终执行器之前，先做历史加载、问题改写和文档检索规划。
       enabled: true
+      # 控制单个通道，比如 GraphRAG 通道。
+      channel-timeout-ms: 12000
+      # 控制一个子问题整体检索，必须大于单通道超时
+      sub-question-timeout-ms: 40000
       # 是否启用问题改写与子问题拆分。
       rewrite-enabled: true
       # 改写阶段最多回看多少轮历史。

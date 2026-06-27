@@ -160,6 +160,85 @@ class GraphRagRetrievalChannelTest {
             .doesNotContain("用户问题：这个相关部门是谁？ 审计系统 AuditTrail 权限审批");
     }
 
+    @Test
+    void communityReportCandidateKeepsIndependentIdWhenItSharesEvidenceWithRelationCandidate() {
+        GraphRagSearchResult communityReport = GraphRagSearchResult.builder()
+            .documentId(100L)
+            .taskId(900L)
+            .chunkId(700L)
+            .parentBlockId(800L)
+            .evidenceId(400L)
+            .quoteText("AuditTrail 需记录权限申请、权限审批、权限回收和临时权限延长。")
+            .sectionPath("二、审计记录要求")
+            .graphPath("跨文档社区：审计系统 / 权限申请 / 权限审批")
+            .communityTitle("跨文档图谱社区：审计系统 / 权限申请 / 权限审批")
+            .communitySummary("社区报告覆盖审计系统、权限申请、权限审批和留痕证据。")
+            .crossDocumentCommunityKey("xdoc-community:concept审计系统")
+            .crossDocumentCommunityEntityCount(6)
+            .crossDocumentCommunityRelationGroupCount(5)
+            .crossDocumentCommunityEvidenceCount(5)
+            .crossDocumentCommunityDocumentCount(2)
+            .relationGroupKey("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请")
+            .kgQualityScore(0.92D)
+            .score(1.20D)
+            .build();
+        GraphRagSearchResult relationEvidence = GraphRagSearchResult.builder()
+            .documentId(100L)
+            .taskId(900L)
+            .chunkId(700L)
+            .parentBlockId(800L)
+            .entityId(200L)
+            .entityName("AuditTrail")
+            .relationId(300L)
+            .relationType("RECORDS")
+            .relatedEntityId(201L)
+            .relatedEntityName("权限申请")
+            .evidenceId(400L)
+            .quoteText("AuditTrail 需记录权限申请、权限审批、权限回收和临时权限延长。")
+            .sectionPath("二、审计记录要求")
+            .graphPath("一跳：AuditTrail --RECORDS--> 权限申请")
+            .relationGroupKey("CONCEPT:审计系统->RECORDS->CONCEPT:权限申请")
+            .crossDocumentCommunityKey("xdoc-community:concept审计系统")
+            .crossDocumentCommunityEntityCount(6)
+            .crossDocumentCommunityRelationGroupCount(5)
+            .crossDocumentCommunityEvidenceCount(5)
+            .crossDocumentCommunityDocumentCount(2)
+            .kgQualityScore(0.91D)
+            .score(1.10D)
+            .build();
+        GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
+            new StaticGraphRagSearchService(List.of(communityReport, relationEvidence)),
+            new StaticDocumentKnowledgeService(),
+            new ChatRagProperties(),
+            new DocumentRetrieveRequestFactory()
+        );
+
+        RetrievalChannelResult result = channel.retrieve(
+            "审计系统相关的跨文档图谱社区总结是什么？",
+            ConversationExecutionPlan.builder().selectedDocumentId(100L).selectedTaskId(900L).build()
+        );
+
+        assertThat(result.getDocuments()).hasSize(2);
+        assertThat(result.getDocuments())
+            .extracting(Document::getId)
+            .containsExactly(
+                "graphrag-xcommunity-xdoc-community-concept-evidence-400",
+                "graphrag-400"
+            );
+        Document communityDocument = result.getDocuments().get(0);
+        assertThat(communityDocument.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, "xdoc-community:concept审计系统")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, "跨文档图谱社区：审计系统 / 权限申请 / 权限审批")
+            .doesNotContainKey(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
+        assertThat(communityDocument.getText())
+            .contains("图谱路径：跨文档社区：审计系统 / 权限申请 / 权限审批")
+            .contains("社区报告：社区报告覆盖审计系统、权限申请、权限审批和留痕证据。")
+            .contains("跨文档社区：2 份文档 / 5 个关系组 / 5 条证据支撑");
+        assertThat(result.getDocuments().get(1).getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 300L)
+            .containsEntry(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 800L);
+    }
+
     private record StaticGraphRagSearchService(List<GraphRagSearchResult> results) implements GraphRagSearchService {
 
         @Override

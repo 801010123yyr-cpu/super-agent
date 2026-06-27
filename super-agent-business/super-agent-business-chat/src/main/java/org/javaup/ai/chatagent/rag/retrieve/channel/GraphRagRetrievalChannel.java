@@ -87,7 +87,9 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID, result.getDocumentId());
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, documentName);
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());
-        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
+        if (!isCommunityReportResult(result)) {
+            putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
+        }
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.CHUNK_ID, result.getChunkId());
         metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, StrUtil.blankToDefault(result.getSectionPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, result.getPageNo());
@@ -262,6 +264,14 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
     }
 
     private String documentId(GraphRagSearchResult result) {
+        if (isCommunityReportResult(result)) {
+            if (StrUtil.isNotBlank(result.getCrossDocumentCommunityKey())) {
+                return "graphrag-xcommunity-" + stableIdPart(result.getCrossDocumentCommunityKey()) + "-evidence-" + result.getEvidenceId();
+            }
+            if (result.getCommunityId() != null) {
+                return "graphrag-community-" + result.getCommunityId() + "-evidence-" + result.getEvidenceId();
+            }
+        }
         if (result.getEvidenceId() != null) {
             return "graphrag-" + result.getEvidenceId();
         }
@@ -272,5 +282,26 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
             return "graphrag-entity-" + result.getEntityId();
         }
         return "graphrag-" + Integer.toHexString(System.identityHashCode(result));
+    }
+
+    private boolean isCommunityReportResult(GraphRagSearchResult result) {
+        if (result == null || result.getRelationId() != null || result.getEntityId() != null) {
+            return false;
+        }
+        return result.getCommunityId() != null
+            || StrUtil.isNotBlank(result.getCrossDocumentCommunityKey())
+            || StrUtil.isNotBlank(result.getCommunityTitle())
+            || StrUtil.isNotBlank(result.getCommunitySummary());
+    }
+
+    private String stableIdPart(String value) {
+        String normalized = StrUtil.blankToDefault(value, "")
+            .replaceAll("[^A-Za-z0-9._-]+", "-")
+            .replaceAll("-{2,}", "-")
+            .replaceAll("^-+|-+$", "");
+        if (StrUtil.isBlank(normalized)) {
+            return Integer.toHexString(value.hashCode());
+        }
+        return normalized.length() <= 80 ? normalized : normalized.substring(0, 80);
     }
 }

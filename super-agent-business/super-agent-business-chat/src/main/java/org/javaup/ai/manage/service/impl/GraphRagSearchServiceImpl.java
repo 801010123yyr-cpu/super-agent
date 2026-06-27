@@ -225,9 +225,11 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         Set<Long> frontierEntityIds = seedEntities.stream()
             .map(item -> item.entity().getId())
             .collect(Collectors.toCollection(LinkedHashSet::new));
-        frontierEntityIds.addAll(seedRelations.stream()
-            .flatMap(item -> relatedEntityIds(List.of(item.relation())).stream())
-            .collect(Collectors.toCollection(LinkedHashSet::new)));
+        if (frontierEntityIds.isEmpty()) {
+            frontierEntityIds.addAll(seedRelations.stream()
+                .flatMap(item -> relatedEntityIds(List.of(item.relation())).stream())
+                .collect(Collectors.toCollection(LinkedHashSet::new)));
+        }
         frontierEntityIds.addAll(seedScoreMap.keySet());
         frontierEntityIds = expandCanonicalEntityIds(frontierEntityIds, crossDocumentIndex);
 
@@ -242,10 +244,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         });
         List<SuperAgentKgRelation> oneHopRelations = listRelations(documentIds, taskIds, frontierEntityIds);
         oneHopRelations.forEach(relation -> {
-            relationMap.put(relation.getId(), relation);
-            relationHopMap.putIfAbsent(relation.getId(), 1);
-            relationTraceMap.putIfAbsent(relation.getId(),
-                relationTrace(relation, entityMap, seedTraceMap, 1, effectiveQueryProfile.sourceText()));
+            RelationTrace trace = relationTrace(relation, entityMap, seedTraceMap, 1, effectiveQueryProfile.sourceText());
+            mergeExpandedRelationTrace(relationMap, relationHopMap, relationTraceMap, relation, 1, trace, effectiveQueryProfile);
         });
 
         if (Math.max(effectiveQueryProfile.maxHops(), 1) >= 2 && !oneHopRelations.isEmpty()) {
@@ -255,10 +255,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             if (!neighborEntityIds.isEmpty()) {
                 listRelations(documentIds, taskIds, neighborEntityIds)
                     .forEach(relation -> {
-                        relationMap.putIfAbsent(relation.getId(), relation);
-                        relationHopMap.putIfAbsent(relation.getId(), 2);
-                        relationTraceMap.putIfAbsent(relation.getId(),
-                            relationTrace(relation, entityMap, neighborTraceMap, 2, effectiveQueryProfile.sourceText()));
+                        RelationTrace trace = relationTrace(relation, entityMap, neighborTraceMap, 2, effectiveQueryProfile.sourceText());
+                        mergeExpandedRelationTrace(relationMap, relationHopMap, relationTraceMap, relation, 2, trace, effectiveQueryProfile);
                     });
             }
         }
@@ -392,7 +390,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 continue;
             }
             double rankBoost = communityRankBoost(community);
-            results.add(baseResult(representativeEvidence)
+            GraphRagSearchResult.GraphRagSearchResultBuilder builder = baseResult(representativeEvidence)
                 .communityId(community.getId())
                 .communityTitle(community.getTitle())
                 .communitySummary(community.getSummary())
@@ -403,8 +401,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .rankBoost(rankBoost)
                 .score(scoredCommunity.score()
                     + graphRankScore(rankBoost)
-                    + evidenceBoost(representativeEvidence.getQuoteText(), terms))
-                .build());
+                    + evidenceBoost(representativeEvidence.getQuoteText(), terms));
+            results.add(withQueryProfile(builder, queryProfile).build());
         }
         return results;
     }
@@ -444,36 +442,129 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             }
         }
 
+        Map<Long, List<RelationGroup>> relationGroupsByEvidenceId = relationGroupsByEvidenceId(index);
         List<GraphRagSearchResult> results = new ArrayList<>();
         for (ScoredCrossDocumentCommunity scoredCommunity : scoredCommunities) {
             CrossDocumentCommunity community = scoredCommunity.community();
-            SuperAgentKgEvidence representativeEvidence = community.evidenceIds().stream()
-                .map(evidenceMap::get)
-                .filter(Objects::nonNull)
-                .filter(this::isGraphEvidenceUsable)
-                .findFirst()
-                .orElse(null);
+            RepresentativeCommunityEvidence representative = selectRepresentativeCommunityEvidence(
+                community,
+                evidenceMap,
+                relationGroupsByEvidenceId,
+                terms,
+                queryProfile
+            );
+            SuperAgentKgEvidence representativeEvidence = representative == null ? null : representative.evidence();
             if (representativeEvidence == null) {
                 continue;
             }
             double rankBoost = community.rankProfile() == null ? 0D : community.rankProfile().rankBoost();
+            GraphRagSearchResult.GraphRagSearchResultBuilder builder = baseResult(representativeEvidence)
+                .communityId(community.id())
+                .communityTitle(community.title())
+                .communitySummary(community.summary())
+                .evidenceId(representativeEvidence.getId())
+                .quoteText(representativeEvidence.getQuoteText())
+                .graphPath("跨文档社区：" + StrUtil.blankToDefault(community.title(), community.key()))
+                .hopCount(0)
+                .rankBoost(rankBoost)
+                .score(scoredCommunity.score()
+                    + graphRankScore(rankBoost)
+                    + representative.score());
+            builder = withQueryProfile(builder, queryProfile);
+            RelationGroup representativeGroup = representative.relationGroup();
             results.add(withCrossDocumentCommunity(
-                    baseResult(representativeEvidence)
-                        .communityId(community.id())
-                        .communityTitle(community.title())
-                        .communitySummary(community.summary())
-                        .evidenceId(representativeEvidence.getId())
-                        .quoteText(representativeEvidence.getQuoteText())
-                        .graphPath("跨文档社区：" + StrUtil.blankToDefault(community.title(), community.key()))
-                        .hopCount(0)
-                        .rankBoost(rankBoost)
-                        .score(scoredCommunity.score()
-                            + graphRankScore(rankBoost)
-                            + evidenceBoost(representativeEvidence.getQuoteText(), terms)),
+                    withRelationGroup(builder, representativeGroup),
                     community
                 ).build());
         }
         return results;
+    }
+
+    private Map<Long, List<RelationGroup>> relationGroupsByEvidenceId(GraphRagCrossDocumentIndex index) {
+        if (index == null || !index.hasRelationGroups()) {
+            return Map.of();
+        }
+        Map<Long, List<RelationGroup>> result = new LinkedHashMap<>();
+        for (RelationGroup group : index.distinctRelationGroups().values()) {
+            if (group == null || CollUtil.isEmpty(group.evidenceIds())) {
+                continue;
+            }
+            for (Long evidenceId : group.evidenceIds()) {
+                if (evidenceId != null) {
+                    result.computeIfAbsent(evidenceId, ignored -> new ArrayList<>()).add(group);
+                }
+            }
+        }
+        return result;
+    }
+
+    private RepresentativeCommunityEvidence selectRepresentativeCommunityEvidence(CrossDocumentCommunity community,
+                                                                                 Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                                                                 Map<Long, List<RelationGroup>> relationGroupsByEvidenceId,
+                                                                                 List<String> terms,
+                                                                                 QueryProfile queryProfile) {
+        if (community == null || CollUtil.isEmpty(community.evidenceIds()) || evidenceMap == null || evidenceMap.isEmpty()) {
+            return null;
+        }
+        Set<String> communityRelationGroupKeys = community.relationGroupKeys() == null
+            ? Set.of()
+            : community.relationGroupKeys();
+        List<RepresentativeCommunityEvidence> candidates = new ArrayList<>();
+        for (Long evidenceId : community.evidenceIds()) {
+            SuperAgentKgEvidence evidence = evidenceMap.get(evidenceId);
+            if (evidence == null || !isGraphEvidenceUsable(evidence)) {
+                continue;
+            }
+            List<RelationGroup> relationGroups = relationGroupsByEvidenceId == null
+                ? List.of()
+                : relationGroupsByEvidenceId.getOrDefault(evidence.getId(), List.of()).stream()
+                    .filter(group -> group != null
+                        && (communityRelationGroupKeys.isEmpty() || communityRelationGroupKeys.contains(group.key())))
+                    .toList();
+            if (relationGroups.isEmpty()) {
+                candidates.add(new RepresentativeCommunityEvidence(
+                    evidence,
+                    null,
+                    representativeCommunityEvidenceScore(evidence, null, terms, queryProfile)
+                ));
+                continue;
+            }
+            for (RelationGroup relationGroup : relationGroups) {
+                candidates.add(new RepresentativeCommunityEvidence(
+                    evidence,
+                    relationGroup,
+                    representativeCommunityEvidenceScore(evidence, relationGroup, terms, queryProfile)
+                ));
+            }
+        }
+        return candidates.stream()
+            .max(Comparator.comparingDouble(RepresentativeCommunityEvidence::score))
+            .orElse(null);
+    }
+
+    private double representativeCommunityEvidenceScore(SuperAgentKgEvidence evidence,
+                                                        RelationGroup relationGroup,
+                                                        List<String> terms,
+                                                        QueryProfile queryProfile) {
+        if (evidence == null) {
+            return 0D;
+        }
+        double score = 0.18D + evidenceBoost(evidence.getQuoteText(), terms);
+        if (relationGroup != null) {
+            double qualityScore = relationGroup.qualityProfile() == null ? 0D : relationGroup.qualityProfile().score();
+            score += Math.min(0.28D, qualityScore * 0.28D);
+            double rankBoost = relationGroup.rankProfile() == null ? 0D : relationGroup.rankProfile().rankBoost();
+            score += Math.min(0.16D, rankBoost * 0.16D);
+            if (relationGroup.documentCount() > 1) {
+                score += 0.08D;
+            }
+            if (relationGroup.evidenceCount() > 1) {
+                score += Math.min(0.08D, relationGroup.evidenceCount() * 0.02D);
+            }
+            score += relationGroupQueryBoost(relationGroup, queryProfile);
+            score -= relationGroupWeakSemanticPenalty(relationGroup, queryProfile);
+        }
+        return Math.max(0D, score);
     }
 
     private Map<Long, SuperAgentKgEvidence> safeEvidenceMap(List<SuperAgentKgEvidence> evidences) {
@@ -634,11 +725,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             double rankBoost = relationRankBoost(relation, source, target);
             RelationGroup relationGroup = crossDocumentIndex == null ? null : crossDocumentIndex.relationGroupOf(relation.getId());
             double groupBoost = relationGroupBoost(relationGroup);
+            double groupQueryBoost = relationGroupQueryBoost(relationGroup, queryProfile);
             double score = seedScore
                 + relationWeight(relation.getWeight())
                 + graphRankScore(rankBoost)
                 + evidenceBoost(evidence.getQuoteText(), terms)
                 + groupBoost
+                + groupQueryBoost
                 + answerTypeRelationBoost(relation, source, target, queryProfile, hopCount)
                 - weakSemanticRelationPenalty(relation, queryProfile)
                 - hopPenalty;
@@ -736,12 +829,22 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         }
         String relationType = normalizedRelationType(relation);
         if (ANSWER_ACTION_RELATION_TYPES.contains(relationType)) {
-            return hopCount > 1 ? 0.46D : 0.36D;
+            double boost = hopCount > 1 ? 0.46D : 0.36D;
+            if (queryProfile.relationTypes().contains(relationType)
+                || queryProfile.relationIds().contains(relation.getId())) {
+                boost += 0.12D;
+            }
+            return boost;
         }
         if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)) {
             return queryProfile.relationTypes().contains(relationType) ? 0.12D : 0.03D;
         }
-        return hopCount > 1 ? 0.24D : 0.18D;
+        double boost = hopCount > 1 ? 0.24D : 0.18D;
+        if (queryProfile.relationTypes().contains(relationType)
+            || queryProfile.relationIds().contains(relation.getId())) {
+            boost += 0.08D;
+        }
+        return boost;
     }
 
     private double weakSemanticRelationPenalty(SuperAgentKgRelation relation,
@@ -797,6 +900,68 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
 
     private double relationGroupBoost(RelationGroup group) {
         return crossDocumentIndexSupport.relationGroupBoost(group);
+    }
+
+    private double relationGroupQueryBoost(RelationGroup group, QueryProfile queryProfile) {
+        if (group == null || queryProfile == null) {
+            return 0D;
+        }
+        double boost = 0D;
+        String relationType = StrUtil.blankToDefault(group.relationType(), "ASSOCIATED_WITH")
+            .trim()
+            .toUpperCase(Locale.ROOT);
+        if (queryProfile.relationTypes().contains(relationType)) {
+            boost += 0.16D;
+        }
+        if (CollUtil.isNotEmpty(group.relationIds())
+            && group.relationIds().stream().anyMatch(queryProfile.relationIds()::contains)) {
+            boost += 0.20D;
+        }
+        if (relationGroupEndpointMatchesAnswerType(group, queryProfile)) {
+            boost += ANSWER_ACTION_RELATION_TYPES.contains(relationType) ? 0.18D : 0.10D;
+        }
+        if (queryProfile.communityQuestion()) {
+            boost += Math.min(0.12D, group.documentCount() * 0.03D + group.evidenceCount() * 0.01D);
+        }
+        return Math.min(0.36D, boost);
+    }
+
+    private double relationGroupWeakSemanticPenalty(RelationGroup group, QueryProfile queryProfile) {
+        if (group == null || queryProfile == null) {
+            return 0D;
+        }
+        String relationType = StrUtil.blankToDefault(group.relationType(), "ASSOCIATED_WITH")
+            .trim()
+            .toUpperCase(Locale.ROOT);
+        if (!WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)
+            || queryProfile.relationTypes().contains(relationType)
+            || (CollUtil.isNotEmpty(group.relationIds())
+            && group.relationIds().stream().anyMatch(queryProfile.relationIds()::contains))) {
+            return 0D;
+        }
+        return answerTypes(queryProfile).isEmpty() ? 0.08D : 0.18D;
+    }
+
+    private boolean relationGroupEndpointMatchesAnswerType(RelationGroup group, QueryProfile queryProfile) {
+        Set<String> answerTypes = answerTypes(queryProfile);
+        if (group == null || answerTypes.isEmpty()) {
+            return false;
+        }
+        return relationGroupEndpointMatchesAnswerType(group.sourceGroupKey(), answerTypes)
+            || relationGroupEndpointMatchesAnswerType(group.targetGroupKey(), answerTypes);
+    }
+
+    private boolean relationGroupEndpointMatchesAnswerType(String groupKey, Set<String> answerTypes) {
+        if (StrUtil.isBlank(groupKey) || CollUtil.isEmpty(answerTypes)) {
+            return false;
+        }
+        String normalizedGroupKey = groupKey.trim().toUpperCase(Locale.ROOT);
+        for (String answerType : answerTypes) {
+            if (StrUtil.isNotBlank(answerType) && normalizedGroupKey.startsWith(answerType + ":")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder withRelationGroup(
@@ -998,6 +1163,92 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             }
         }
         return traces;
+    }
+
+    private void mergeExpandedRelationTrace(Map<Long, SuperAgentKgRelation> relationMap,
+                                            Map<Long, Integer> relationHopMap,
+                                            Map<Long, RelationTrace> relationTraceMap,
+                                            SuperAgentKgRelation relation,
+                                            int hopCount,
+                                            RelationTrace trace,
+                                            QueryProfile queryProfile) {
+        if (relation == null || relation.getId() == null) {
+            return;
+        }
+        relationMap.put(relation.getId(), relation);
+        Integer existingHop = relationHopMap.get(relation.getId());
+        RelationTrace existingTrace = relationTraceMap.get(relation.getId());
+        if (shouldReplaceRelationTrace(relation, existingHop, existingTrace, hopCount, trace, queryProfile)) {
+            relationHopMap.put(relation.getId(), hopCount);
+            if (trace != null) {
+                relationTraceMap.put(relation.getId(), trace);
+            }
+        }
+        else {
+            relationHopMap.putIfAbsent(relation.getId(), hopCount);
+            if (trace != null) {
+                relationTraceMap.putIfAbsent(relation.getId(), trace);
+            }
+        }
+    }
+
+    private boolean shouldReplaceRelationTrace(SuperAgentKgRelation relation,
+                                               Integer existingHop,
+                                               RelationTrace existingTrace,
+                                               int candidateHop,
+                                               RelationTrace candidateTrace,
+                                               QueryProfile queryProfile) {
+        if (relation == null || relation.getId() == null || candidateTrace == null || StrUtil.isBlank(candidateTrace.path())) {
+            return false;
+        }
+        boolean candidateHasPath = candidateTrace.path().contains("--");
+        boolean existingHasPath = existingTrace != null && StrUtil.isNotBlank(existingTrace.path())
+            && existingTrace.path().contains("--");
+        if (!candidateHasPath || candidateHop <= 1) {
+            return false;
+        }
+        String relationType = normalizedRelationType(relation);
+        boolean advisorSeededRelation = queryProfile != null
+            && (queryProfile.relationTypes().contains(relationType)
+            || queryProfile.relationIds().contains(relation.getId()));
+        if (!advisorSeededRelation) {
+            return false;
+        }
+        boolean candidateSeedMatchesQuery = relationTraceSeedMatchesQuery(candidateTrace, queryProfile);
+        boolean existingSeedMatchesQuery = relationTraceSeedMatchesQuery(existingTrace, queryProfile);
+        if (candidateSeedMatchesQuery && !existingSeedMatchesQuery) {
+            return true;
+        }
+        if (existingHasPath) {
+            return false;
+        }
+        return existingHop == null || existingHop <= 0 || candidateHop > existingHop;
+    }
+
+    private boolean relationTraceSeedMatchesQuery(RelationTrace trace, QueryProfile queryProfile) {
+        if (trace == null || queryProfile == null) {
+            return false;
+        }
+        if (trace.seedEntityId() != null && queryProfile.entityIds().contains(trace.seedEntityId())) {
+            return true;
+        }
+        String normalizedSeedName = normalize(trace.seedEntityName());
+        if (StrUtil.isBlank(normalizedSeedName)) {
+            return false;
+        }
+        if (queryProfile.entityNames().contains(normalizedSeedName)
+            || queryProfile.entitiesFromQuery().contains(normalizedSeedName)) {
+            return true;
+        }
+        for (String queryEntity : queryProfile.entitiesFromQuery()) {
+            String normalizedQueryEntity = normalize(queryEntity);
+            if (normalizedQueryEntity.length() >= 2
+                && (normalizedSeedName.contains(normalizedQueryEntity)
+                || normalizedQueryEntity.contains(normalizedSeedName))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private RelationTrace relationTrace(SuperAgentKgRelation relation,
@@ -1858,6 +2109,11 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private record ScoredCrossDocumentCommunity(CrossDocumentCommunity community, double score) {
+    }
+
+    private record RepresentativeCommunityEvidence(SuperAgentKgEvidence evidence,
+                                                   RelationGroup relationGroup,
+                                                   double score) {
     }
 
     private record EntityTrace(Long seedEntityId, String seedEntityName, String path) {
