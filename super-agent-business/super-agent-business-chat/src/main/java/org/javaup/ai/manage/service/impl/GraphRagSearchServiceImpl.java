@@ -57,6 +57,21 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     private static final int CATALOG_COMMUNITY_LIMIT = 40;
     private static final String JAVA_QUERY_PROFILE_SOURCE = "java.graph_query_profile.v2";
     private static final String ADVISOR_QUERY_PROFILE_SOURCE = "llm.controlled.query_plan.v1";
+    private static final Set<String> ANSWER_ACTION_RELATION_TYPES = Set.of(
+        "APPROVES",
+        "RESPONSIBLE_FOR",
+        "EXECUTES",
+        "REVOKES",
+        "OWNS",
+        "MANAGES",
+        "OPERATES",
+        "MAINTAINS"
+    );
+    private static final Set<String> WEAK_SEMANTIC_RELATION_TYPES = Set.of(
+        "RECORDS",
+        "ASSOCIATED_WITH",
+        "RELATED_TO"
+    );
     private final SuperAgentKgEntityMapper entityMapper;
 
     private final SuperAgentKgRelationMapper relationMapper;
@@ -614,7 +629,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             seedScore = Math.max(seedScore, seedScoreMap.getOrDefault(seed.getId(), 0.25D));
             seedScore = Math.max(seedScore, relationSeedScoreMap.getOrDefault(relation.getId(), 0D));
             int hopCount = relationHopMap.getOrDefault(relation.getId(), 1);
-            double hopPenalty = hopCount <= 1 ? 0D : 0.18D;
+            seedScore = Math.max(seedScore, nHopSeedScore(relationTrace, seedScoreMap, hopCount));
+            double hopPenalty = hopPenalty(relation, source, target, queryProfile, hopCount);
             double rankBoost = relationRankBoost(relation, source, target);
             RelationGroup relationGroup = crossDocumentIndex == null ? null : crossDocumentIndex.relationGroupOf(relation.getId());
             double groupBoost = relationGroupBoost(relationGroup);
@@ -623,6 +639,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 + graphRankScore(rankBoost)
                 + evidenceBoost(evidence.getQuoteText(), terms)
                 + groupBoost
+                + answerTypeRelationBoost(relation, source, target, queryProfile, hopCount)
+                - weakSemanticRelationPenalty(relation, queryProfile)
                 - hopPenalty;
             String graphPath = graphPath(relation, source, target, relationTrace, hopCount);
             GraphRagSearchResult.GraphRagSearchResultBuilder builder = baseResult(evidence)
@@ -670,6 +688,99 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return withCanonicalEntity(builder, entity, crossDocumentIndex).build();
         }
         return null;
+    }
+
+    private double nHopSeedScore(RelationTrace relationTrace,
+                                 Map<Long, Double> seedScoreMap,
+                                 int hopCount) {
+        if (relationTrace == null || relationTrace.seedEntityId() == null || seedScoreMap == null || seedScoreMap.isEmpty()) {
+            return 0D;
+        }
+        double seedScore = seedScoreMap.getOrDefault(relationTrace.seedEntityId(), 0D);
+        if (seedScore <= 0D) {
+            return 0D;
+        }
+        if (hopCount <= 1) {
+            return seedScore;
+        }
+        return seedScore * Math.max(0.45D, 1.0D - (hopCount - 1) * 0.15D);
+    }
+
+    private double hopPenalty(SuperAgentKgRelation relation,
+                              SuperAgentKgEntity source,
+                              SuperAgentKgEntity target,
+                              QueryProfile queryProfile,
+                              int hopCount) {
+        if (hopCount <= 1) {
+            return 0D;
+        }
+        String relationType = normalizedRelationType(relation);
+        double penalty = 0.18D + Math.max(0, hopCount - 2) * 0.08D;
+        if (hasAnswerTypeEndpointMatch(source, target, queryProfile) && ANSWER_ACTION_RELATION_TYPES.contains(relationType)) {
+            penalty -= 0.14D;
+        }
+        if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)
+            && !queryProfile.relationTypes().contains(relationType)) {
+            penalty += 0.06D;
+        }
+        return Math.max(0.03D, penalty);
+    }
+
+    private double answerTypeRelationBoost(SuperAgentKgRelation relation,
+                                           SuperAgentKgEntity source,
+                                           SuperAgentKgEntity target,
+                                           QueryProfile queryProfile,
+                                           int hopCount) {
+        if (!hasAnswerTypeEndpointMatch(source, target, queryProfile)) {
+            return 0D;
+        }
+        String relationType = normalizedRelationType(relation);
+        if (ANSWER_ACTION_RELATION_TYPES.contains(relationType)) {
+            return hopCount > 1 ? 0.46D : 0.36D;
+        }
+        if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)) {
+            return queryProfile.relationTypes().contains(relationType) ? 0.12D : 0.03D;
+        }
+        return hopCount > 1 ? 0.24D : 0.18D;
+    }
+
+    private double weakSemanticRelationPenalty(SuperAgentKgRelation relation,
+                                               QueryProfile queryProfile) {
+        String relationType = normalizedRelationType(relation);
+        if (!WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)
+            || answerTypes(queryProfile).isEmpty()
+            || queryProfile.relationTypes().contains(relationType)
+            || queryProfile.relationIds().contains(relation.getId())) {
+            return 0D;
+        }
+        return 0.30D;
+    }
+
+    private boolean hasAnswerTypeEndpointMatch(SuperAgentKgEntity source,
+                                               SuperAgentKgEntity target,
+                                               QueryProfile queryProfile) {
+        Set<String> answerTypes = answerTypes(queryProfile);
+        if (answerTypes.isEmpty()) {
+            return false;
+        }
+        return answerTypes.contains(canonicalEntityType(source))
+            || answerTypes.contains(canonicalEntityType(target));
+    }
+
+    private Set<String> answerTypes(QueryProfile queryProfile) {
+        if (queryProfile == null) {
+            return Set.of();
+        }
+        if (CollUtil.isNotEmpty(queryProfile.answerTypeKeywords())) {
+            return queryProfile.answerTypeKeywords();
+        }
+        return queryProfile.entityTypes();
+    }
+
+    private String normalizedRelationType(SuperAgentKgRelation relation) {
+        return StrUtil.blankToDefault(relation == null ? null : relation.getRelationType(), "ASSOCIATED_WITH")
+            .trim()
+            .toUpperCase(Locale.ROOT);
     }
 
     private String graphPath(SuperAgentKgRelation relation,

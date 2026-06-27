@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -49,6 +50,21 @@ import java.util.concurrent.TimeoutException;
 public class RagRetrievalEngine {
 
     private static final int RRF_K = 60;
+    private static final Set<String> GRAPH_RAG_ACTION_RELATION_TYPES = Set.of(
+        "APPROVES",
+        "RESPONSIBLE_FOR",
+        "EXECUTES",
+        "REVOKES",
+        "OWNS",
+        "MANAGES",
+        "OPERATES",
+        "MAINTAINS"
+    );
+    private static final Set<String> GRAPH_RAG_WEAK_RELATION_TYPES = Set.of(
+        "RECORDS",
+        "ASSOCIATED_WITH",
+        "RELATED_TO"
+    );
 
     private final List<RetrievalChannel> retrievalChannels;
     private final ChatRagProperties properties;
@@ -166,9 +182,7 @@ public class RagRetrievalEngine {
         );
         List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, parentCandidates, usedChannels, notes);
 
-        List<Document> finalDocuments = rerankedCandidates.stream()
-            .limit(properties.getFinalTopK())
-            .toList();
+        List<Document> finalDocuments = selectFinalDocuments(rerankedCandidates, plan);
 
         appendGraphRagCanonicalNotes(subQuestionIndex, subQuestion, finalDocuments, notes);
 
@@ -197,6 +211,62 @@ public class RagRetrievalEngine {
             parentCandidates.size(),
             rerankedCandidates.size()
         );
+    }
+
+    private List<Document> selectFinalDocuments(List<Document> rerankedCandidates, ConversationExecutionPlan plan) {
+        if (rerankedCandidates == null || rerankedCandidates.isEmpty()) {
+            return List.of();
+        }
+        int finalTopK = Math.max(properties.getFinalTopK(), 0);
+        if (finalTopK <= 0 || rerankedCandidates.size() <= finalTopK) {
+            return rerankedCandidates.stream()
+                .limit(finalTopK)
+                .toList();
+        }
+        List<Document> selected = new ArrayList<>(rerankedCandidates.stream()
+            .limit(finalTopK)
+            .toList());
+        if (selected.stream().anyMatch(document -> isGraphRagReserveCandidate(document, plan))) {
+            return selected;
+        }
+        Document graphRagReserve = rerankedCandidates.stream()
+            .skip(finalTopK)
+            .filter(document -> isGraphRagReserveCandidate(document, plan))
+            .filter(candidate -> selected.stream().noneMatch(selectedDocument -> sameDocument(selectedDocument, candidate)))
+            .max(Comparator.comparingDouble(document -> graphRagEvidenceBudgetPriority(document, plan)))
+            .orElse(null);
+        if (graphRagReserve == null) {
+            return selected;
+        }
+        int replaceIndex = weakestNonReservedEvidenceIndex(selected, plan);
+        if (replaceIndex >= 0) {
+            selected.set(replaceIndex, graphRagReserve);
+        }
+        return selected;
+    }
+
+    private boolean sameDocument(Document left, Document right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return Objects.equals(left.getId(), right.getId());
+    }
+
+    private int weakestNonReservedEvidenceIndex(List<Document> selected, ConversationExecutionPlan plan) {
+        int replaceIndex = -1;
+        double weakestScore = Double.MAX_VALUE;
+        for (int index = 0; index < selected.size(); index++) {
+            Document document = selected.get(index);
+            if (isGraphRagReserveCandidate(document, plan)) {
+                continue;
+            }
+            double score = finalDocumentScore(document);
+            if (score < weakestScore) {
+                weakestScore = score;
+                replaceIndex = index;
+            }
+        }
+        return replaceIndex >= 0 ? replaceIndex : selected.size() - 1;
     }
 
     private RetrievalChannelResult applyEvidenceGate(RetrievalChannelResult result) {
@@ -597,6 +667,70 @@ public class RagRetrievalEngine {
             return 0D;
         }
         return Math.min(0.08D, rankBoost * 0.08D);
+    }
+
+    private boolean isGraphRagReserveCandidate(Document document, ConversationExecutionPlan plan) {
+        if (document == null || document.getMetadata() == null || !isGraphRagMetadata(document.getMetadata())) {
+            return false;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        boolean hasRelationEvidence = isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID))
+            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID));
+        if (!hasRelationEvidence) {
+            return false;
+        }
+        boolean queryPlanOrNhop = isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
+        if (!queryPlanOrNhop) {
+            return false;
+        }
+        Double qualityScore = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE));
+        boolean qualityAccepted = qualityScore == null || qualityScore >= 0.55D;
+        if (!qualityAccepted) {
+            return false;
+        }
+        String relationType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE)).toUpperCase(Locale.ROOT);
+        if (GRAPH_RAG_ACTION_RELATION_TYPES.contains(relationType)) {
+            return true;
+        }
+        if (resolveRetrievalIntent(plan) == RetrievalIntent.GRAPH_RAG) {
+            return true;
+        }
+        return GRAPH_RAG_WEAK_RELATION_TYPES.contains(relationType)
+            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
+    }
+
+    private double graphRagEvidenceBudgetPriority(Document document, ConversationExecutionPlan plan) {
+        if (document == null || document.getMetadata() == null) {
+            return 0D;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        double priority = finalDocumentScore(document);
+        String relationType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE)).toUpperCase(Locale.ROOT);
+        if (GRAPH_RAG_ACTION_RELATION_TYPES.contains(relationType)) {
+            priority += 2.0D;
+        }
+        else if (GRAPH_RAG_WEAK_RELATION_TYPES.contains(relationType)) {
+            priority += 0.55D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH))) {
+            priority += 0.55D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE))) {
+            priority += 0.45D;
+        }
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))) {
+            priority += 0.35D;
+        }
+        if (resolveRetrievalIntent(plan) == RetrievalIntent.GRAPH_RAG) {
+            priority += 0.25D;
+        }
+        Double qualityScore = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE));
+        if (qualityScore != null) {
+            priority += Math.min(0.45D, Math.max(0D, qualityScore) * 0.45D);
+        }
+        return priority;
     }
 
     private Double numericMetadataValue(Object value) {

@@ -294,6 +294,9 @@ class GraphRagSearchServiceImplTest {
             2
         );
 
+        assertThat(results).isNotEmpty();
+        assertThat(results.get(0).getRelationId()).isEqualTo(2002L);
+        assertThat(results.get(0).getRelationType()).isEqualTo("APPROVES");
         GraphRagSearchResult secondHop = results.stream()
             .filter(item -> Long.valueOf(2002L).equals(item.getRelationId()))
             .findFirst()
