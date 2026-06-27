@@ -167,13 +167,30 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
                                          Set<String> relationGroupKeys,
                                          Set<Long> evidenceIds,
                                          Set<Long> documentIds,
+                                         ReportProfile reportProfile,
                                          double rankScore,
                                          QualityProfile qualityProfile,
                                          RankProfile rankProfile) {
 
         public CrossDocumentCommunity {
+            reportProfile = reportProfile == null ? ReportProfile.empty() : reportProfile;
             qualityProfile = qualityProfile == null ? QualityProfile.empty() : qualityProfile;
             rankProfile = rankProfile == null ? RankProfile.empty() : rankProfile;
+        }
+
+        public CrossDocumentCommunity(Long id,
+                                      String key,
+                                      String title,
+                                      String summary,
+                                      Set<String> canonicalGroupKeys,
+                                      Set<String> relationGroupKeys,
+                                      Set<Long> evidenceIds,
+                                      Set<Long> documentIds,
+                                      double rankScore,
+                                      QualityProfile qualityProfile,
+                                      RankProfile rankProfile) {
+            this(id, key, title, summary, canonicalGroupKeys, relationGroupKeys, evidenceIds, documentIds,
+                ReportProfile.empty(), rankScore, qualityProfile, rankProfile);
         }
 
         public int entityCount() {
@@ -190,6 +207,19 @@ public record GraphRagCrossDocumentIndex(Map<Long, CanonicalEntityGroup> canonic
 
         public int documentCount() {
             return documentIds == null ? 0 : documentIds.size();
+        }
+    }
+
+    public record ReportProfile(String strategy,
+                                List<String> coreEntityNames,
+                                List<String> keyRelationTypes,
+                                List<String> evidenceBoundaries,
+                                List<String> cannotInfer,
+                                double qualityScore,
+                                List<String> qualityReasons) {
+
+        public static ReportProfile empty() {
+            return new ReportProfile("", List.of(), List.of(), List.of(), List.of(), 0D, List.of());
         }
     }
 

@@ -19,6 +19,8 @@ import org.javaup.enums.DocumentIndexStatusEnum;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -141,12 +143,26 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
                 evidenceDoc.getTaskId()
             );
         }
+        CrossDocumentReportAssessment reportAssessment = assessCrossDocumentReport(searchResults, matched);
+        if (!reportAssessment.passed()) {
+            return crossDocumentReport(
+                suiteId,
+                name,
+                question,
+                0.78D,
+                "跨文档 GraphRAG 已命中关系证据，但 community report 质量未达标：" + reportAssessment.reason(),
+                matched,
+                evidenceDoc.getDocumentId(),
+                evidenceDoc.getTaskId()
+            );
+        }
         String summary = "跨文档 GraphRAG 已通过 canonical 扩展命中权限记录证据："
             + StrUtil.blankToDefault(matched.getGraphPath(), "未记录图谱路径")
             + "；canonical="
             + StrUtil.blankToDefault(matched.getCanonicalEntityName(), "-")
             + " entities=" + matched.getCanonicalEntityCount()
-            + " docs=" + matched.getCanonicalDocumentCount();
+            + " docs=" + matched.getCanonicalDocumentCount()
+            + "；report=" + reportAssessment.reason();
         return crossDocumentReport(
             suiteId,
             name,
@@ -195,6 +211,72 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
         boolean quoteHasPermissionEvidence = quote.contains("权限申请") || quote.contains("权限审批")
             || quote.contains("权限回收") || quote.contains("临时权限延长");
         return hasAuditTrail && hasPermissionTarget && quoteHasPermissionEvidence;
+    }
+
+    private CrossDocumentReportAssessment assessCrossDocumentReport(List<GraphRagSearchResult> searchResults,
+                                                                    GraphRagSearchResult matched) {
+        String communityKey = matched == null ? "" : matched.getCrossDocumentCommunityKey();
+        List<GraphRagSearchResult> communityResults = safeStream(searchResults)
+            .filter(result -> result != null && StrUtil.isNotBlank(result.getCrossDocumentCommunityKey()))
+            .filter(result -> StrUtil.isBlank(communityKey) || communityKey.equals(result.getCrossDocumentCommunityKey()))
+            .toList();
+        if (communityResults.isEmpty()) {
+            return CrossDocumentReportAssessment.failed("缺少跨文档 community 命中。");
+        }
+        int documentCount = communityResults.stream()
+            .map(GraphRagSearchResult::getCrossDocumentCommunityDocumentCount)
+            .filter(Objects::nonNull)
+            .mapToInt(Integer::intValue)
+            .max()
+            .orElse(0);
+        int evidenceCount = communityResults.stream()
+            .map(GraphRagSearchResult::getCrossDocumentCommunityEvidenceCount)
+            .filter(Objects::nonNull)
+            .mapToInt(Integer::intValue)
+            .max()
+            .orElse(0);
+        int relationGroupCount = communityResults.stream()
+            .map(GraphRagSearchResult::getCrossDocumentCommunityRelationGroupCount)
+            .filter(Objects::nonNull)
+            .mapToInt(Integer::intValue)
+            .max()
+            .orElse(0);
+        if (documentCount < 2) {
+            return CrossDocumentReportAssessment.failed("community 覆盖文档数不足 2。");
+        }
+        if (evidenceCount < 2) {
+            return CrossDocumentReportAssessment.failed("community 可追溯证据不足 2 条。");
+        }
+        if (relationGroupCount < 1) {
+            return CrossDocumentReportAssessment.failed("community 缺少关系组覆盖。");
+        }
+        String reportText = normalizeName(communityResults.stream()
+            .flatMap(result -> Stream.of(result.getCommunityTitle(), result.getCommunitySummary()))
+            .filter(StrUtil::isNotBlank)
+            .collect(Collectors.joining(" ")));
+        List<String> missingSections = new ArrayList<>();
+        if (!reportText.contains("核心实体")) {
+            missingSections.add("核心实体");
+        }
+        if (!reportText.contains("关键关系") && !reportText.contains("关系类型")) {
+            missingSections.add("关键关系类型");
+        }
+        if (!reportText.contains("覆盖范围") && !reportText.contains("覆盖")) {
+            missingSections.add("覆盖范围");
+        }
+        if (!reportText.contains("证据边界") && !reportText.contains("可追溯证据")) {
+            missingSections.add("证据边界");
+        }
+        if (!reportText.contains("不可推断") && !reportText.contains("不能推出")) {
+            missingSections.add("不可推断边界");
+        }
+        if (!missingSections.isEmpty()) {
+            return CrossDocumentReportAssessment.failed("report 缺少结构段：" + String.join("、", missingSections));
+        }
+        return CrossDocumentReportAssessment.passed("docs=" + documentCount
+            + " evidence=" + evidenceCount
+            + " relationGroups=" + relationGroupCount
+            + " sections=核心实体/关键关系/覆盖范围/证据边界/不可推断");
     }
 
     private GraphRagEvaluationReport crossDocumentReport(String suiteId,
@@ -428,5 +510,20 @@ public class GraphRagEvaluationBaselineServiceImpl implements GraphRagEvaluation
 
     private Stream<SuperAgentDocument> safeStream(List<SuperAgentDocument> documents) {
         return documents == null ? Stream.empty() : documents.stream();
+    }
+
+    private <T> Stream<T> safeStream(Collection<T> values) {
+        return values == null ? Stream.empty() : values.stream();
+    }
+
+    private record CrossDocumentReportAssessment(boolean passed, String reason) {
+
+        private static CrossDocumentReportAssessment passed(String reason) {
+            return new CrossDocumentReportAssessment(true, reason);
+        }
+
+        private static CrossDocumentReportAssessment failed(String reason) {
+            return new CrossDocumentReportAssessment(false, reason);
+        }
     }
 }

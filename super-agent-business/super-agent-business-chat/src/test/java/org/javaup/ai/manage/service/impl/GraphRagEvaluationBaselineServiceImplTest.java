@@ -93,6 +93,13 @@ class GraphRagEvaluationBaselineServiceImplTest {
             .chunkId(4001L)
             .quoteText("AuditTrail 需记录权限申请、权限审批、权限回收和临时权限延长。")
             .graphPath("一跳：AuditTrail --RECORDS--> 权限申请")
+            .communityTitle("跨文档图谱社区：AuditTrail / 权限申请")
+            .communitySummary(structuredCommunityReport())
+            .crossDocumentCommunityKey("xdoc-community:audittrail-permission")
+            .crossDocumentCommunityEntityCount(4)
+            .crossDocumentCommunityRelationGroupCount(2)
+            .crossDocumentCommunityEvidenceCount(4)
+            .crossDocumentCommunityDocumentCount(2)
             .score(3.0D)
             .build()));
         GraphRagEvaluationBaselineServiceImpl service = new GraphRagEvaluationBaselineServiceImpl(
@@ -126,6 +133,52 @@ class GraphRagEvaluationBaselineServiceImplTest {
         assertThat(searchService.capturedDocumentIds).containsExactly(30L, 31L);
         assertThat(searchService.capturedTaskIds).containsExactly(40L, 41L);
         assertThat(searchService.capturedQuestion).isEqualTo("审计系统有哪些权限相关要求？");
+    }
+
+    @Test
+    void crossDocumentBaselineFailsWhenCommunityReportLacksStructuredBoundary() {
+        StubGraphRagSearchService searchService = new StubGraphRagSearchService(List.of(GraphRagSearchResult.builder()
+            .documentId(30L)
+            .taskId(40L)
+            .entityId(1001L)
+            .entityName("AuditTrail")
+            .canonicalEntityName("AuditTrail")
+            .canonicalEntityCount(2)
+            .canonicalDocumentCount(2)
+            .relationId(2001L)
+            .relationType("RECORDS")
+            .relatedEntityId(1002L)
+            .relatedEntityName("权限申请")
+            .evidenceId(3001L)
+            .chunkId(4001L)
+            .quoteText("AuditTrail 需记录权限申请、权限审批、权限回收和临时权限延长。")
+            .graphPath("一跳：AuditTrail --RECORDS--> 权限申请")
+            .communityTitle("跨文档图谱社区：AuditTrail / 权限申请")
+            .communitySummary("该社区覆盖审计系统和权限申请。")
+            .crossDocumentCommunityKey("xdoc-community:audittrail-permission")
+            .crossDocumentCommunityEntityCount(4)
+            .crossDocumentCommunityRelationGroupCount(2)
+            .crossDocumentCommunityEvidenceCount(4)
+            .crossDocumentCommunityDocumentCount(2)
+            .score(3.0D)
+            .build()));
+        GraphRagEvaluationBaselineServiceImpl service = new GraphRagEvaluationBaselineServiceImpl(
+            mapper(List.of(
+                document(30L, "O6跨文档图谱-审计证据规范A.md", "O6跨文档图谱-审计证据规范A.md", 40L, 3000L),
+                document(31L, "O6跨文档图谱-审计系统别名说明B.md", "O6跨文档图谱-审计系统别名说明B.md", 41L, 3001L)
+            )),
+            new CapturingEvaluationService(),
+            searchService
+        );
+
+        GraphRagEvaluationBatchReport report = service.evaluateO6CrossDocumentBaseline();
+
+        assertThat(report.getPassedSuiteCount()).isZero();
+        assertThat(report.getFailedSuiteCount()).isEqualTo(1L);
+        assertThat(report.getOverallRecall()).isEqualTo(0.78D);
+        assertThat(report.getFailedSuites().get(0).getReason())
+            .contains("community report 质量未达标")
+            .contains("report 缺少结构段");
     }
 
     @Test
@@ -243,6 +296,17 @@ class GraphRagEvaluationBaselineServiceImplTest {
         SuperAgentDocument document = document(id, documentName, originalFileName, null, 3000L);
         document.setIndexStatus(DocumentIndexStatusEnum.BUILD_FAILED.getCode());
         return document;
+    }
+
+    private static String structuredCommunityReport() {
+        return """
+            跨文档社区报告：
+            - 核心实体：AuditTrail；权限申请
+            - 关键关系类型：RECORDS
+            - 覆盖范围：4 个 canonical 实体组、2 个关系组、4 条可追溯证据、2 份文档。
+            - 证据边界：仅总结 KG evidence 支撑的实体和关系。
+            - 不可推断：RECORDS 仅表示记录、留痕或审计覆盖，不等同于审批、负责或执行。
+            """;
     }
 
     @SuppressWarnings("unchecked")

@@ -560,6 +560,7 @@ public class GraphRagCrossDocumentIndexSupport {
                 community.relationGroupKeys(),
                 community.evidenceIds(),
                 community.documentIds(),
+                community.reportProfile(),
                 community.rankScore(),
                 community.qualityProfile(),
                 new GraphRagCrossDocumentIndex.RankProfile(
@@ -1430,6 +1431,7 @@ public class GraphRagCrossDocumentIndexSupport {
                 return null;
             }
             GraphRagCrossDocumentIndex.QualityProfile qualityProfile = communityQualityProfile();
+            GraphRagCrossDocumentIndex.ReportProfile reportProfile = communityReportProfile(qualityProfile);
             double effectiveRank = rounded(clamp(
                 qualityProfile.score() * 0.64D
                     + Math.min(1D, rankBoost) * 0.20D
@@ -1440,11 +1442,12 @@ public class GraphRagCrossDocumentIndexSupport {
                 null,
                 key,
                 communityTitle(),
-                communitySummary(),
+                communitySummary(reportProfile),
                 Set.copyOf(canonicalGroupKeys),
                 Set.copyOf(relationGroupKeys),
                 Set.copyOf(evidenceIds),
                 Set.copyOf(documentIds),
+                reportProfile,
                 effectiveRank,
                 qualityProfile,
                 new GraphRagCrossDocumentIndex.RankProfile(
@@ -1506,35 +1509,102 @@ public class GraphRagCrossDocumentIndexSupport {
             return "跨文档图谱社区：" + String.join(" / ", names);
         }
 
-        private String communitySummary() {
-            String names = canonicalNames.stream()
-                .filter(StrUtil::isNotBlank)
-                .limit(5)
-                .collect(Collectors.joining("、"));
-            String types = relationTypes.stream()
-                .filter(StrUtil::isNotBlank)
-                .limit(6)
-                .collect(Collectors.joining("、"));
+        private String communitySummary(GraphRagCrossDocumentIndex.ReportProfile profile) {
             StringBuilder builder = new StringBuilder();
-            builder.append("该跨文档社区由 ")
+            builder.append("跨文档社区报告：")
+                .append("\n- 核心实体：")
+                .append(joinOrDefault(profile.coreEntityNames(), "未形成稳定核心实体"))
+                .append("\n- 关键关系类型：")
+                .append(joinOrDefault(profile.keyRelationTypes(), "未形成稳定关系类型"))
+                .append("\n- 覆盖范围：")
                 .append(canonicalGroupKeys.size())
-                .append(" 个 canonical 实体组和 ")
+                .append(" 个 canonical 实体组、")
                 .append(relationGroupKeys.size())
-                .append(" 个关系组构成");
-            if (documentIds.size() > 1) {
-                builder.append("，覆盖 ").append(documentIds.size()).append(" 份文档");
+                .append(" 个关系组、")
+                .append(evidenceIds.size())
+                .append(" 条可追溯证据、")
+                .append(documentIds.size())
+                .append(" 份文档。")
+                .append("\n- 证据边界：")
+                .append(joinOrDefault(profile.evidenceBoundaries(), "仅可依据当前 KG evidence 总结"))
+                .append("\n- 不可推断：")
+                .append(joinOrDefault(profile.cannotInfer(), "未被 KG relation/evidence 支撑的结论不能从该社区报告推出"))
+                .append("\n- 报告质量：")
+                .append(profile.qualityScore())
+                .append("，原因：")
+                .append(joinOrDefault(profile.qualityReasons(), "-"));
+            return builder.toString();
+        }
+
+        private GraphRagCrossDocumentIndex.ReportProfile communityReportProfile(
+            GraphRagCrossDocumentIndex.QualityProfile qualityProfile
+        ) {
+            List<String> coreEntities = canonicalNames.stream()
+                .filter(StrUtil::isNotBlank)
+                .distinct()
+                .limit(8)
+                .toList();
+            List<String> keyRelationTypes = relationTypes.stream()
+                .filter(StrUtil::isNotBlank)
+                .map(type -> type.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .limit(8)
+                .toList();
+            List<String> evidenceBoundaries = new ArrayList<>();
+            evidenceBoundaries.add("仅总结 " + evidenceIds.size() + " 条 KG evidence 支撑的实体和关系。");
+            evidenceBoundaries.add("覆盖 " + documentIds.size() + " 份文档，不能代表未入库或未命中的文档。");
+            evidenceBoundaries.add("关系范围限定在 " + relationGroupKeys.size() + " 个 relation group 内。");
+            List<String> cannotInfer = new ArrayList<>();
+            cannotInfer.add("未被 KG relation/evidence 明确支撑的主体、职责、因果和决策结论不能推出。");
+            if (keyRelationTypes.contains("RECORDS")) {
+                cannotInfer.add("RECORDS 仅表示记录、留痕或审计覆盖，不等同于审批、负责或执行。");
             }
-            if (StrUtil.isNotBlank(names)) {
-                builder.append("，代表实体包括：").append(names);
+            if (keyRelationTypes.stream().anyMatch(type -> "ASSOCIATED_WITH".equals(type) || "RELATED_TO".equals(type))) {
+                cannotInfer.add("弱关联关系不能单独推出职责、依赖或因果。");
             }
-            if (StrUtil.isNotBlank(types)) {
-                builder.append("，关系类型包括：").append(types);
+            LinkedHashSet<String> reportReasons = new LinkedHashSet<>();
+            if (!coreEntities.isEmpty()) {
+                reportReasons.add("coreEntityCoverage");
+            }
+            if (!keyRelationTypes.isEmpty()) {
+                reportReasons.add("relationTypeCoverage");
             }
             if (!evidenceIds.isEmpty()) {
-                builder.append("，可追溯证据 ").append(evidenceIds.size()).append(" 条");
+                reportReasons.add("groundedEvidence");
             }
-            builder.append("。");
-            return builder.toString();
+            if (documentIds.size() > 1) {
+                reportReasons.add("crossDocumentCoverage");
+            }
+            reportReasons.add("cannotInferBoundary");
+            if (qualityProfile != null) {
+                reportReasons.addAll(qualityProfile.qualityReasons().stream().limit(5).toList());
+            }
+            double reportQuality = rounded(clamp(
+                (qualityProfile == null ? 0D : qualityProfile.score()) * 0.58D
+                    + Math.min(0.16D, coreEntities.size() * 0.025D)
+                    + Math.min(0.12D, keyRelationTypes.size() * 0.02D)
+                    + Math.min(0.08D, evidenceIds.size() * 0.012D)
+                    + (documentIds.size() > 1 ? 0.06D : 0D)
+            ));
+            return new GraphRagCrossDocumentIndex.ReportProfile(
+                "java.cross_document_report.extractive.v1",
+                coreEntities,
+                keyRelationTypes,
+                evidenceBoundaries,
+                cannotInfer.stream().distinct().limit(6).toList(),
+                reportQuality,
+                List.copyOf(reportReasons)
+            );
+        }
+
+        private String joinOrDefault(List<String> values, String defaultValue) {
+            List<String> filtered = safeList(values).stream()
+                .filter(StrUtil::isNotBlank)
+                .toList();
+            if (filtered.isEmpty()) {
+                return defaultValue;
+            }
+            return String.join("；", filtered);
         }
 
         private <T> Set<T> safeSet(Set<T> values) {

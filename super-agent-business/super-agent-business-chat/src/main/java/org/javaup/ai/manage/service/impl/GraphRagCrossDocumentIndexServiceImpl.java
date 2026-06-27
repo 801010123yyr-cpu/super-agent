@@ -496,6 +496,7 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         metadata.put("relationGroupKeys", community.relationGroupKeys());
         metadata.put("evidenceIds", community.evidenceIds());
         metadata.put("documentIds", community.documentIds());
+        metadata.put("reportProfile", reportProfileMap(community.reportProfile()));
         metadata.put("sourceType", "java.cross_document_community.v1");
         row.setMetadataJson(writeJson(metadata));
         row.setStatus(BusinessStatus.YES.getCode());
@@ -686,6 +687,7 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
             relationGroupKeys,
             readLongSet(metadata, "evidenceIds"),
             readLongSet(metadata, "documentIds"),
+            readReportProfile(metadata),
             row.getRankScore() == null ? 0D : row.getRankScore().doubleValue(),
             qualityProfile(metadata),
             rankProfile(metadata)
@@ -725,6 +727,40 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         metadata.put("outDegree", safeRank.outDegree());
         metadata.put("weightedDegree", safeRank.weightedDegree());
         return metadata;
+    }
+
+    private Map<String, Object> reportProfileMap(GraphRagCrossDocumentIndex.ReportProfile reportProfile) {
+        GraphRagCrossDocumentIndex.ReportProfile safeProfile = reportProfile == null
+            ? GraphRagCrossDocumentIndex.ReportProfile.empty()
+            : reportProfile;
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("strategy", safeProfile.strategy());
+        metadata.put("coreEntityNames", safeProfile.coreEntityNames());
+        metadata.put("keyRelationTypes", safeProfile.keyRelationTypes());
+        metadata.put("evidenceBoundaries", safeProfile.evidenceBoundaries());
+        metadata.put("cannotInfer", safeProfile.cannotInfer());
+        metadata.put("qualityScore", safeProfile.qualityScore());
+        metadata.put("qualityReasons", safeProfile.qualityReasons());
+        return metadata;
+    }
+
+    private GraphRagCrossDocumentIndex.ReportProfile readReportProfile(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return GraphRagCrossDocumentIndex.ReportProfile.empty();
+        }
+        Object value = metadata.get("reportProfile");
+        if (!(value instanceof Map<?, ?> map)) {
+            return GraphRagCrossDocumentIndex.ReportProfile.empty();
+        }
+        return new GraphRagCrossDocumentIndex.ReportProfile(
+            stringValue(map.get("strategy")),
+            readStringList(map.get("coreEntityNames")),
+            readStringList(map.get("keyRelationTypes")),
+            readStringList(map.get("evidenceBoundaries")),
+            readStringList(map.get("cannotInfer")),
+            numberValue(map.get("qualityScore"), 0D),
+            readStringList(map.get("qualityReasons"))
+        );
     }
 
     private GraphRagCrossDocumentIndex.RankProfile rankProfile(Map<String, Object> metadata) {

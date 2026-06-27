@@ -109,6 +109,14 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             assertThat(metadata).containsKey("qualityScore");
             assertThat((Double) metadata.get("qualityScore")).isGreaterThan(0D);
             assertThat(metadata).containsEntry("rankAlgorithm", "java.cross_document_pagerank.v1");
+            assertThat(metadata).containsKey("reportProfile");
+            Map<String, Object> reportProfile = (Map<String, Object>) metadata.get("reportProfile");
+            assertThat(reportProfile).containsEntry("strategy", "java.cross_document_report.extractive.v1");
+            assertThat((List<String>) reportProfile.get("coreEntityNames")).isNotEmpty();
+            assertThat((List<String>) reportProfile.get("keyRelationTypes")).contains("RECORDS");
+            assertThat((List<String>) reportProfile.get("evidenceBoundaries")).isNotEmpty();
+            assertThat((List<String>) reportProfile.get("cannotInfer")).isNotEmpty();
+            assertThat((Double) reportProfile.get("qualityScore")).isGreaterThan(0D);
         });
         assertThat(relationGroupStore.items()).allSatisfy(group -> {
             assertThat(group.getGroupKey()).startsWith("sha256:");
@@ -202,6 +210,11 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         assertThat(community.documentCount()).isEqualTo(2);
         assertThat(community.evidenceCount()).isEqualTo(2);
         assertThat(community.qualityProfile().qualityReasons()).contains("groundedEvidence");
+        assertThat(community.summary()).contains("核心实体", "关键关系类型", "证据边界", "不可推断");
+        assertThat(community.reportProfile().strategy()).isEqualTo("java.cross_document_report.extractive.v1");
+        assertThat(community.reportProfile().coreEntityNames()).contains("AuditTrail");
+        assertThat(community.reportProfile().keyRelationTypes()).contains("RECORDS");
+        assertThat(community.reportProfile().cannotInfer()).isNotEmpty();
     }
 
     @Test
