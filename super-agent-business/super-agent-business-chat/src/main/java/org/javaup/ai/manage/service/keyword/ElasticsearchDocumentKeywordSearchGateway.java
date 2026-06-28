@@ -276,6 +276,32 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
     }
 
     @Override
+    public void deleteByTask(Long documentId, Long taskId) {
+        if (documentId == null || taskId == null) {
+            return;
+        }
+        try {
+            elasticsearchClient.deleteByQuery(delete -> delete
+                .index(properties.getElasticsearch().getIndexName())
+                .refresh(true)
+                .query(query -> query.bool(bool -> bool
+                    .filter(filter -> filter.term(term -> term
+                        .field("documentId")
+                        .value(documentId)
+                    ))
+                    .filter(filter -> filter.term(term -> term
+                        .field("taskId")
+                        .value(taskId)
+                    ))
+                ))
+            );
+        }
+        catch (IOException exception) {
+            throw new IllegalStateException("删除 Elasticsearch 任务文档失败", exception);
+        }
+    }
+
+    @Override
     public void deleteByDocumentId(Long documentId) {
         if (documentId == null) {
             return;

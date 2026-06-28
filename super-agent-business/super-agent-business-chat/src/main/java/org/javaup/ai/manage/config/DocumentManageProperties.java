@@ -73,6 +73,10 @@ public class DocumentManageProperties {
         private Boolean elasticsearchRefreshWait = Boolean.FALSE;
 
         private Integer progressLogLimit = 60;
+
+        private Integer executorPoolSize = 2;
+
+        private Integer executorQueueCapacity = 32;
     }
 
     @Data
@@ -135,6 +139,8 @@ public class DocumentManageProperties {
         private String navigationIndexName = "super_agent_document_navigation";
 
         private String routeIndexName = "super_agent_knowledge_route";
+
+        private String raptorSummaryIndexName = "super_agent_raptor_summary";
 
         private Integer connectTimeoutMillis = 3000;
 

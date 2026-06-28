@@ -90,6 +90,8 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
 
     private static final String DELETE_BY_DOCUMENT_SQL_TEMPLATE = "DELETE FROM %s WHERE document_id = ?";
 
+    private static final String DELETE_BY_TASK_SQL_TEMPLATE = "DELETE FROM %s WHERE document_id = ? AND task_id = ?";
+
     @Qualifier("documentManagePgVectorJdbcTemplate")
     private final JdbcTemplate pgVectorJdbcTemplate;
 
@@ -201,6 +203,22 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
             ));
         }
         return batches;
+    }
+
+    @Override
+    public void deleteByTask(Long documentId, Long taskId) {
+        if (documentId == null || taskId == null) {
+            return;
+        }
+
+        try {
+            String deleteSql = DELETE_BY_TASK_SQL_TEMPLATE.formatted(DocumentPgVectorConstants.EMBEDDING_TABLE_NAME);
+            pgVectorJdbcTemplate.update(deleteSql, documentId, taskId);
+        }
+        catch (Exception exception) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_VECTOR_FAILED.getCode(),
+                "删除 PGVector 任务数据失败: " + exception.getMessage(), exception);
+        }
     }
 
     @Override

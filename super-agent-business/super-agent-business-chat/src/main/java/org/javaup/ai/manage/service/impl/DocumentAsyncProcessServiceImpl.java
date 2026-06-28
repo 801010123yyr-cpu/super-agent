@@ -5,7 +5,7 @@ import com.baidu.fsg.uid.UidGenerator;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import jakarta.annotation.Resource;
-import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
@@ -79,6 +79,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -87,9 +91,11 @@ import java.util.Objects;
  **/
 
 @Slf4j
-@AllArgsConstructor
+@RequiredArgsConstructor
 @Service
 public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessService {
+
+    private static final Set<Long> RUNNING_INDEX_TASK_IDS = ConcurrentHashMap.newKeySet();
 
     private final SuperAgentDocumentMapper documentMapper;
 
@@ -138,8 +144,10 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     @Resource
     private UidGenerator uidGenerator;
 
-    @Override
+    @Resource(name = "documentIndexBuildExecutorService")
+    private ExecutorService indexBuildExecutorService;
 
+    @Override
     public void handleParseRoute(Long documentId, Long taskId) {
 
         SuperAgentDocument document = documentMapper.selectById(documentId);
@@ -373,7 +381,59 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     }
 
     @Override
+    public void submitIndexBuild(Long documentId, Long taskId, Long planId) {
+        SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+        if (task == null) {
+            log.warn("索引构建任务不存在，跳过提交后台执行，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId);
+            return;
+        }
+        if (Objects.equals(task.getTaskStatus(), DocumentTaskStatusEnum.SUCCESS.getCode())) {
+            log.info("索引构建任务已成功，跳过 Kafka 重复投递消息，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId);
+            return;
+        }
+        if (!RUNNING_INDEX_TASK_IDS.add(taskId)) {
+            log.warn("索引构建任务已在本机执行中，跳过重复提交，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId);
+            return;
+        }
+
+        try {
+            indexBuildExecutorService.execute(() -> {
+                try {
+                    doHandleIndexBuild(documentId, taskId, planId);
+                }
+                finally {
+                    RUNNING_INDEX_TASK_IDS.remove(taskId);
+                }
+            });
+            log.info("索引构建任务已提交后台执行，documentId={}, taskId={}, planId={}", documentId, taskId, planId);
+        }
+        catch (RejectedExecutionException exception) {
+            RUNNING_INDEX_TASK_IDS.remove(taskId);
+            log.error("索引构建后台线程池已满，无法提交任务，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId, exception);
+            throw exception;
+        }
+    }
+
+    @Override
     public void handleIndexBuild(Long documentId, Long taskId, Long planId) {
+        if (!RUNNING_INDEX_TASK_IDS.add(taskId)) {
+            log.warn("索引构建任务已在本机执行中，跳过重复执行，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId);
+            return;
+        }
+        try {
+            doHandleIndexBuild(documentId, taskId, planId);
+        }
+        finally {
+            RUNNING_INDEX_TASK_IDS.remove(taskId);
+        }
+    }
+
+    private void doHandleIndexBuild(Long documentId, Long taskId, Long planId) {
 
         SuperAgentDocument document = documentMapper.selectById(documentId);
         SuperAgentDocumentTask task = taskMapper.selectById(taskId);
@@ -382,6 +442,12 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             log.warn("索引任务对应的数据不存在，documentId={}, taskId={}, planId={}", documentId, taskId, planId);
             return;
         }
+        if (Objects.equals(task.getTaskStatus(), DocumentTaskStatusEnum.SUCCESS.getCode())) {
+            log.info("索引构建任务已成功，跳过重复执行，documentId={}, taskId={}, planId={}",
+                documentId, taskId, planId);
+            return;
+        }
+        boolean reenterRunningTask = Objects.equals(task.getTaskStatus(), DocumentTaskStatusEnum.RUNNING.getCode());
 
         Date startTime = new Date();
         long buildStartedNanos = System.nanoTime();
@@ -401,6 +467,10 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             document.setIndexStatus(DocumentIndexStatusEnum.BUILDING.getCode());
             documentMapper.updateById(document);
             progressCacheService.init(document, task);
+
+            if (reenterRunningTask) {
+                cleanupIndexBuildTaskArtifacts(documentId, taskId);
+            }
 
             updateStepExecuteStatus(planId, DocumentStrategyExecuteStatusEnum.EXECUTING.getCode());
 
@@ -758,6 +828,31 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 	                    "currentStageName", stageName(failedStage),
 	                    "costMillis", failedCostMillis));
         }
+    }
+
+    private void cleanupIndexBuildTaskArtifacts(Long documentId, Long taskId) {
+        log.warn("检测到索引构建任务重入，开始清理同 task 旧产物，documentId={}, taskId={}", documentId, taskId);
+        long startedNanos = System.nanoTime();
+
+        vectorGateway.deleteByTask(documentId, taskId);
+
+        DocumentKeywordSearchGateway keywordSearchGateway = keywordSearchGatewayProvider.getIfAvailable();
+        if (keywordSearchGateway != null) {
+            keywordSearchGateway.deleteByTask(documentId, taskId);
+        }
+
+        graphRagBuildService.deleteByTask(documentId, taskId);
+        raptorBuildService.deleteByTask(documentId, taskId);
+
+        int deletedChunkCount = chunkMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentChunk>()
+            .eq(SuperAgentDocumentChunk::getDocumentId, documentId)
+            .eq(SuperAgentDocumentChunk::getTaskId, taskId));
+        int deletedParentCount = parentBlockMapper.delete(new LambdaQueryWrapper<SuperAgentDocumentParentBlock>()
+            .eq(SuperAgentDocumentParentBlock::getDocumentId, documentId)
+            .eq(SuperAgentDocumentParentBlock::getTaskId, taskId));
+
+        log.warn("索引构建任务重入清理完成，documentId={}, taskId={}, deletedParentCount={}, deletedChunkCount={}, costMillis={}",
+            documentId, taskId, deletedParentCount, deletedChunkCount, elapsedMillis(startedNanos));
     }
 
     private void saveIndexBuildLog(Long taskId,

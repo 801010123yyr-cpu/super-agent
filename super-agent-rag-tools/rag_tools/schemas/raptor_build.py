@@ -28,6 +28,7 @@ class RaptorBuildRequest(BaseModel):
     task_id: int | None = Field(default=None, alias="taskId")
     max_cluster_size: int = Field(default=6, alias="maxClusterSize")
     max_levels: int = Field(default=3, alias="maxLevels")
+    llm_summary_enabled: bool = Field(default=False, alias="llmSummaryEnabled")
     chunks: list[RaptorChunk] = Field(default_factory=list)
 
 
@@ -48,6 +49,7 @@ class RaptorNode(BaseModel):
     page_range: str = Field(default="", alias="pageRange")
     keywords: list[str] = Field(default_factory=list)
     questions: list[str] = Field(default_factory=list)
+    quality_score: float = Field(default=0.0, alias="qualityScore")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

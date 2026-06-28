@@ -18,5 +18,7 @@ public interface DocumentKeywordSearchGateway {
 
     List<Document> search(DocumentRetrieveRequest request);
 
+    void deleteByTask(Long documentId, Long taskId);
+
     void deleteByDocumentId(Long documentId);
 }

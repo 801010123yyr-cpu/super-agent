@@ -1,0 +1,13 @@
+# Python rag-tools local configuration.
+# Environment variables still take precedence over this file.
+
+ragTools:
+  llm:
+    # OpenAI-compatible chat completions base URL.
+    # DashScope example: https://dashscope.aliyuncs.com/compatible-mode/v1
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    # Supports Spring-style environment placeholders, for example ${ALI_BAI_LIAN_API_KEY}.
+    apiKey: "${ALI_BAI_LIAN_API_KEY}"
+    # Example: qwen-plus-latest
+    model: "qwen-plus-latest"
+    timeoutSeconds: 30

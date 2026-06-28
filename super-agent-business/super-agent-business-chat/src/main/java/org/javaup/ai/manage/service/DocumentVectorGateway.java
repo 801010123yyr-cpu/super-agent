@@ -14,5 +14,7 @@ public interface DocumentVectorGateway {
 
     void vectorize(List<SuperAgentDocumentChunk> chunkList);
 
+    void deleteByTask(Long documentId, Long taskId);
+
     void deleteByDocumentId(Long documentId);
 }

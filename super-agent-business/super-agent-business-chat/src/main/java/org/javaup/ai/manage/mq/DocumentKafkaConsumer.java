@@ -50,7 +50,7 @@ public class DocumentKafkaConsumer {
 
             DocumentIndexBuildMessage message = objectMapper.readValue(payload, DocumentIndexBuildMessage.class);
 
-            asyncProcessService.handleIndexBuild(message.getDocumentId(), message.getTaskId(), message.getPlanId());
+            asyncProcessService.submitIndexBuild(message.getDocumentId(), message.getTaskId(), message.getPlanId());
         }
         catch (Exception exception) {
             log.error("消费索引构建消息失败，payload={}", payload, exception);

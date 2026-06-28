@@ -45,6 +45,10 @@ public class ChatRagProperties {
 
     private int raptorMaxLevels = 3;
 
+    private boolean raptorLlmSummaryEnabled = true;
+
+    private double raptorSummaryQualityFloor = 0.42D;
+
     private int candidateTopK = 10;
 
     private int finalTopK = 5;

@@ -33,4 +33,28 @@ document/项目启动与完整验证手册-P.md
 
 `/graph/extract` 当前使用增强版轻量抽取从 chunk 中抽取实体、关系、证据和社区摘要：Python 会输出实体别名、置信度、关系短语、来源 chunk 和 NetworkX community detection 结果；Java 负责 canonical entity 合并、关系去重、保存到 `KgEntity`、`KgRelation`、`KgEvidence`、`KgCommunity` 对应表，并把 canonical KG 产物投影为 `GRAPH_ENTITY`、`GRAPH_RELATION`、`GRAPH_COMMUNITY` 三类 typed document chunk，复用现有 PGVector 与 ES/BM25 统一检索面。第二阶段 O6 已补同义实体合并、community report 检索、关系类问题直召、别名命中、typed KG chunk 投影、Java 构建租约/checkpoint/有限重试/独立 timeout 和 Java PageRank/rankBoost 第一版；后续仍要继续补 LLM/NER 抽取、更强 entity resolution、模型生成 community report、跨文档图谱和 LLM query rewrite。
 
-`/raptor/build` 当前使用 `sentence-transformers` embedding 进行贪心聚类，默认模型为 `BAAI/bge-small-zh-v1.5`，可通过 `RAG_TOOLS_EMBEDDING_MODEL` 覆盖；摘要仍是抽取式摘要，避免在 Python 侧引入第二套回答生成链路。Java 负责保存 `RaptorNode`、写摘要向量，并在问答时通过 `RaptorRetrievalChannel` 先召回摘要节点再下钻原文 chunk。
+`/raptor/build` 当前使用 `sentence-transformers` embedding 进行贪心聚类，默认模型为 `BAAI/bge-small-zh-v1.5`，可通过 `RAG_TOOLS_EMBEDDING_MODEL` 覆盖；当 Java 请求 `llmSummaryEnabled=true` 且 rag-tools 配置了 OpenAI-compatible LLM 时，会调用 LLM 生成 RAPTOR 摘要并输出 `qualityScore`、`summaryStrategy`、`summaryQualitySignals`。Java 负责质量分过滤、保存 `RaptorNode`、写摘要向量和 ES/BM25 摘要索引，并在问答时通过 `RaptorRetrievalChannel` 先召回摘要节点再下钻原文 chunk。Python 不负责路由、融合、最终回答生成或 citation。
+
+## 本地配置
+
+rag-tools 会优先读取环境变量；没有环境变量时读取工作目录下的 `rag-tools.yaml`。也可通过 `RAG_TOOLS_CONFIG=/path/to/rag-tools.yaml` 指定配置文件。配置值支持 `${ENV_NAME}` 或 `${ENV_NAME:default}` 形式的环境变量占位符。
+
+```yaml
+ragTools:
+  llm:
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    apiKey: "${ALI_BAI_LIAN_API_KEY}"
+    model: "qwen-plus-latest"
+    timeoutSeconds: 30
+```
+
+等价环境变量：
+
+```bash
+export RAG_TOOLS_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export RAG_TOOLS_LLM_API_KEY=你的模型APIKey
+export RAG_TOOLS_LLM_MODEL=qwen-plus-latest
+export RAG_TOOLS_LLM_TIMEOUT_SECONDS=30
+```
+
+RAPTOR LLM 摘要提示词放在 `prompt/raptor-summary-system.txt` 和 `prompt/raptor-summary-user.txt`，不要直接写在 Python 代码里。

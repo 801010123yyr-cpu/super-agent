@@ -48,6 +48,8 @@ public class RagToolsRaptorBuildResponse {
 
         private List<String> questions = new ArrayList<>();
 
+        private Double qualityScore;
+
         private Map<String, Object> metadata;
     }
 }

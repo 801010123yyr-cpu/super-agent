@@ -6,6 +6,9 @@ services:
     container_name: super-agent-rag-tools
     build:
       context: ./super-agent-rag-tools
+    volumes:
+      - ./super-agent-rag-tools/rag-tools.yaml:/app/rag-tools.yaml:ro
+      - ./super-agent-rag-tools/prompt:/app/prompt:ro
     ports:
       - "18080:18080"
 

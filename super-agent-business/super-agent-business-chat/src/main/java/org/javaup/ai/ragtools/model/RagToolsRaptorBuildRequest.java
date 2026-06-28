@@ -21,6 +21,8 @@ public class RagToolsRaptorBuildRequest {
 
     private Integer maxLevels;
 
+    private Boolean llmSummaryEnabled;
+
     private List<Chunk> chunks = new ArrayList<>();
 
     @Data

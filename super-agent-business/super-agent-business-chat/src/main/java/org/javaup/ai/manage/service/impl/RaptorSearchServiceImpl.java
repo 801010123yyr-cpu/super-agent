@@ -11,6 +11,7 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.raptor.RaptorSearchResult;
 import org.javaup.ai.manage.service.RaptorSearchService;
+import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
 import org.javaup.enums.BusinessStatus;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -77,6 +78,8 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
 
     private final ObjectMapper objectMapper;
 
+    private final ObjectProvider<RaptorSummaryIndexService> raptorSummaryIndexServiceProvider;
+
     @Override
     @Transactional(readOnly = true)
     public List<RaptorSearchResult> search(String question,
@@ -120,6 +123,28 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
     }
 
     private List<RaptorNodeHit> retrieveSummaryNodes(String question, List<Long> documentIds, List<Long> taskIds, int topK) {
+        Map<Long, RaptorNodeHit> mergedHits = new LinkedHashMap<>();
+        List<RaptorNodeHit> vectorHits = retrieveVectorSummaryNodes(question, documentIds, taskIds, topK);
+        mergeHits(mergedHits, vectorHits, 1.0D);
+        RaptorSummaryIndexService indexService = raptorSummaryIndexServiceProvider.getIfAvailable();
+        if (indexService != null) {
+            List<RaptorSummaryIndexService.RaptorSummaryHit> lexicalHits = indexService.search(question, documentIds, taskIds, topK);
+            double maxLexicalScore = lexicalHits.stream()
+                .mapToDouble(RaptorSummaryIndexService.RaptorSummaryHit::score)
+                .max()
+                .orElse(0D);
+            List<RaptorNodeHit> normalizedLexicalHits = lexicalHits.stream()
+                .map(hit -> new RaptorNodeHit(hit.nodeId(), normalizeLexicalScore(hit.score(), maxLexicalScore)))
+                .toList();
+            mergeHits(mergedHits, normalizedLexicalHits, 0.85D);
+        }
+        return mergedHits.values().stream()
+            .sorted(Comparator.comparingDouble(RaptorNodeHit::score).reversed())
+            .limit(Math.max(1, Math.min(topK, 50)))
+            .toList();
+    }
+
+    private List<RaptorNodeHit> retrieveVectorSummaryNodes(String question, List<Long> documentIds, List<Long> taskIds, int topK) {
         EmbeddingModel embeddingModel = requireEmbeddingModel();
         String questionVector = toVectorLiteral(embeddingModel.embed(question.trim()));
         String sql = RAPTOR_RETRIEVE_SQL_TEMPLATE.formatted(
@@ -138,6 +163,27 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             resultSet.getLong("id"),
             resultSet.getDouble("similarity_score")
         ));
+    }
+
+    private void mergeHits(Map<Long, RaptorNodeHit> target, List<RaptorNodeHit> source, double weight) {
+        if (source == null) {
+            return;
+        }
+        for (RaptorNodeHit hit : source) {
+            if (hit == null || hit.nodeId() == null) {
+                continue;
+            }
+            double weightedScore = hit.score() * weight;
+            target.merge(hit.nodeId(), new RaptorNodeHit(hit.nodeId(), weightedScore),
+                (left, right) -> new RaptorNodeHit(left.nodeId(), Math.max(left.score(), right.score()) + Math.min(left.score(), right.score()) * 0.15D));
+        }
+    }
+
+    private double normalizeLexicalScore(double score, double maxScore) {
+        if (score <= 0D || maxScore <= 0D) {
+            return 0D;
+        }
+        return Math.max(0D, Math.min(1D, score / maxScore));
     }
 
     private Map<Long, SuperAgentRaptorNode> loadNodes(List<RaptorNodeHit> nodeHits) {

@@ -1,15 +1,26 @@
 import re
+import json
+import logging
+import os
+import urllib.request
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from fastapi import HTTPException
 
+from rag_tools.config import config_float, config_value
+from rag_tools.prompt_loader import load_prompt, render_prompt
 from rag_tools.semantic_model import SemanticModelUnavailable, embed_texts
 from rag_tools.schemas.raptor_build import RaptorBuildRequest, RaptorBuildResponse, RaptorChunk, RaptorNode
+
+logger = logging.getLogger(__name__)
 
 MAX_SUMMARY_CHARS = 900
 MAX_WEIGHTED_CHARS = 1200
 MAX_KEYWORDS = 12
 MAX_QUESTIONS = 6
+MIN_QUALITY_SCORE = 0.35
+LLM_CONTEXT_CHARS = 6500
 
 CHINESE_STOP_TERMS = {
     "这个", "那个", "以及", "如果", "进行", "可以", "需要", "相关", "当前", "主要", "包括", "通过",
@@ -33,7 +44,7 @@ def build_raptor(request: RaptorBuildRequest) -> RaptorBuildResponse:
         clusters = _cluster_items(current_items, max_cluster_size)
         level_nodes: list[RaptorNode] = []
         for index, cluster in enumerate(clusters, start=1):
-            node = _build_node(cluster, level, index)
+            node = _build_node(cluster, level, index, request.llm_summary_enabled)
             level_nodes.append(node)
             nodes.append(node)
 
@@ -147,7 +158,7 @@ def _cluster_items(items: list[_TreeItem], max_cluster_size: int) -> list[list[_
     return clusters
 
 
-def _build_node(cluster: list[_TreeItem], level: int, node_no: int) -> RaptorNode:
+def _build_node(cluster: list[_TreeItem], level: int, node_no: int, llm_summary_enabled: bool) -> RaptorNode:
     source_chunk_ids = _dedupe_ints(chunk_id for item in cluster for chunk_id in item.chunk_ids)
     source_parent_block_ids = _dedupe_ints(parent_id for item in cluster for parent_id in item.parent_block_ids)
     child_node_ids = _dedupe_strings(child_id for item in cluster for child_id in item.child_node_ids)
@@ -156,7 +167,8 @@ def _build_node(cluster: list[_TreeItem], level: int, node_no: int) -> RaptorNod
     section_path = _common_section_path([item.section_path for item in cluster])
     page_range = _merge_page_ranges([item.page_range for item in cluster])
     title = _node_title(cluster, section_path, keywords, level, node_no)
-    summary = _summarize(cluster, title, keywords)
+    summary_result = _summarize(cluster, title, keywords, llm_summary_enabled)
+    summary = summary_result.text
     summary_with_weight = _limit(
         "\n".join(
             part for part in [
@@ -185,14 +197,32 @@ def _build_node(cluster: list[_TreeItem], level: int, node_no: int) -> RaptorNod
         pageRange=page_range,
         keywords=keywords,
         questions=questions,
+        qualityScore=summary_result.quality_score,
         metadata={
             "itemCount": len(cluster),
             "clusterMethod": "sentence_embedding_greedy_v1",
-            "summaryStrategy": "embedding_cluster_extractive_v2",
+            "summaryStrategy": summary_result.strategy,
+            "summaryQualityScore": summary_result.quality_score,
+            "summaryQualitySignals": summary_result.signals,
             "firstChunkId": source_chunk_ids[0] if source_chunk_ids else None,
             "lastChunkId": source_chunk_ids[-1] if source_chunk_ids else None,
         },
     )
+
+
+@dataclass
+class _SummaryResult:
+    text: str
+    quality_score: float
+    strategy: str
+    signals: dict[str, object]
+
+
+@dataclass
+class _LlmSummaryResult:
+    text: str
+    status: str
+    error: str = ""
 
 
 def _text_of(chunk: RaptorChunk) -> str:
@@ -238,7 +268,26 @@ def _node_title(cluster: list[_TreeItem], section_path: str, keywords: list[str]
     return f"层级摘要 L{level}-{node_no}"
 
 
-def _summarize(cluster: list[_TreeItem], title: str, keywords: list[str]) -> str:
+def _summarize(cluster: list[_TreeItem], title: str, keywords: list[str], llm_summary_enabled: bool) -> _SummaryResult:
+    source_text = _summary_context(cluster)
+    llm_result = _LlmSummaryResult("", "disabled")
+    if llm_summary_enabled:
+        llm_result = _llm_summarize(title, keywords, source_text)
+        if llm_result.text:
+            quality = _quality_score(llm_result.text, cluster, source_text, True)
+            if quality.quality_score >= MIN_QUALITY_SCORE:
+                return _SummaryResult(
+                    text=_limit(llm_result.text, MAX_SUMMARY_CHARS),
+                    quality_score=quality.quality_score,
+                    strategy="llm_abstractive_openai_compatible_v1",
+                    signals={
+                        **quality.signals,
+                        "llmSummaryRequested": True,
+                        "llmSummaryStatus": "success",
+                    },
+                )
+            llm_result = _LlmSummaryResult(llm_result.text, "low_quality", f"qualityScore {quality.quality_score} below {MIN_QUALITY_SCORE}")
+
     candidate_sentences: list[str] = []
     for item in cluster:
         for sentence in _split_sentences(item.text):
@@ -260,7 +309,165 @@ def _summarize(cluster: list[_TreeItem], title: str, keywords: list[str]) -> str
     summary = "；".join(selected)
     if not summary:
         summary = f"{title} 相关内容覆盖 {len(cluster)} 个片段。"
-    return _limit(summary, MAX_SUMMARY_CHARS)
+    summary = _limit(summary, MAX_SUMMARY_CHARS)
+    quality = _quality_score(summary, cluster, source_text, False)
+    signals = {
+        **quality.signals,
+        "llmSummaryRequested": bool(llm_summary_enabled),
+        "llmSummaryStatus": llm_result.status,
+    }
+    if llm_result.error:
+        signals["llmSummaryError"] = _limit(llm_result.error, 300)
+    return _SummaryResult(
+        text=summary,
+        quality_score=quality.quality_score,
+        strategy="embedding_cluster_extractive_v3",
+        signals=signals,
+    )
+
+
+def _summary_context(cluster: list[_TreeItem]) -> str:
+    parts: list[str] = []
+    for index, item in enumerate(cluster, start=1):
+        header = f"[片段{index}] {item.title}".strip()
+        body = _limit(item.text, 1400)
+        if body:
+            parts.append(header + "\n" + body)
+    return _limit("\n\n".join(parts), LLM_CONTEXT_CHARS)
+
+
+def _llm_summarize(title: str, keywords: list[str], source_text: str) -> _LlmSummaryResult:
+    base_url = config_value("ragTools.llm.baseUrl", "RAG_TOOLS_LLM_BASE_URL", "").rstrip("/")
+    api_key = config_value("ragTools.llm.apiKey", "RAG_TOOLS_LLM_API_KEY", "")
+    model = config_value("ragTools.llm.model", "RAG_TOOLS_LLM_MODEL", "")
+    if not base_url or not api_key or not model or not source_text:
+        logger.info(
+            "RAPTOR LLM summary skipped because config is incomplete: baseUrlConfigured=%s apiKeyConfigured=%s modelConfigured=%s sourceTextLength=%s",
+            bool(base_url),
+            bool(api_key),
+            bool(model),
+            len(source_text or ""),
+        )
+        return _LlmSummaryResult("", "config_incomplete", "baseUrl/apiKey/model/sourceText is incomplete")
+    endpoint = _chat_completions_endpoint(base_url)
+    system_prompt = load_prompt("raptor-summary-system.txt")
+    user_prompt = render_prompt("raptor-summary-user.txt", {
+        "title": title,
+        "keywords": "、".join(keywords[:8]),
+        "sourceText": source_text,
+    })
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "max_tokens": 700,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=config_float("ragTools.llm.timeoutSeconds", "RAG_TOOLS_LLM_TIMEOUT_SECONDS", 30.0),
+        ) as response:
+            body = response.read().decode("utf-8")
+        parsed = json.loads(body)
+        content = parsed.get("choices", [{}])[0].get("message", {}).get("content", "")
+        summary = _extract_summary_text(content)
+        if not summary:
+            logger.warning("RAPTOR LLM summary returned empty content: endpoint=%s model=%s responsePreview=%s",
+                           endpoint, model, _preview(body))
+            return _LlmSummaryResult("", "empty_response", _preview(body))
+        return _LlmSummaryResult(summary, "success")
+    except Exception as exception:
+        logger.warning("RAPTOR LLM summary failed: endpoint=%s model=%s error=%s",
+                       endpoint, model, exception)
+        return _LlmSummaryResult("", "failed", str(exception))
+
+
+def _chat_completions_endpoint(base_url: str) -> str:
+    normalized = (base_url or "").strip().rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    if normalized.endswith("/compatible-mode"):
+        normalized += "/v1"
+    return normalized + "/chat/completions"
+
+
+def _extract_summary_text(content: str) -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^```(?:json)?", "", text).strip()
+    text = re.sub(r"```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return str(parsed.get("summary") or "").strip()
+    except Exception:
+        pass
+    return text
+
+
+def _quality_score(summary: str, cluster: list[_TreeItem], source_text: str, abstractive: bool) -> _SummaryResult:
+    clean_summary = (summary or "").strip()
+    source = source_text or ""
+    if not clean_summary or not source:
+        return _SummaryResult("", 0.0, "", {"reason": "empty"})
+    summary_terms = set(_extract_terms(clean_summary))
+    source_terms = set(_extract_terms(source))
+    coverage = len(summary_terms & source_terms) / max(1, len(summary_terms))
+    coverage = max(0.0, min(coverage, 1.0))
+    length_score = min(len(clean_summary), MAX_SUMMARY_CHARS) / 260.0
+    length_score = max(0.0, min(length_score, 1.0))
+    source_sentence_count = sum(len(_split_sentences(item.text)) for item in cluster)
+    summary_sentence_count = len(_split_sentences(clean_summary))
+    compression = 1.0 if len(clean_summary) < max(240, len(source) * 0.65) else 0.35
+    copy_ratio = _copy_ratio(clean_summary, source)
+    abstraction_bonus = 0.12 if abstractive else 0.0
+    score = 0.42 * coverage + 0.24 * length_score + 0.18 * compression + 0.16 * (1.0 - copy_ratio) + abstraction_bonus
+    if summary_sentence_count <= 1 and source_sentence_count >= 4:
+        score -= 0.08
+    score = max(0.0, min(score, 1.0))
+    return _SummaryResult(
+        clean_summary,
+        round(score, 4),
+        "",
+        {
+            "termCoverage": round(coverage, 4),
+            "lengthScore": round(length_score, 4),
+            "compressionScore": round(compression, 4),
+            "copyRatio": round(copy_ratio, 4),
+            "summarySentenceCount": summary_sentence_count,
+            "sourceSentenceCount": source_sentence_count,
+            "abstractive": abstractive,
+        },
+    )
+
+
+def _preview(value: str, limit: int = 300) -> str:
+    normalized = re.sub(r"\s+", " ", value or "").strip()
+    return normalized if len(normalized) <= limit else normalized[:limit] + "..."
+
+
+def _copy_ratio(summary: str, source: str) -> float:
+    sentences = _split_sentences(summary)
+    if not sentences:
+        return 1.0
+    copied = 0
+    for sentence in sentences:
+        if len(sentence) >= 24 and sentence in source:
+            copied += 1
+    return copied / max(1, len(sentences))
 
 
 def _split_sentences(text: str) -> list[str]:

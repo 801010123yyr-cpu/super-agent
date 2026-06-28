@@ -115,8 +115,9 @@ public class RagToolsClient {
     }
 
     public RagToolsRaptorBuildResponse buildRaptor(RagToolsRaptorBuildRequest request) {
+        long startedNanos = System.nanoTime();
         try {
-            return raptorBuildRestClient.post()
+            RagToolsRaptorBuildResponse response = raptorBuildRestClient.post()
                 .uri("/raptor/build")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.APPLICATION_JSON)
@@ -141,8 +142,27 @@ public class RagToolsClient {
                             + contentType + ", body=" + preview(body), exception);
                     }
                 });
+            log.info("Python RAPTOR 构建接口调用完成，documentId={}, taskId={}, chunkCount={}, nodeCount={}, llmSummaryEnabled={}, costMillis={}",
+                request == null ? null : request.getDocumentId(),
+                request == null ? null : request.getTaskId(),
+                request == null || request.getChunks() == null ? 0 : request.getChunks().size(),
+                response == null || response.getNodes() == null ? 0 : response.getNodes().size(),
+                request == null ? null : request.getLlmSummaryEnabled(),
+                elapsedMillis(startedNanos));
+            return response;
         }
-        catch (RestClientException exception) {
+        catch (RuntimeException exception) {
+            log.error("Python RAPTOR 构建接口调用失败，documentId={}, taskId={}, chunkCount={}, llmSummaryEnabled={}, costMillis={}, message={}",
+                request == null ? null : request.getDocumentId(),
+                request == null ? null : request.getTaskId(),
+                request == null || request.getChunks() == null ? 0 : request.getChunks().size(),
+                request == null ? null : request.getLlmSummaryEnabled(),
+                elapsedMillis(startedNanos),
+                exception.getMessage(),
+                exception);
+            if (!(exception instanceof RestClientException)) {
+                throw exception;
+            }
             throw new IllegalStateException("调用 Python RAPTOR 构建接口失败: " + exception.getMessage(), exception);
         }
     }

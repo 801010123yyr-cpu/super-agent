@@ -35,6 +35,11 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       auto-offset-reset: earliest
+      max-poll-records: 1
+      properties:
+        # 文档索引构建会触发 embedding、GraphRAG、RAPTOR 等长耗时任务。
+        # Kafka listener 只负责提交后台任务，但这里仍显式放大 poll 间隔，避免本地调试或同步入口耗时接近默认 5 分钟时重复投递。
+        max.poll.interval.ms: ${SUPER_AGENT_KAFKA_MAX_POLL_INTERVAL_MS:1800000}
   ai:
     openai:
       # OpenAI 兼容协议的服务入口。
@@ -93,7 +98,7 @@ app:
     connect-timeout-ms: 3000
     read-timeout-ms: 10000
     graph-extract-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_GRAPH_EXTRACT_READ_TIMEOUT_MS:30000}
-    raptor-build-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_RAPTOR_BUILD_READ_TIMEOUT_MS:60000}
+    raptor-build-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_RAPTOR_BUILD_READ_TIMEOUT_MS:600000}
   graph-rag:
     build:
       lease-enabled: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_ENABLED:true}
@@ -210,6 +215,11 @@ app:
       raptor-max-cluster-size: 6
       # Python 构建 RAPTOR 摘要树时最多生成多少层摘要。
       raptor-max-levels: 3
+      # 是否让 Python rag-tools 在 RAPTOR 构建阶段尝试 OpenAI-compatible LLM 摘要。
+      # Java 仍负责传参、质量分过滤、入库、PGVector/ES 索引和检索融合。
+      raptor-llm-summary-enabled: ${SUPER_AGENT_RAPTOR_LLM_SUMMARY_ENABLED:true}
+      # RAPTOR 摘要质量分低于该阈值时，Java 不保存该摘要节点，也不会写入向量或 BM25 索引。
+      raptor-summary-quality-floor: ${SUPER_AGENT_RAPTOR_SUMMARY_QUALITY_FLOOR:0.42}
       # 多通道合并后进入精排前，最多保留多少个候选片段。
       candidate-top-k: 10
       # 最终注入 Prompt 的证据片段数量。
@@ -332,6 +342,9 @@ app:
       elasticsearch-refresh-wait: ${SUPER_AGENT_INDEX_BUILD_ES_REFRESH_WAIT:true}
       # 前端轻量轮询接口单次返回的最新日志数量。
       progress-log-limit: ${SUPER_AGENT_INDEX_BUILD_PROGRESS_LOG_LIMIT:60}
+      # Kafka listener 只触发任务，真正长耗时索引构建交给 Java 后台线程池执行。
+      executor-pool-size: ${SUPER_AGENT_INDEX_BUILD_EXECUTOR_POOL_SIZE:2}
+      executor-queue-capacity: ${SUPER_AGENT_INDEX_BUILD_EXECUTOR_QUEUE_CAPACITY:32}
     minio:
       # MinIO 服务地址。
       # 上传的原始文件和解析后的纯文本都会放在这里。
