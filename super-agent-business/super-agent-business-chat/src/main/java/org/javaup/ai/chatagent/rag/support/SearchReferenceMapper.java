@@ -102,6 +102,8 @@ public final class SearchReferenceMapper {
         reference.setKgCrossDocumentCommunityRelationGroupCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)));
         reference.setKgCrossDocumentCommunityEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT)));
         reference.setKgCrossDocumentCommunityDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT)));
+        reference.setKgCommunityRankScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_RANK_SCORE)));
+        reference.setKgCommunityRankReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_RANK_REASONS), ""));
         reference.setKgQualityScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE)));
         reference.setKgQualityReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_REASONS), ""));
         reference.setKgNoiseReasons(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NOISE_REASONS), ""));

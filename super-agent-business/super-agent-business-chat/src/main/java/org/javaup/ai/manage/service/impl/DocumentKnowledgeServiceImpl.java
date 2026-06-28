@@ -575,6 +575,10 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         if (pagerank instanceof Number number) {
             priority += Math.min(3D, Math.max(0D, number.doubleValue()) * 3D);
         }
+        Object communityRankScore = metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_RANK_SCORE);
+        if (communityRankScore instanceof Number number) {
+            priority += Math.min(4D, Math.max(0D, number.doubleValue()) * 2.2D);
+        }
         return priority;
     }
 

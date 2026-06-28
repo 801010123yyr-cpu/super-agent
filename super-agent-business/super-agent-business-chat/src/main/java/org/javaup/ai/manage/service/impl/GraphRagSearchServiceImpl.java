@@ -175,6 +175,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         GraphRagCrossDocumentIndex crossDocumentIndex = loadCrossDocumentIndex(documentIds, taskIds, allEntities, List.of(), List.of());
         List<SuperAgentKgCommunity> allCommunities = listCommunities(documentIds, taskIds);
         List<SuperAgentKgRelation> loadedRelations = List.of();
+        queryProfile = withJavaFocusEntities(queryProfile, allEntities, normalizedQuestion);
         if (shouldAskAdvisor(question, queryProfile, allEntities, allCommunities)) {
             loadedRelations = listAllRelations(documentIds, taskIds);
             crossDocumentIndex = ensureCrossDocumentIndex(documentIds, taskIds, allEntities, loadedRelations, List.of(), crossDocumentIndex);
@@ -270,14 +271,17 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         }
 
         crossDocumentIndex = ensureCrossDocumentIndex(documentIds, taskIds, allEntities, relationMap.values(), evidences, crossDocumentIndex);
-        communityResults.addAll(searchCrossDocumentCommunities(crossDocumentIndex, evidences, topK, normalizedQuestion, terms, effectiveQueryProfile));
+        CommunityRankContext communityRankContext = communityRankContext(crossDocumentIndex, evidences, effectiveQueryProfile);
+        communityResults.addAll(searchCrossDocumentCommunities(crossDocumentIndex, communityRankContext, topK,
+            normalizedQuestion, terms, effectiveQueryProfile));
         Map<Long, GraphRagSearchResult> resultMap = new LinkedHashMap<>();
         for (SuperAgentKgEvidence evidence : evidences) {
             if (!isGraphEvidenceUsable(evidence)) {
                 continue;
             }
             GraphRagSearchResult result = toResult(evidence, entityMap, relationMap, relationHopMap,
-                relationTraceMap, seedScoreMap, relationSeedScoreMap, crossDocumentIndex, terms, effectiveQueryProfile);
+                relationTraceMap, seedScoreMap, relationSeedScoreMap, crossDocumentIndex, communityRankContext,
+                terms, effectiveQueryProfile);
             if (result == null) {
                 continue;
             }
@@ -408,7 +412,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private List<GraphRagSearchResult> searchCrossDocumentCommunities(GraphRagCrossDocumentIndex index,
-                                                                      List<SuperAgentKgEvidence> loadedEvidences,
+                                                                      CommunityRankContext communityRankContext,
                                                                       int topK,
                                                                       String normalizedQuestion,
                                                                       List<String> terms,
@@ -416,11 +420,17 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         if (index == null || !index.hasCommunities()) {
             return List.of();
         }
-        Map<Long, SuperAgentKgEvidence> evidenceMap = safeEvidenceMap(loadedEvidences);
+        if (queryProfile == null
+            || (!queryProfile.communityQuestion() && CollUtil.isEmpty(queryProfile.communityIds()))) {
+            return List.of();
+        }
+        if (communityRankContext == null) {
+            return List.of();
+        }
         List<ScoredCrossDocumentCommunity> scoredCommunities = index.communityByKey().values().stream()
             .map(community -> new ScoredCrossDocumentCommunity(
                 community,
-                scoreCrossDocumentCommunity(community, normalizedQuestion, terms, queryProfile)
+                communityRankProfile(community, communityRankContext)
             ))
             .filter(item -> item.score() > 0D)
             .sorted(Comparator.comparingDouble(ScoredCrossDocumentCommunity::score).reversed())
@@ -430,25 +440,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return List.of();
         }
 
-        Set<Long> missingEvidenceIds = scoredCommunities.stream()
-            .flatMap(item -> item.community().evidenceIds().stream())
-            .filter(evidenceId -> !evidenceMap.containsKey(evidenceId))
-            .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (!missingEvidenceIds.isEmpty()) {
-            for (SuperAgentKgEvidence evidence : listEvidencesByIds(missingEvidenceIds)) {
-                if (evidence != null && evidence.getId() != null) {
-                    evidenceMap.put(evidence.getId(), evidence);
-                }
-            }
-        }
-
         Map<Long, List<RelationGroup>> relationGroupsByEvidenceId = relationGroupsByEvidenceId(index);
         List<GraphRagSearchResult> results = new ArrayList<>();
         for (ScoredCrossDocumentCommunity scoredCommunity : scoredCommunities) {
             CrossDocumentCommunity community = scoredCommunity.community();
             RepresentativeCommunityEvidence representative = selectRepresentativeCommunityEvidence(
                 community,
-                evidenceMap,
+                communityRankContext.evidenceMap(),
                 relationGroupsByEvidenceId,
                 terms,
                 queryProfile
@@ -471,6 +469,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                     + graphRankScore(rankBoost)
                     + representative.score());
             builder = withQueryProfile(builder, queryProfile);
+            builder = withCommunityRankProfile(builder, scoredCommunity.rankProfile());
             RelationGroup representativeGroup = representative.relationGroup();
             results.add(withCrossDocumentCommunity(
                     withRelationGroup(builder, representativeGroup),
@@ -478,6 +477,71 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 ).build());
         }
         return results;
+    }
+
+    private CommunityRankContext communityRankContext(GraphRagCrossDocumentIndex index,
+                                                      List<SuperAgentKgEvidence> loadedEvidences,
+                                                      QueryProfile queryProfile) {
+        if (index == null || !index.hasCommunities()) {
+            return null;
+        }
+        Map<Long, SuperAgentKgEvidence> evidenceMap = safeEvidenceMap(loadedEvidences);
+        Set<Long> communityEvidenceIds = new LinkedHashSet<>();
+        for (CrossDocumentCommunity community : index.communityByKey().values()) {
+            if (community != null && CollUtil.isNotEmpty(community.evidenceIds())) {
+                communityEvidenceIds.addAll(community.evidenceIds());
+            }
+        }
+        communityEvidenceIds.removeIf(Objects::isNull);
+        communityEvidenceIds.removeAll(evidenceMap.keySet());
+        if (!communityEvidenceIds.isEmpty()) {
+            for (SuperAgentKgEvidence evidence : listEvidencesByIds(communityEvidenceIds)) {
+                if (evidence != null && evidence.getId() != null) {
+                    evidenceMap.put(evidence.getId(), evidence);
+                }
+            }
+        }
+        return new CommunityRankContext(
+            index.distinctRelationGroups(),
+            evidenceMap,
+            communityTopicContext(index, queryProfile),
+            queryProfile,
+            new LinkedHashMap<>()
+        );
+    }
+
+    private CommunityRankProfile communityRankProfile(CrossDocumentCommunity community,
+                                                      CommunityRankContext context) {
+        if (community == null || context == null) {
+            return CommunityRankProfile.empty();
+        }
+        String key = communityRankKey(community);
+        if (StrUtil.isBlank(key)) {
+            return rankCrossDocumentCommunity(
+                community,
+                context.relationGroupByKey(),
+                context.evidenceMap(),
+                context.topicContext(),
+                context.queryProfile()
+            );
+        }
+        return context.rankProfileByCommunityKey().computeIfAbsent(key, ignored -> rankCrossDocumentCommunity(
+            community,
+            context.relationGroupByKey(),
+            context.evidenceMap(),
+            context.topicContext(),
+            context.queryProfile()
+        ));
+    }
+
+    private String communityRankKey(CrossDocumentCommunity community) {
+        if (community == null) {
+            return "";
+        }
+        if (StrUtil.isNotBlank(community.key())) {
+            return community.key();
+        }
+        return community.id() == null ? "" : String.valueOf(community.id());
     }
 
     private Map<Long, List<RelationGroup>> relationGroupsByEvidenceId(GraphRagCrossDocumentIndex index) {
@@ -680,6 +744,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                                           Map<Long, Double> seedScoreMap,
                                           Map<Long, Double> relationSeedScoreMap,
                                           GraphRagCrossDocumentIndex crossDocumentIndex,
+                                          CommunityRankContext communityRankContext,
                                           List<String> terms,
                                           QueryProfile queryProfile) {
         if (evidence.getRelationId() != null) {
@@ -752,10 +817,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 .score(score);
             builder = withQueryProfile(builder, queryProfile);
             builder = withCanonicalEntity(builder, seed, crossDocumentIndex);
-            return withCrossDocumentCommunity(
-                withRelationGroup(builder, relationGroup),
-                relationGroup == null ? null : crossDocumentIndex.communityOfRelationGroup(relationGroup.key())
-            ).build();
+            CrossDocumentCommunity crossDocumentCommunity = relationGroup == null
+                ? null
+                : crossDocumentIndex.communityOfRelationGroup(relationGroup.key());
+            builder = withRelationGroup(builder, relationGroup);
+            builder = withCrossDocumentCommunity(builder, crossDocumentCommunity);
+            builder = withCommunityRankProfile(builder, communityRankProfile(crossDocumentCommunity, communityRankContext));
+            return builder.build();
         }
 
         if (evidence.getEntityId() != null) {
@@ -1006,6 +1074,18 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .kgPagerank(community.rankProfile() == null ? null : community.rankProfile().pagerank())
             .kgRankPosition(community.rankProfile() == null ? null : community.rankProfile().rankPosition())
             .kgDegree(community.rankProfile() == null ? null : community.rankProfile().degree());
+    }
+
+    private GraphRagSearchResult.GraphRagSearchResultBuilder withCommunityRankProfile(
+        GraphRagSearchResult.GraphRagSearchResultBuilder builder,
+        CommunityRankProfile rankProfile
+    ) {
+        if (rankProfile == null || rankProfile.score() <= 0D) {
+            return builder;
+        }
+        return builder
+            .kgCommunityRankScore(rankProfile.score())
+            .kgCommunityRankReasons(String.join(",", rankProfile.reasons()));
     }
 
     private GraphRagSearchResult.GraphRagSearchResultBuilder withQueryProfile(
@@ -1547,55 +1627,346 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         return numberValue(metadata.get("rankBoost"), 0D);
     }
 
-    private double scoreCrossDocumentCommunity(CrossDocumentCommunity community,
-                                               String normalizedQuestion,
-                                               List<String> terms,
-                                               QueryProfile queryProfile) {
+    private CommunityRankProfile rankCrossDocumentCommunity(CrossDocumentCommunity community,
+                                                            Map<String, RelationGroup> relationGroupByKey,
+                                                            Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                                            CommunityTopicContext topicContext,
+                                                            QueryProfile queryProfile) {
+        if (community == null) {
+            return CommunityRankProfile.empty();
+        }
+        CommunityTopicGrounding grounding = assessCommunityTopicGrounding(
+            community,
+            relationGroupByKey,
+            evidenceMap,
+            topicContext,
+            queryProfile
+        );
+        if (!grounding.grounded()) {
+            return CommunityRankProfile.empty();
+        }
+
+        LinkedHashSet<String> reasons = new LinkedHashSet<>(grounding.reasons());
+        if (queryProfile.communityQuestion()) {
+            reasons.add("communityQuestion");
+        }
+        double score = Math.min(1.18D, grounding.score());
+        double qualityScore = community.qualityProfile() == null ? 0D : community.qualityProfile().score();
+        if (qualityScore > 0D) {
+            score += Math.min(0.22D, qualityScore * 0.22D);
+            reasons.add("communityQuality");
+        }
+        double reportQualityScore = community.reportProfile() == null ? 0D : community.reportProfile().qualityScore();
+        if (reportQualityScore > 0D) {
+            score += Math.min(0.12D, reportQualityScore * 0.12D);
+            reasons.add("reportQuality");
+        }
+        if (community.documentCount() > 1) {
+            score += 0.08D;
+            reasons.add("crossDocumentCoverage");
+        }
+        if (community.evidenceCount() > 1) {
+            score += Math.min(0.08D, community.evidenceCount() * 0.015D);
+            reasons.add("evidenceCoverage");
+        }
+        if (community.relationGroupCount() > 1) {
+            score += Math.min(0.08D, community.relationGroupCount() * 0.015D);
+            reasons.add("relationGroupCoverage");
+        }
+        double rankBoost = community.rankProfile() == null ? 0D : community.rankProfile().rankBoost();
+        double rankScore = graphRankScore(rankBoost) * 0.72D;
+        if (rankScore > 0D) {
+            score += rankScore;
+            reasons.add("graphRank");
+        }
+        double pagerank = community.rankProfile() == null ? 0D : community.rankProfile().pagerank();
+        if (pagerank > 0D) {
+            score += Math.min(0.05D, pagerank * 0.40D);
+            reasons.add("pagerank");
+        }
+        double penalty = communityNoisePenalty(community, relationGroupByKey, queryProfile);
+        if (penalty > 0D) {
+            score -= penalty;
+            reasons.add("noisePenalty");
+        }
+        return new CommunityRankProfile(Math.max(0D, Math.min(score, 1.85D)), List.copyOf(reasons));
+    }
+
+    private CommunityTopicContext communityTopicContext(GraphRagCrossDocumentIndex index,
+                                                        QueryProfile queryProfile) {
+        LinkedHashSet<String> focusTerms = new LinkedHashSet<>();
+        if (queryProfile != null) {
+            focusTerms.addAll(queryProfile.focusEntities());
+            focusTerms.addAll(queryProfile.entityNames());
+            focusTerms.addAll(queryProfile.entitiesFromQuery());
+            for (Long entityId : queryProfile.entityIds()) {
+                CanonicalEntityGroup group = index == null ? null : index.canonicalGroupOf(entityId);
+                if (group != null) {
+                    addNormalizedIfNotBlank(focusTerms, group.name());
+                    addNormalizedIfNotBlank(focusTerms, group.key());
+                }
+            }
+        }
+        LinkedHashSet<String> genericIntentTerms = queryProfile == null
+            ? new LinkedHashSet<>()
+            : queryProfile.genericIntentTerms().stream()
+            .map(this::normalize)
+            .filter(StrUtil::isNotBlank)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<String> highCoverageTerms = highCoverageCommunityTerms(index, focusTerms);
+        LinkedHashSet<String> normalizedFocusTerms = focusTerms.stream()
+            .map(this::normalize)
+            .filter(term -> !genericIntentTerms.contains(term))
+            .filter(term -> !highCoverageTerms.contains(term))
+            .filter(this::isCommunityFocusTerm)
+            .limit(20)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        return new CommunityTopicContext(normalizedFocusTerms, genericIntentTerms);
+    }
+
+    private Set<String> highCoverageCommunityTerms(GraphRagCrossDocumentIndex index, Collection<String> rawTerms) {
+        if (index == null || !index.hasCommunities() || CollUtil.isEmpty(rawTerms) || index.communityByKey().size() < 2) {
+            return Set.of();
+        }
+        List<CrossDocumentCommunity> communities = new ArrayList<>(index.communityByKey().values());
+        int threshold = Math.max(2, (int) Math.ceil(communities.size() * 0.60D));
+        LinkedHashSet<String> result = new LinkedHashSet<>();
+        for (String rawTerm : rawTerms) {
+            String term = normalize(rawTerm);
+            if (!isCommunityFocusTerm(term)) {
+                continue;
+            }
+            long coverage = communities.stream()
+                .filter(community -> communityTextContains(community, term))
+                .count();
+            if (coverage >= threshold) {
+                result.add(term);
+            }
+        }
+        return result;
+    }
+
+    private boolean communityTextContains(CrossDocumentCommunity community, String normalizedTerm) {
+        if (community == null || StrUtil.isBlank(normalizedTerm)) {
+            return false;
+        }
+        if (normalizedContains(community.title(), normalizedTerm)
+            || normalizedContains(community.summary(), normalizedTerm)) {
+            return true;
+        }
+        for (String coreEntityName : community.reportProfile().coreEntityNames()) {
+            if (normalizedContains(coreEntityName, normalizedTerm)) {
+                return true;
+            }
+        }
+        for (String canonicalKey : community.canonicalGroupKeys()) {
+            if (normalizedContains(canonicalKey, normalizedTerm)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isCommunityFocusTerm(String normalizedTerm) {
+        if (StrUtil.isBlank(normalizedTerm)) {
+            return false;
+        }
+        if (normalizedTerm.length() >= 4 || containsLatinOrDigit(normalizedTerm)) {
+            return true;
+        }
+        return false;
+    }
+
+    private CommunityTopicGrounding assessCommunityTopicGrounding(CrossDocumentCommunity community,
+                                                                  Map<String, RelationGroup> relationGroupByKey,
+                                                                  Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                                                  CommunityTopicContext topicContext,
+                                                                  QueryProfile queryProfile) {
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        double score = 0D;
+        if (queryProfile != null && queryProfile.communityIds().contains(community.id())) {
+            score += 0.82D;
+            reasons.add("queryCommunityId");
+        }
+        if (queryProfile != null && CollUtil.isNotEmpty(queryProfile.communityIds()) && reasons.contains("queryCommunityId")) {
+            return new CommunityTopicGrounding(true, score, List.copyOf(reasons));
+        }
+
+        boolean focusMatched = false;
+        if (topicContext != null && CollUtil.isNotEmpty(topicContext.focusTerms())) {
+            for (String focusTerm : topicContext.focusTerms()) {
+                CommunityFocusMatch match = matchCommunityFocusTerm(community, evidenceMap, focusTerm);
+                if (match.matched()) {
+                    score += match.score();
+                    reasons.addAll(match.reasons());
+                    focusMatched = true;
+                }
+            }
+        }
+
+        double relationGroundingScore = communityRelationProfileScore(community, relationGroupByKey, queryProfile, reasons);
+        if (relationGroundingScore > 0D) {
+            score += relationGroundingScore;
+        }
+        boolean relationGrounded = reasons.contains("queryRelationType")
+            || reasons.contains("queryRelationId")
+            || reasons.contains("answerTypeEndpoint");
+
+        if (focusMatched) {
+            return new CommunityTopicGrounding(true, Math.min(score, 1.25D), List.copyOf(reasons));
+        }
+        if (relationGrounded && queryProfile != null && !queryProfile.communityQuestion()) {
+            return new CommunityTopicGrounding(true, Math.min(score, 1.0D), List.copyOf(reasons));
+        }
+        if (queryProfile != null
+            && queryProfile.communityQuestion()
+            && CollUtil.isEmpty(topicContext == null ? null : topicContext.focusTerms())
+            && relationGrounded) {
+            return new CommunityTopicGrounding(true, Math.min(score, 0.86D), List.copyOf(reasons));
+        }
+        return CommunityTopicGrounding.empty();
+    }
+
+    private CommunityFocusMatch matchCommunityFocusTerm(CrossDocumentCommunity community,
+                                                        Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                                        String focusTerm) {
+        if (community == null || StrUtil.isBlank(focusTerm)) {
+            return CommunityFocusMatch.empty();
+        }
+        LinkedHashSet<String> reasons = new LinkedHashSet<>();
+        double score = 0D;
+        if (normalizedContains(community.title(), focusTerm) || normalizedContains(community.summary(), focusTerm)) {
+            score += 0.24D;
+            reasons.add("focusTextMatch");
+        }
+        for (String coreEntityName : community.reportProfile().coreEntityNames()) {
+            if (normalizedContains(coreEntityName, focusTerm)) {
+                score += 0.30D;
+                reasons.add("focusCoreEntityMatch");
+                break;
+            }
+        }
+        for (String canonicalKey : community.canonicalGroupKeys()) {
+            if (normalizedContains(canonicalKey, focusTerm)) {
+                score += 0.24D;
+                reasons.add("focusCanonicalMatch");
+                break;
+            }
+        }
+        for (String relationGroupKey : community.relationGroupKeys()) {
+            if (normalizedContains(relationGroupKey, focusTerm)) {
+                score += 0.20D;
+                reasons.add("focusRelationGroupMatch");
+                break;
+            }
+        }
+        double evidenceScore = communityEvidenceTermScore(community, evidenceMap, focusTerm);
+        if (evidenceScore > 0D) {
+            score += Math.max(0.28D, evidenceScore);
+            reasons.add("focusEvidenceMatch");
+        }
+        if (score <= 0D) {
+            return CommunityFocusMatch.empty();
+        }
+        return new CommunityFocusMatch(true, Math.min(score, 0.95D), List.copyOf(reasons));
+    }
+
+    private boolean normalizedContains(String text, String normalizedTerm) {
+        String normalizedText = normalize(text);
+        return StrUtil.isNotBlank(normalizedText)
+            && StrUtil.isNotBlank(normalizedTerm)
+            && (normalizedText.contains(normalizedTerm) || normalizedTerm.contains(normalizedText));
+    }
+
+    private boolean containsLatinOrDigit(String text) {
+        if (StrUtil.isBlank(text)) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private double communityEvidenceTermScore(CrossDocumentCommunity community,
+                                              Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                              String normalizedTerm) {
+        if (community == null || evidenceMap == null || evidenceMap.isEmpty() || StrUtil.isBlank(normalizedTerm)) {
+            return 0D;
+        }
+        double score = 0D;
+        for (Long evidenceId : community.evidenceIds()) {
+            SuperAgentKgEvidence evidence = evidenceMap.get(evidenceId);
+            if (evidence == null) {
+                continue;
+            }
+            String evidenceText = normalize(StrUtil.blankToDefault(evidence.getQuoteText(), "")
+                + " " + StrUtil.blankToDefault(evidence.getSectionPath(), ""));
+            if (evidenceText.contains(normalizedTerm)) {
+                score += 0.14D;
+            }
+        }
+        return Math.min(0.34D, score);
+    }
+
+    private double communityRelationProfileScore(CrossDocumentCommunity community,
+                                                 Map<String, RelationGroup> relationGroupByKey,
+                                                 QueryProfile queryProfile,
+                                                 Set<String> reasons) {
+        if (community == null || CollUtil.isEmpty(community.relationGroupKeys()) || queryProfile == null) {
+            return 0D;
+        }
+        double score = 0D;
+        for (String relationGroupKey : community.relationGroupKeys()) {
+            RelationGroup group = relationGroupByKey == null ? null : relationGroupByKey.get(relationGroupKey);
+            if (group == null) {
+                continue;
+            }
+            String relationType = StrUtil.blankToDefault(group.relationType(), "ASSOCIATED_WITH")
+                .trim()
+                .toUpperCase(Locale.ROOT);
+            if (queryProfile.relationTypes().contains(relationType)) {
+                score += 0.24D;
+                reasons.add("queryRelationType");
+            }
+            if (CollUtil.isNotEmpty(group.relationIds())
+                && group.relationIds().stream().anyMatch(queryProfile.relationIds()::contains)) {
+                score += 0.30D;
+                reasons.add("queryRelationId");
+            }
+            if (relationGroupEndpointMatchesAnswerType(group, queryProfile)) {
+                score += ANSWER_ACTION_RELATION_TYPES.contains(relationType) ? 0.16D : 0.10D;
+                reasons.add("answerTypeEndpoint");
+            }
+            double groupQueryBoost = relationGroupQueryBoost(group, queryProfile);
+            if (groupQueryBoost > 0D) {
+                score += Math.min(0.18D, groupQueryBoost * 0.65D);
+                reasons.add("relationGroupQuery");
+            }
+        }
+        return Math.min(0.48D, score);
+    }
+
+    private double communityNoisePenalty(CrossDocumentCommunity community,
+                                         Map<String, RelationGroup> relationGroupByKey,
+                                         QueryProfile queryProfile) {
         if (community == null) {
             return 0D;
         }
-        String title = normalize(community.title());
-        String summary = normalize(community.summary());
-        double score = 0D;
-        if (queryProfile.communityQuestion()) {
-            score += 0.16D;
+        double penalty = 0D;
+        if (community.qualityProfile() != null && CollUtil.isNotEmpty(community.qualityProfile().noiseReasons())) {
+            penalty += Math.min(0.14D, community.qualityProfile().noiseReasons().size() * 0.035D);
         }
-        if (StrUtil.isNotBlank(title) && normalizedQuestion.contains(title)) {
-            score += 0.52D;
-        }
-        for (String term : terms) {
-            String normalizedTerm = normalize(term);
-            if (normalizedTerm.length() < 2) {
-                continue;
-            }
-            if (title.contains(normalizedTerm)) {
-                score += 0.22D;
-            }
-            if (summary.contains(normalizedTerm)) {
-                score += 0.18D;
-            }
-            for (String canonicalKey : community.canonicalGroupKeys()) {
-                if (normalize(canonicalKey).contains(normalizedTerm)) {
-                    score += 0.12D;
-                    break;
-                }
-            }
+        if (CollUtil.isNotEmpty(community.relationGroupKeys())) {
             for (String relationGroupKey : community.relationGroupKeys()) {
-                if (normalize(relationGroupKey).contains(normalizedTerm)) {
-                    score += 0.10D;
-                    break;
-                }
+                RelationGroup group = relationGroupByKey == null ? null : relationGroupByKey.get(relationGroupKey);
+                penalty += Math.min(0.08D, relationGroupWeakSemanticPenalty(group, queryProfile) * 0.45D);
             }
         }
-        if (score <= 0D) {
-            return 0D;
-        }
-        score += Math.min(0.18D, community.qualityProfile().score() * 0.18D);
-        score += graphRankScore(community.rankProfile().rankBoost()) * 0.72D;
-        if (community.documentCount() > 1) {
-            score += 0.08D;
-        }
-        return Math.min(score, 1.45D);
+        return Math.min(0.22D, penalty);
     }
 
     private QueryProfile analyzeQuery(String question, List<String> terms, int requestedMaxHops) {
@@ -1615,6 +1986,9 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             || normalizedQuestion.contains("全局")
             || normalizedQuestion.contains("总结");
         return new QueryProfile(
+            "",
+            new LinkedHashSet<>(),
+            new LinkedHashSet<>(),
             new LinkedHashSet<>(),
             new LinkedHashSet<>(),
             new LinkedHashSet<>(),
@@ -1683,6 +2057,48 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return baseProfile;
         }
         return mergeProfiles(baseProfile, advisorProfile);
+    }
+
+    private QueryProfile withJavaFocusEntities(QueryProfile baseProfile,
+                                               List<SuperAgentKgEntity> entities,
+                                               String normalizedQuestion) {
+        if (baseProfile == null || StrUtil.isBlank(normalizedQuestion) || CollUtil.isEmpty(entities)) {
+            return baseProfile;
+        }
+        LinkedHashSet<String> focusEntities = new LinkedHashSet<>(baseProfile.focusEntities());
+        for (SuperAgentKgEntity entity : entities) {
+            if (!isGraphSearchEntityUsable(entity) || !matchesEntityText(entity, normalizedQuestion)) {
+                continue;
+            }
+            addNormalizedIfNotBlank(focusEntities, entity.getName());
+            addNormalizedIfNotBlank(focusEntities, entity.getNormalizedName());
+            for (String alias : entityAliases(entity)) {
+                String normalizedAlias = normalize(alias);
+                if (normalizedAlias.length() >= 2 && normalizedQuestion.contains(normalizedAlias)) {
+                    focusEntities.add(normalizedAlias);
+                }
+            }
+        }
+        if (focusEntities.equals(baseProfile.focusEntities())) {
+            return baseProfile;
+        }
+        return new QueryProfile(
+            baseProfile.queryIntent(),
+            baseProfile.relationTypes(),
+            baseProfile.entityTypes(),
+            baseProfile.entityIds(),
+            baseProfile.relationIds(),
+            baseProfile.communityIds(),
+            baseProfile.entityNames(),
+            baseProfile.answerTypeKeywords(),
+            baseProfile.entitiesFromQuery(),
+            focusEntities,
+            baseProfile.genericIntentTerms(),
+            baseProfile.relationQuestion(),
+            baseProfile.communityQuestion(),
+            baseProfile.maxHops(),
+            baseProfile.sourceText()
+        );
     }
 
     private GraphRagQueryCatalog buildQueryCatalog(List<SuperAgentKgEntity> entities,
@@ -1785,6 +2201,9 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             .filter(Objects::nonNull)
             .collect(Collectors.toCollection(LinkedHashSet::new));
 
+        String queryIntent = normalizeQueryIntent(advice.getQueryIntent());
+        LinkedHashSet<String> genericIntentTerms = normalizeEntitiesFromQuery(advice.getGenericIntentTerms(), question);
+        LinkedHashSet<String> focusEntities = normalizeEntitiesFromQuery(advice.getFocusEntities(), question);
         LinkedHashSet<String> answerTypeKeywords = normalizeAllowedStrings(advice.getAnswerTypeKeywords(), allowedEntityTypes);
         LinkedHashSet<String> entityTypes = normalizeAllowedStrings(advice.getEntityTypes(), allowedEntityTypes);
         entityTypes.addAll(answerTypeKeywords);
@@ -1794,21 +2213,25 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         LinkedHashSet<Long> communityIds = normalizeAllowedLongs(advice.getCommunityIds(), allowedCommunityIds);
         LinkedHashSet<String> entityNames = normalizeAllowedEntityNames(advice.getEntityNames(), entities);
         LinkedHashSet<String> entitiesFromQuery = normalizeEntitiesFromQuery(advice.getEntitiesFromQuery(), question);
+        focusEntities.addAll(entitiesFromQuery);
 
         boolean relationQuestion = Boolean.TRUE.equals(advice.getRelationQuestion())
             || !relationTypes.isEmpty()
             || !relationIds.isEmpty();
         boolean communityQuestion = Boolean.TRUE.equals(advice.getCommunityQuestion()) || !communityIds.isEmpty();
-        if (entityTypes.isEmpty()
+        if (StrUtil.isBlank(queryIntent)
+            && entityTypes.isEmpty()
             && relationTypes.isEmpty()
             && entityIds.isEmpty()
             && relationIds.isEmpty()
             && communityIds.isEmpty()
             && entityNames.isEmpty()
-            && entitiesFromQuery.isEmpty()) {
+            && entitiesFromQuery.isEmpty()
+            && focusEntities.isEmpty()) {
             return null;
         }
         return new QueryProfile(
+            queryIntent,
             relationTypes,
             entityTypes,
             entityIds,
@@ -1817,14 +2240,17 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             entityNames,
             answerTypeKeywords,
             entitiesFromQuery,
+            focusEntities,
+            genericIntentTerms,
             relationQuestion,
-            communityQuestion,
+            communityQuestion || "COMMUNITY_REPORT".equals(queryIntent),
             normalizeAdvisorMaxHops(advice.getMaxHops(), requestedMaxHops),
             ADVISOR_QUERY_PROFILE_SOURCE
         );
     }
 
     private QueryProfile mergeProfiles(QueryProfile baseProfile, QueryProfile advisorProfile) {
+        String queryIntent = StrUtil.blankToDefault(advisorProfile.queryIntent(), baseProfile.queryIntent());
         LinkedHashSet<String> relationTypes = new LinkedHashSet<>(baseProfile.relationTypes());
         relationTypes.addAll(advisorProfile.relationTypes());
         LinkedHashSet<String> entityTypes = new LinkedHashSet<>(baseProfile.entityTypes());
@@ -1841,7 +2267,12 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         answerTypeKeywords.addAll(advisorProfile.answerTypeKeywords());
         LinkedHashSet<String> entitiesFromQuery = new LinkedHashSet<>(baseProfile.entitiesFromQuery());
         entitiesFromQuery.addAll(advisorProfile.entitiesFromQuery());
+        LinkedHashSet<String> focusEntities = new LinkedHashSet<>(baseProfile.focusEntities());
+        focusEntities.addAll(advisorProfile.focusEntities());
+        LinkedHashSet<String> genericIntentTerms = new LinkedHashSet<>(baseProfile.genericIntentTerms());
+        genericIntentTerms.addAll(advisorProfile.genericIntentTerms());
         return new QueryProfile(
+            queryIntent,
             relationTypes,
             entityTypes,
             entityIds,
@@ -1850,6 +2281,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             entityNames,
             answerTypeKeywords,
             entitiesFromQuery,
+            focusEntities,
+            genericIntentTerms,
             baseProfile.relationQuestion() || advisorProfile.relationQuestion(),
             baseProfile.communityQuestion() || advisorProfile.communityQuestion(),
             Math.max(baseProfile.maxHops(), advisorProfile.maxHops()),
@@ -1920,6 +2353,14 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             }
         }
         return result;
+    }
+
+    private String normalizeQueryIntent(String queryIntent) {
+        String normalized = StrUtil.blankToDefault(queryIntent, "").trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "RELATION_SEARCH", "COMMUNITY_REPORT", "NHOP_SEARCH", "ENTITY_LOOKUP", "GLOBAL_SUMMARY" -> normalized;
+            default -> "";
+        };
     }
 
     private boolean hasQuestionEntityAnchor(String normalizedQuestion, List<SuperAgentKgEntity> entities) {
@@ -2108,7 +2549,25 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     private record ScoredCommunity(SuperAgentKgCommunity community, double score) {
     }
 
-    private record ScoredCrossDocumentCommunity(CrossDocumentCommunity community, double score) {
+    private record ScoredCrossDocumentCommunity(CrossDocumentCommunity community, CommunityRankProfile rankProfile) {
+
+        private double score() {
+            return rankProfile == null ? 0D : rankProfile.score();
+        }
+    }
+
+    private record CommunityRankProfile(double score, List<String> reasons) {
+
+        private static CommunityRankProfile empty() {
+            return new CommunityRankProfile(0D, List.of());
+        }
+    }
+
+    private record CommunityRankContext(Map<String, RelationGroup> relationGroupByKey,
+                                        Map<Long, SuperAgentKgEvidence> evidenceMap,
+                                        CommunityTopicContext topicContext,
+                                        QueryProfile queryProfile,
+                                        Map<String, CommunityRankProfile> rankProfileByCommunityKey) {
     }
 
     private record RepresentativeCommunityEvidence(SuperAgentKgEvidence evidence,
@@ -2122,7 +2581,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     private record RelationTrace(Long seedEntityId, String seedEntityName, String path, String sourceText) {
     }
 
-    private record QueryProfile(Set<String> relationTypes,
+    private record QueryProfile(String queryIntent,
+                                Set<String> relationTypes,
                                 Set<String> entityTypes,
                                 Set<Long> entityIds,
                                 Set<Long> relationIds,
@@ -2130,9 +2590,28 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                                 Set<String> entityNames,
                                 Set<String> answerTypeKeywords,
                                 Set<String> entitiesFromQuery,
+                                Set<String> focusEntities,
+                                Set<String> genericIntentTerms,
                                 boolean relationQuestion,
                                 boolean communityQuestion,
                                 int maxHops,
                                 String sourceText) {
+    }
+
+    private record CommunityTopicContext(Set<String> focusTerms, Set<String> genericIntentTerms) {
+    }
+
+    private record CommunityTopicGrounding(boolean grounded, double score, List<String> reasons) {
+
+        private static CommunityTopicGrounding empty() {
+            return new CommunityTopicGrounding(false, 0D, List.of());
+        }
+    }
+
+    private record CommunityFocusMatch(boolean matched, double score, List<String> reasons) {
+
+        private static CommunityFocusMatch empty() {
+            return new CommunityFocusMatch(false, 0D, List.of());
+        }
     }
 }

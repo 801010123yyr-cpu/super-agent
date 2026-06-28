@@ -94,6 +94,8 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT = "kgCrossDocumentCommunityRelationGroupCount";
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT = "kgCrossDocumentCommunityEvidenceCount";
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT = "kgCrossDocumentCommunityDocumentCount";
+    public static final String KG_COMMUNITY_RANK_SCORE = "kgCommunityRankScore";
+    public static final String KG_COMMUNITY_RANK_REASONS = "kgCommunityRankReasons";
     public static final String KG_RANK_BOOST = "kgRankBoost";
     public static final String KG_QUALITY_SCORE = "kgQualityScore";
     public static final String KG_QUALITY_REASONS = "kgQualityReasons";
@@ -133,6 +135,8 @@ public final class DocumentKnowledgeMetadataKeys {
         KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT,
         KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT,
         KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT,
+        KG_COMMUNITY_RANK_SCORE,
+        KG_COMMUNITY_RANK_REASONS,
         KG_RANK_BOOST,
         KG_QUALITY_SCORE,
         KG_QUALITY_REASONS,

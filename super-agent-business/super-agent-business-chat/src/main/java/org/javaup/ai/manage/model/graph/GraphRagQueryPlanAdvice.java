@@ -16,6 +16,14 @@ public class GraphRagQueryPlanAdvice {
 
     private Boolean graphQuery;
 
+    private String queryIntent;
+
+    @Builder.Default
+    private List<String> focusEntities = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> genericIntentTerms = new ArrayList<>();
+
     @Builder.Default
     private List<String> entityNames = new ArrayList<>();
 

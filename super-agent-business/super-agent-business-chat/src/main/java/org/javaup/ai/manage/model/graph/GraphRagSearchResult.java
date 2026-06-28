@@ -73,6 +73,10 @@ public class GraphRagSearchResult {
 
     private Integer crossDocumentCommunityDocumentCount;
 
+    private Double kgCommunityRankScore;
+
+    private String kgCommunityRankReasons;
+
     private Long chunkId;
 
     private Long parentBlockId;

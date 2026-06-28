@@ -38,6 +38,8 @@ class SearchReferenceMapperTest {
         metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, 1);
         metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT, 3);
         metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT, 2);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_RANK_SCORE, 1.23D);
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_RANK_REASONS, "queryEntityMatch,evidenceTermMatch");
 
         Document document = Document.builder()
             .id("parent-1001")
@@ -68,5 +70,7 @@ class SearchReferenceMapperTest {
         assertThat(reference.getKgCrossDocumentCommunityRelationGroupCount()).isEqualTo(1);
         assertThat(reference.getKgCrossDocumentCommunityEvidenceCount()).isEqualTo(3);
         assertThat(reference.getKgCrossDocumentCommunityDocumentCount()).isEqualTo(2);
+        assertThat(reference.getKgCommunityRankScore()).isEqualTo(1.23D);
+        assertThat(reference.getKgCommunityRankReasons()).isEqualTo("queryEntityMatch,evidenceTermMatch");
     }
 }

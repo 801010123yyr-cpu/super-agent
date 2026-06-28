@@ -1046,6 +1046,417 @@ class GraphRagSearchServiceImplTest {
     }
 
     @Test
+    void crossDocumentCommunityRankPrefersQueryRelevantCommunityOverGenericHighRankCommunity() {
+        SuperAgentKgEntity auditSystem = entity(2101L, 20L, 30L, "审计系统", "AuditTrail", "SYSTEM", "审计系统。");
+        SuperAgentKgEntity approvalDept = entity(2102L, 20L, 30L, "权限审批部门", null, "ORGANIZATION", "权限审批部门。");
+        SuperAgentKgEntity releaseSystem = entity(2103L, 20L, 30L, "发布系统", null, "SYSTEM", "发布系统。");
+        SuperAgentKgEntity rollbackPlan = entity(2104L, 20L, 30L, "回滚方案", null, "PROCESS", "回滚方案。");
+        SuperAgentKgRelation approvalRelation = relation(3101L, 20L, 30L, 2101L, 2102L, "RESPONSIBLE_FOR",
+            "审计系统权限审批部门由制度明确。", 0.90D);
+        SuperAgentKgRelation releaseRelation = relation(3102L, 20L, 30L, 2103L, 2104L, "ASSOCIATED_WITH",
+            "发布系统关联回滚方案。", 0.95D);
+        SuperAgentKgEvidence approvalEvidence = evidence(4101L, 20L, 30L, 5101L, 6101L, 3101L, null,
+            "审计系统相关的权限审批部门需要在记录中明确留痕。", 5);
+        SuperAgentKgEvidence releaseEvidence = evidence(4102L, 20L, 30L, 5102L, 6102L, 3102L, null,
+            "发布系统需要准备回滚方案并记录发布窗口。", 6);
+
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup auditGroup = canonicalGroup(
+            "SYSTEM:audittrail", "审计系统", "SYSTEM", List.of(2101L), List.of(20L, 21L), 0.86D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup approvalGroup = canonicalGroup(
+            "ORGANIZATION:权限审批部门", "权限审批部门", "ORGANIZATION", List.of(2102L), List.of(20L, 21L), 0.84D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup releaseGroup = canonicalGroup(
+            "SYSTEM:发布系统", "发布系统", "SYSTEM", List.of(2103L), List.of(20L, 21L, 22L), 0.98D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup rollbackGroup = canonicalGroup(
+            "PROCESS:回滚方案", "回滚方案", "PROCESS", List.of(2104L), List.of(20L, 21L, 22L), 0.97D);
+        GraphRagCrossDocumentIndex.RelationGroup approvalGroupRelation = relationGroup(
+            "SYSTEM:audittrail->RESPONSIBLE_FOR->ORGANIZATION:权限审批部门",
+            auditGroup.key(),
+            approvalGroup.key(),
+            "RESPONSIBLE_FOR",
+            List.of(3101L),
+            List.of(4101L),
+            List.of(20L, 21L),
+            0.88D,
+            List.of("groundedEvidence", "crossDocument"),
+            List.of()
+        );
+        GraphRagCrossDocumentIndex.RelationGroup releaseGroupRelation = relationGroup(
+            "SYSTEM:发布系统->ASSOCIATED_WITH->PROCESS:回滚方案",
+            releaseGroup.key(),
+            rollbackGroup.key(),
+            "ASSOCIATED_WITH",
+            List.of(3102L),
+            List.of(4102L),
+            List.of(20L, 21L, 22L),
+            0.96D,
+            List.of("groundedEvidence", "crossDocument"),
+            List.of()
+        );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity approvalCommunity = crossDocumentCommunity(
+            9902L,
+            "xdoc-community:audittrail-approval",
+            "审计系统权限审批社区",
+            "覆盖审计系统、权限审批部门和跨文档证据。",
+            List.of(auditGroup.key(), approvalGroup.key()),
+            List.of(approvalGroupRelation.key()),
+            List.of(4101L),
+            List.of(20L, 21L),
+            0.72D,
+            0.84D,
+            0.74D,
+            List.of("审计系统", "权限审批部门"),
+            List.of("RESPONSIBLE_FOR")
+        );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity genericHighRankCommunity = crossDocumentCommunity(
+            9903L,
+            "xdoc-community:release-rollback",
+            "发布系统回滚社区",
+            "覆盖发布系统、回滚方案和发布窗口。",
+            List.of(releaseGroup.key(), rollbackGroup.key()),
+            List.of(releaseGroupRelation.key()),
+            List.of(4102L),
+            List.of(20L, 21L, 22L),
+            0.97D,
+            0.97D,
+            0.98D,
+            List.of("发布系统", "回滚方案"),
+            List.of("ASSOCIATED_WITH")
+        );
+        GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
+            Map.of(
+                2101L, auditGroup,
+                2102L, approvalGroup,
+                2103L, releaseGroup,
+                2104L, rollbackGroup
+            ),
+            Map.of(
+                3101L, approvalGroupRelation,
+                3102L, releaseGroupRelation
+            ),
+            Map.of(
+                approvalCommunity.key(), approvalCommunity,
+                genericHighRankCommunity.key(), genericHighRankCommunity
+            ),
+            Map.of(
+                approvalGroupRelation.key(), approvalCommunity,
+                releaseGroupRelation.key(), genericHighRankCommunity
+            )
+        );
+        GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
+
+            @Override
+            public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+                return List.of();
+            }
+
+            @Override
+            public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+                return persistedIndex;
+            }
+        };
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> Optional.of(GraphRagQueryPlanAdvice.builder()
+            .graphQuery(true)
+            .entityNames(List.of("审计系统", "权限审批部门"))
+            .entitiesFromQuery(List.of("审计系统", "权限审批部门"))
+            .answerTypeKeywords(List.of("ORGANIZATION"))
+            .entityTypes(List.of("ORGANIZATION"))
+            .relationTypes(List.of("RESPONSIBLE_FOR"))
+            .relationIds(List.of(3101L))
+            .communityQuestion(true)
+            .relationQuestion(true)
+            .confidence(0.91D)
+            .build());
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(auditSystem, approvalDept, releaseSystem, rollbackPlan), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(approvalRelation, releaseRelation), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(approvalEvidence, releaseEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            advisor,
+            indexService,
+            new GraphRagCrossDocumentIndexSupport(new ObjectMapper())
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "审计系统相关的权限审批部门社区总结是什么？",
+            List.of(20L, 21L, 22L),
+            List.of(30L),
+            5,
+            1
+        );
+
+        List<GraphRagSearchResult> communityResults = results.stream()
+            .filter(item -> item.getRelationId() == null)
+            .filter(item -> item.getCrossDocumentCommunityKey() != null)
+            .toList();
+        assertThat(communityResults).hasSize(1);
+        assertThat(communityResults.get(0).getCrossDocumentCommunityKey()).isEqualTo("xdoc-community:audittrail-approval");
+        assertThat(communityResults.get(0).getKgCommunityRankScore()).isGreaterThan(0D);
+        assertThat(communityResults.get(0).getKgCommunityRankReasons())
+            .contains("focusCoreEntityMatch", "queryRelationType", "answerTypeEndpoint", "communityQuality");
+        assertThat(communityResults.get(0).getRelationGroupKey())
+            .isEqualTo("SYSTEM:audittrail->RESPONSIBLE_FOR->ORGANIZATION:权限审批部门");
+        assertThat(communityResults)
+            .extracting(GraphRagSearchResult::getCrossDocumentCommunityKey)
+            .doesNotContain("xdoc-community:release-rollback");
+    }
+
+    @Test
+    void relationEvidenceWithCrossDocumentCommunityCarriesCommunityRankMetadata() {
+        SuperAgentKgEntity auditSystem = entity(2111L, 20L, 30L, "审计系统", "AuditTrail", "SYSTEM", "审计系统。");
+        SuperAgentKgEntity approvalDept = entity(2112L, 20L, 30L, "权限审批部门", null, "ORGANIZATION", "权限审批部门。");
+        SuperAgentKgRelation relation = relation(3111L, 20L, 30L, 2111L, 2112L, "RESPONSIBLE_FOR",
+            "审计系统权限审批部门由制度明确。", 0.90D);
+        SuperAgentKgEvidence evidence = evidence(4111L, 20L, 30L, 5111L, 6111L, 3111L, null,
+            "审计系统相关的权限审批部门需要在记录中明确留痕。", 5);
+
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup auditGroup = canonicalGroup(
+            "SYSTEM:audittrail", "审计系统", "SYSTEM", List.of(2111L), List.of(20L, 21L), 0.86D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup approvalGroup = canonicalGroup(
+            "ORGANIZATION:权限审批部门", "权限审批部门", "ORGANIZATION", List.of(2112L), List.of(20L, 21L), 0.84D);
+        GraphRagCrossDocumentIndex.RelationGroup relationGroup = relationGroup(
+            "SYSTEM:audittrail->RESPONSIBLE_FOR->ORGANIZATION:权限审批部门",
+            auditGroup.key(),
+            approvalGroup.key(),
+            "RESPONSIBLE_FOR",
+            List.of(3111L),
+            List.of(4111L),
+            List.of(20L, 21L),
+            0.88D,
+            List.of("groundedEvidence", "crossDocument"),
+            List.of()
+        );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity community = crossDocumentCommunity(
+            9910L,
+            "xdoc-community:audittrail-approval",
+            "审计系统权限审批社区",
+            "覆盖审计系统、权限审批部门和跨文档证据。",
+            List.of(auditGroup.key(), approvalGroup.key()),
+            List.of(relationGroup.key()),
+            List.of(4111L),
+            List.of(20L, 21L),
+            0.72D,
+            0.84D,
+            0.74D,
+            List.of("审计系统", "权限审批部门"),
+            List.of("RESPONSIBLE_FOR")
+        );
+        GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
+            Map.of(2111L, auditGroup, 2112L, approvalGroup),
+            Map.of(3111L, relationGroup),
+            Map.of(community.key(), community),
+            Map.of(relationGroup.key(), community)
+        );
+        GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
+
+            @Override
+            public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+                return List.of();
+            }
+
+            @Override
+            public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+                return persistedIndex;
+            }
+        };
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> Optional.of(GraphRagQueryPlanAdvice.builder()
+            .graphQuery(true)
+            .entityNames(List.of("审计系统", "权限审批部门"))
+            .entitiesFromQuery(List.of("审计系统", "权限审批部门"))
+            .focusEntities(List.of("审计系统", "权限审批部门"))
+            .answerTypeKeywords(List.of("ORGANIZATION"))
+            .entityTypes(List.of("ORGANIZATION"))
+            .relationTypes(List.of("RESPONSIBLE_FOR"))
+            .relationIds(List.of(3111L))
+            .communityQuestion(false)
+            .relationQuestion(true)
+            .confidence(0.91D)
+            .build());
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(auditSystem, approvalDept), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(relation), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(evidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            advisor,
+            indexService,
+            new GraphRagCrossDocumentIndexSupport(new ObjectMapper())
+        );
+
+        GraphRagSearchResult relationResult = service.search(
+                "审计系统相关的权限审批部门是谁？",
+                List.of(20L, 21L),
+                List.of(30L),
+                5,
+                1
+            )
+            .stream()
+            .filter(item -> Long.valueOf(3111L).equals(item.getRelationId()))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(relationResult.getCrossDocumentCommunityKey()).isEqualTo("xdoc-community:audittrail-approval");
+        assertThat(relationResult.getKgCommunityRankScore()).isGreaterThan(0D);
+        assertThat(relationResult.getKgCommunityRankReasons())
+            .contains("focusCoreEntityMatch")
+            .contains("queryRelationType")
+            .contains("answerTypeEndpoint");
+    }
+
+    @Test
+    void crossDocumentCommunityRankRequiresGroundedTopicMatchBeyondGenericCommunityIntent() {
+        SuperAgentKgEntity auditSystem = entity(2201L, 20L, 30L, "审计系统", "AuditTrail", "SYSTEM", "审计系统。");
+        SuperAgentKgEntity securityDept = entity(2202L, 20L, 30L, "信息安全部", null, "ORGANIZATION", "信息安全部。");
+        SuperAgentKgEntity releaseControl = entity(2203L, 22L, 32L, "ReleaseControl", "发布管控平台", "SYSTEM", "生产发布回滚管控系统。");
+        SuperAgentKgEntity rollbackDrill = entity(2204L, 22L, 32L, "回滚演练", null, "PROCESS", "生产发布回滚演练。");
+        SuperAgentKgRelation auditRelation = relation(3201L, 20L, 30L, 2201L, 2202L, "RECORDS",
+            "审计系统记录信息安全部复核动作。", 0.96D);
+        SuperAgentKgRelation releaseRelation = relation(3202L, 22L, 32L, 2203L, 2204L, "RESPONSIBLE_FOR",
+            "ReleaseControl 管控生产发布回滚演练。", 0.86D);
+        SuperAgentKgEvidence auditEvidence = evidence(4201L, 20L, 30L, 5201L, 6201L, 3201L, null,
+            "审计系统记录信息安全部、批量导出和共享链接相关留痕。", 5);
+        SuperAgentKgEvidence releaseEvidence = evidence(4202L, 22L, 32L, 5202L, 6202L, 3202L, null,
+            "生产发布回滚由 ReleaseControl 管控，值班 SRE 负责执行回滚演练。", 6);
+
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup auditGroup = canonicalGroup(
+            "SYSTEM:audittrail", "审计系统", "SYSTEM", List.of(2201L), List.of(20L, 21L), 0.95D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup securityGroup = canonicalGroup(
+            "ORGANIZATION:信息安全部", "信息安全部", "ORGANIZATION", List.of(2202L), List.of(20L, 21L), 0.94D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup releaseGroup = canonicalGroup(
+            "SYSTEM:releasecontrol", "ReleaseControl", "SYSTEM", List.of(2203L), List.of(22L, 23L), 0.83D);
+        GraphRagCrossDocumentIndex.CanonicalEntityGroup rollbackGroup = canonicalGroup(
+            "PROCESS:回滚演练", "回滚演练", "PROCESS", List.of(2204L), List.of(22L, 23L), 0.82D);
+        GraphRagCrossDocumentIndex.RelationGroup auditGroupRelation = relationGroup(
+            "SYSTEM:audittrail->RECORDS->ORGANIZATION:信息安全部",
+            auditGroup.key(),
+            securityGroup.key(),
+            "RECORDS",
+            List.of(3201L),
+            List.of(4201L),
+            List.of(20L, 21L, 22L),
+            0.96D,
+            List.of("groundedEvidence", "crossDocument"),
+            List.of()
+        );
+        GraphRagCrossDocumentIndex.RelationGroup releaseGroupRelation = relationGroup(
+            "SYSTEM:releasecontrol->RESPONSIBLE_FOR->PROCESS:回滚演练",
+            releaseGroup.key(),
+            rollbackGroup.key(),
+            "RESPONSIBLE_FOR",
+            List.of(3202L),
+            List.of(4202L),
+            List.of(22L, 23L),
+            0.82D,
+            List.of("groundedEvidence", "crossDocument"),
+            List.of()
+        );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity auditCommunity = crossDocumentCommunity(
+            9911L,
+            "xdoc-community:audittrail",
+            "跨文档图谱社区：信息安全部 / 批量导出 / 共享链接",
+            "跨文档社区报告覆盖审计系统、信息安全部、批量导出和共享链接。",
+            List.of(auditGroup.key(), securityGroup.key()),
+            List.of(auditGroupRelation.key()),
+            List.of(4201L),
+            List.of(20L, 21L, 22L),
+            0.98D,
+            0.96D,
+            0.98D,
+            List.of("信息安全部", "批量导出", "共享链接"),
+            List.of("RECORDS")
+        );
+        GraphRagCrossDocumentIndex.CrossDocumentCommunity releaseCommunity = crossDocumentCommunity(
+            9912L,
+            "xdoc-community:releasecontrol",
+            "跨文档图谱社区：ReleaseControl / 回滚演练",
+            "社区报告覆盖生产发布回滚、ReleaseControl 和回滚演练证据。",
+            List.of(releaseGroup.key(), rollbackGroup.key()),
+            List.of(releaseGroupRelation.key()),
+            List.of(4202L),
+            List.of(22L, 23L),
+            0.78D,
+            0.82D,
+            0.74D,
+            List.of("ReleaseControl", "回滚演练"),
+            List.of("RESPONSIBLE_FOR")
+        );
+        GraphRagCrossDocumentIndex persistedIndex = new GraphRagCrossDocumentIndex(
+            Map.of(
+                2201L, auditGroup,
+                2202L, securityGroup,
+                2203L, releaseGroup,
+                2204L, rollbackGroup
+            ),
+            Map.of(
+                3201L, auditGroupRelation,
+                3202L, releaseGroupRelation
+            ),
+            Map.of(
+                auditCommunity.key(), auditCommunity,
+                releaseCommunity.key(), releaseCommunity
+            ),
+            Map.of(
+                auditGroupRelation.key(), auditCommunity,
+                releaseGroupRelation.key(), releaseCommunity
+            )
+        );
+        GraphRagCrossDocumentIndexService indexService = new GraphRagCrossDocumentIndexService() {
+
+            @Override
+            public List<GraphRagCrossDocumentIndexBuildResult> rebuildAll() {
+                return List.of();
+            }
+
+            @Override
+            public GraphRagCrossDocumentIndex loadIndex(List<Long> documentIds, List<Long> taskIds) {
+                return persistedIndex;
+            }
+        };
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> Optional.of(GraphRagQueryPlanAdvice.builder()
+            .graphQuery(true)
+            .entityNames(List.of("生产发布回滚", "ReleaseControl"))
+            .entitiesFromQuery(List.of("生产发布回滚", "ReleaseControl"))
+            .communityQuestion(true)
+            .confidence(0.90D)
+            .build());
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(auditSystem, securityDept, releaseControl, rollbackDrill), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(auditRelation, releaseRelation), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(auditEvidence, releaseEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            advisor,
+            indexService,
+            new GraphRagCrossDocumentIndexSupport(new ObjectMapper())
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "生产发布回滚相关的跨文档图谱社区总结是什么？",
+            List.of(20L, 21L, 22L, 23L),
+            List.of(30L, 32L),
+            5,
+            1
+        );
+
+        List<GraphRagSearchResult> communityResults = results.stream()
+            .filter(item -> item.getRelationId() == null)
+            .filter(item -> item.getCrossDocumentCommunityKey() != null)
+            .toList();
+        assertThat(communityResults).isNotEmpty();
+        assertThat(communityResults.get(0).getCrossDocumentCommunityKey()).isEqualTo("xdoc-community:releasecontrol");
+        assertThat(communityResults.get(0).getKgCommunityRankReasons())
+            .contains("focusCoreEntityMatch")
+            .contains("focusEvidenceMatch")
+            .doesNotContain("queryRelationType");
+        assertThat(communityResults)
+            .extracting(GraphRagSearchResult::getCrossDocumentCommunityKey)
+            .doesNotContain("xdoc-community:audittrail");
+    }
+
+    @Test
     void controlledAdvisorCanSeedRelationWhenQuestionUsesImplicitGraphIntent() {
         SuperAgentKgEntity source = entity(1001L, 10L, 20L, "SuperAgent", "超级智能体", "SYSTEM", "负责调用编排与图谱构建。");
         SuperAgentKgEntity target = entity(1002L, 10L, 20L, "RagTools", null, "SYSTEM", "图谱抽取与重排工具。");
@@ -1256,6 +1667,43 @@ class GraphRagSearchServiceImplTest {
             qualityScore,
             new GraphRagCrossDocumentIndex.QualityProfile(qualityScore, qualityReasons, noiseReasons),
             new GraphRagCrossDocumentIndex.RankProfile(0.16D, qualityScore, 1, 3, 1, 2, 2.4D)
+        );
+    }
+
+    private static GraphRagCrossDocumentIndex.CrossDocumentCommunity crossDocumentCommunity(Long id,
+                                                                                             String key,
+                                                                                             String title,
+                                                                                             String summary,
+                                                                                             List<String> canonicalGroupKeys,
+                                                                                             List<String> relationGroupKeys,
+                                                                                             List<Long> evidenceIds,
+                                                                                             List<Long> documentIds,
+                                                                                             double rankScore,
+                                                                                             double qualityScore,
+                                                                                             double rankBoost,
+                                                                                             List<String> coreEntityNames,
+                                                                                             List<String> keyRelationTypes) {
+        return new GraphRagCrossDocumentIndex.CrossDocumentCommunity(
+            id,
+            key,
+            title,
+            summary,
+            new LinkedHashSet<>(canonicalGroupKeys),
+            new LinkedHashSet<>(relationGroupKeys),
+            new LinkedHashSet<>(evidenceIds),
+            new LinkedHashSet<>(documentIds),
+            new GraphRagCrossDocumentIndex.ReportProfile(
+                "test.report.v1",
+                coreEntityNames,
+                keyRelationTypes,
+                List.of("仅总结测试证据。"),
+                List.of("未被 KG relation/evidence 支撑的结论不能推出。"),
+                qualityScore,
+                List.of("coreEntityCoverage", "relationTypeCoverage", "groundedEvidence")
+            ),
+            rankScore,
+            new GraphRagCrossDocumentIndex.QualityProfile(qualityScore, List.of("groundedEvidence", "crossDocument"), List.of()),
+            new GraphRagCrossDocumentIndex.RankProfile(0.20D, rankBoost, 1, 3, 1, 2, 2.4D)
         );
     }
 

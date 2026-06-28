@@ -155,6 +155,10 @@ public class SearchReference {
 
     private Integer kgCrossDocumentCommunityDocumentCount;
 
+    private Double kgCommunityRankScore;
+
+    private String kgCommunityRankReasons;
+
     private Double kgQualityScore;
 
     private String kgQualityReasons;

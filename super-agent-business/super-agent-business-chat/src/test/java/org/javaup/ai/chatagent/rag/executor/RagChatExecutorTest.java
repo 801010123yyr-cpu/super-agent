@@ -25,6 +25,8 @@ class RagChatExecutorTest {
         reference.setKgCrossDocumentCommunityRelationGroupCount(5);
         reference.setKgCrossDocumentCommunityEvidenceCount(5);
         reference.setKgCrossDocumentCommunityDocumentCount(2);
+        reference.setKgCommunityRankScore(1.42D);
+        reference.setKgCommunityRankReasons("focusCoreEntityMatch,communityQuality");
         reference.setKgQualityScore(1.0D);
 
         RagChatExecutor executor = new RagChatExecutor(null, null, null, null);
@@ -43,6 +45,8 @@ class RagChatExecutorTest {
         assertThat(item.get("kgCrossDocumentCommunityRelationGroupCount")).isEqualTo(5);
         assertThat(item.get("kgCrossDocumentCommunityEvidenceCount")).isEqualTo(5);
         assertThat(item.get("kgCrossDocumentCommunityDocumentCount")).isEqualTo(2);
+        assertThat(item.get("kgCommunityRankScore")).isEqualTo(1.42D);
+        assertThat(item.get("kgCommunityRankReasons")).isEqualTo("focusCoreEntityMatch,communityQuality");
         assertThat(item.get("kgQualityScore")).isEqualTo(1.0D);
     }
 }
