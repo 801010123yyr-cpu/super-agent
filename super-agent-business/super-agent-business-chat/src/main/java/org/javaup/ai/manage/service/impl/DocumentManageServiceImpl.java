@@ -101,6 +101,8 @@ import org.javaup.exception.SuperAgentFrameException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -603,7 +605,7 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         document.setIndexStatus(DocumentIndexStatusEnum.BUILDING.getCode());
         documentMapper.updateById(document);
 
-        taskLogService.saveLog(taskId, document.getId(),
+        SuperAgentDocumentTaskLog taskLog = taskLogService.saveLog(taskId, document.getId(),
             DocumentTaskStageEnum.CHUNK_EXECUTE.getCode(),
             DocumentTaskEventTypeEnum.START.getCode(),
             DocumentLogLevelEnum.INFO.getCode(),
@@ -612,7 +614,7 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             "索引构建任务已创建，等待异步执行。",
             Map.of("planId", dto.getPlanId(), "strategySnapshot", plan.getStrategySnapshot()));
 
-        kafkaProducer.sendIndexBuild(new DocumentIndexBuildMessage(document.getId(), taskId, dto.getPlanId()));
+        sendIndexBuildAfterCommit(document, task, taskLog, dto.getPlanId(), operatorId);
 
         return new DocumentIndexBuildVo(
             document.getId(),
@@ -665,6 +667,69 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             resultPage.getTotal(),
             logVoList
         );
+    }
+
+    private void sendIndexBuildAfterCommit(SuperAgentDocument document,
+                                           SuperAgentDocumentTask task,
+                                           SuperAgentDocumentTaskLog taskLog,
+                                           Long planId,
+                                           Long operatorId) {
+        Runnable sender = () -> {
+            Long documentId = document == null ? null : document.getId();
+            Long taskId = task == null ? null : task.getId();
+            progressCacheService.update(document, task, taskLog);
+            try {
+                kafkaProducer.sendIndexBuild(new DocumentIndexBuildMessage(documentId, taskId, planId));
+            }
+            catch (Exception exception) {
+                markIndexBuildSubmitFailed(documentId, taskId, operatorId, exception);
+            }
+        };
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            sender.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+
+            @Override
+            public void afterCommit() {
+                sender.run();
+            }
+        });
+    }
+
+    private void markIndexBuildSubmitFailed(Long documentId, Long taskId, Long operatorId, Exception exception) {
+        log.error("索引构建消息投递失败，已标记任务失败，documentId={}, taskId={}", documentId, taskId, exception);
+        try {
+            SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+            if (task != null && Objects.equals(task.getStatus(), BusinessStatus.YES.getCode())) {
+                Date finishTime = new Date();
+                task.setTaskStatus(DocumentTaskStatusEnum.FAILED.getCode());
+                task.setCurrentStage(DocumentTaskStageEnum.CHUNK_EXECUTE.getCode());
+                task.setFinishTime(finishTime);
+                Date startTime = task.getStartTime() == null ? task.getCreateTime() : task.getStartTime();
+                task.setCostMillis(startTime == null ? 0L : Math.max(0L, finishTime.getTime() - startTime.getTime()));
+                task.setErrorCode("INDEX_BUILD_SUBMIT_FAILED");
+                task.setErrorMsg(StrUtil.maxLength(exception.getMessage(), 1000));
+                taskMapper.updateById(task);
+            }
+            SuperAgentDocument document = documentMapper.selectById(documentId);
+            if (document != null && Objects.equals(document.getStatus(), BusinessStatus.YES.getCode())) {
+                document.setIndexStatus(DocumentIndexStatusEnum.BUILD_FAILED.getCode());
+                documentMapper.updateById(document);
+            }
+            taskLogService.saveLog(taskId, documentId,
+                DocumentTaskStageEnum.CHUNK_EXECUTE.getCode(),
+                DocumentTaskEventTypeEnum.FAILED.getCode(),
+                DocumentLogLevelEnum.ERROR.getCode(),
+                resolveOperatorType(operatorId),
+                operatorId,
+                "索引构建后台任务提交失败，未进入切块执行。",
+                Map.of("error", StrUtil.blankToDefault(exception.getMessage(), exception.getClass().getName())));
+        }
+        catch (Exception markException) {
+            log.error("标记索引构建提交失败状态时发生异常，documentId={}, taskId={}", documentId, taskId, markException);
+        }
     }
 
     @Override

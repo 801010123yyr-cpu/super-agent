@@ -432,6 +432,64 @@
               </article>
             </div>
 
+            <section v-if="raptorQualityReport" class="rounded-lg border p-4" :class="raptorQualityPanelClass(raptorQualityReport.qualityLevel)">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">RAPTOR 摘要质量评测</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">{{ raptorQualityReport.summary }}</p>
+                </div>
+                <span class="inline-flex rounded-full px-3 py-1.5 text-xs font-semibold" :class="raptorQualityBadgeClass(raptorQualityReport.qualityLevel)">{{ raptorQualityLevelLabel(raptorQualityReport.qualityLevel) }}</span>
+              </div>
+              <div class="mb-3 grid gap-2" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
+                <article v-for="item in raptorQualityStats" :key="`raptor-quality-stat-${item.label}`" class="grid gap-1 rounded-md border border-border bg-card px-3 py-2.5">
+                  <span class="text-[11px] text-muted-foreground">{{ item.label }}</span>
+                  <strong class="text-sm text-foreground">{{ item.value }}</strong>
+                  <span class="text-[11px] text-muted-foreground">{{ item.hint }}</span>
+                </article>
+              </div>
+              <div class="mb-3 grid gap-2 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                <div class="rounded-md border border-border bg-card p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">质量分布</strong>
+                    <span class="text-[11px] text-muted-foreground">min / p10 / p50 / p90</span>
+                  </div>
+                  <div class="grid gap-2">
+                    <div v-for="point in raptorQualityDistribution" :key="`raptor-quality-point-${point.label}`" class="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center gap-2 text-xs">
+                      <span class="text-muted-foreground">{{ point.label }}</span>
+                      <div class="h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div class="h-full rounded-full bg-primary" :style="{ width: qualityBarWidth(point.value) }"></div>
+                      </div>
+                      <strong class="text-right text-foreground">{{ formatPercent(point.value) }}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div class="rounded-md border border-border bg-card p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">层级质量桶</strong>
+                    <span class="text-[11px] text-muted-foreground">{{ formatCount(asArray(raptorQualityReport.levelBuckets).length) }} 层</span>
+                  </div>
+                  <div v-if="asArray(raptorQualityReport.levelBuckets).length" class="grid gap-2">
+                    <div v-for="bucket in asArray(raptorQualityReport.levelBuckets)" :key="`raptor-quality-bucket-${bucket.level}`" class="rounded-md border border-border bg-secondary px-3 py-2">
+                      <div class="mb-1 flex items-center justify-between gap-2 text-xs">
+                        <strong class="text-foreground">L{{ valueOrDash(bucket.level) }}</strong>
+                        <span class="text-muted-foreground">{{ formatCount(bucket.nodeCount) }} 节点 · 均值 {{ formatPercent(bucket.averageQualityScore) }}</span>
+                      </div>
+                      <div class="h-1.5 overflow-hidden rounded-full bg-card">
+                        <div class="h-full rounded-full bg-primary" :style="{ width: qualityBarWidth(bucket.averageQualityScore) }"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <p v-else class="text-xs text-muted-foreground">暂无层级质量桶。</p>
+                </div>
+              </div>
+              <div class="rounded-md border border-border bg-card p-3">
+                <strong class="mb-2 block text-xs text-foreground">阈值调优建议</strong>
+                <div class="grid gap-1.5">
+                  <p v-for="(item, index) in asArray(raptorQualityReport.tuningSuggestions)" :key="`raptor-quality-suggestion-${index}`" class="text-xs leading-5 text-muted-foreground">{{ index + 1 }}. {{ item }}</p>
+                </div>
+              </div>
+            </section>
+
             <div class="rounded-lg border border-border bg-secondary p-4">
               <div class="mb-3 flex items-center justify-between gap-2">
                 <div>
@@ -528,11 +586,15 @@
                       <div class="grid gap-2 rounded-md border border-border bg-card p-2.5 text-xs">
                         <div class="flex items-center justify-between gap-2">
                           <span class="text-muted-foreground">摘要质量</span>
-                          <strong class="text-foreground">{{ formatPercent(record.qualityScore) }}</strong>
+                          <div class="flex items-center gap-2">
+                            <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="raptorNodeQualityClass(record.qualityLevel)">{{ raptorNodeQualityLabel(record.qualityLevel) }}</span>
+                            <strong class="text-foreground">{{ formatPercent(record.qualityScore) }}</strong>
+                          </div>
                         </div>
                         <div class="h-1.5 overflow-hidden rounded-full bg-secondary">
-                          <div class="h-full rounded-full bg-primary" :style="{ width: qualityBarWidth(record.qualityScore) }"></div>
+                          <div class="h-full rounded-full" :class="raptorNodeQualityBarClass(record.qualityLevel)" :style="{ width: qualityBarWidth(record.qualityScore) }"></div>
                         </div>
+                        <p v-if="record.qualityRisk" class="text-[11px] leading-4 text-muted-foreground">{{ record.qualityRisk }}</p>
                         <div class="flex flex-wrap gap-1.5">
                           <span v-for="chip in record.chips.filter(Boolean).slice(0,6)" :key="`raptor-chip-${record.nodeId}-${chip}`" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
                         </div>
@@ -796,6 +858,51 @@ const chunkGroupedRecords = computed(() => {
 })
 const ragSnapshotMetrics = computed(() => asArray(ragSnapshot.value?.metrics))
 const ragPipelineStages = computed(() => asArray(ragSnapshot.value?.pipelineStages))
+const raptorQualityReport = computed(() => ragSnapshot.value?.raptorQuality || null)
+const raptorQualityStats = computed(() => {
+  const report = raptorQualityReport.value || {}
+  return [
+    {
+      label: '当前阈值',
+      value: formatPercent(report.configuredQualityFloor),
+      hint: '低于该值不会入库'
+    },
+    {
+      label: '建议阈值',
+      value: formatPercent(report.recommendedQualityFloor),
+      hint: '下一轮小步试探'
+    },
+    {
+      label: '平均质量',
+      value: formatPercent(report.averageQualityScore),
+      hint: `中位数 ${formatPercent(report.medianQualityScore)}`
+    },
+    {
+      label: 'LLM 摘要覆盖',
+      value: `${formatCount(report.abstractiveNodeCount)}/${formatCount(report.nodeCount)}`,
+      hint: formatPercent(report.abstractiveCoverage)
+    },
+    {
+      label: '低分节点',
+      value: `${formatCount(report.lowQualityNodeCount)} 个`,
+      hint: `占比 ${formatPercent(report.lowQualityRatio)}`
+    },
+    {
+      label: '阈值拦截',
+      value: `${formatCount(report.floorBlockedNodeCount)} 个`,
+      hint: `当前样本占比 ${formatPercent(report.floorBlockedRatio)}`
+    }
+  ]
+})
+const raptorQualityDistribution = computed(() => {
+  const report = raptorQualityReport.value || {}
+  return [
+    { label: 'min', value: report.minQualityScore },
+    { label: 'p10', value: report.p10QualityScore },
+    { label: 'p50', value: report.medianQualityScore },
+    { label: 'p90', value: report.p90QualityScore }
+  ]
+})
 const ragArtifactSampleCount = computed(() => {
   return [
     'parseBlocks',
@@ -939,6 +1046,8 @@ const ragArtifactSections = computed(() => {
         treeDepth: item.treeDepth,
         treePath: item.treePath,
         qualityScore: item.qualityScore,
+        qualityLevel: item.qualityLevel,
+        qualityRisk: item.qualityRisk,
         summaryStrategy: item.summaryStrategy,
         clusterMethod: item.clusterMethod,
         abstractive: item.abstractive,
@@ -954,6 +1063,7 @@ const ragArtifactSections = computed(() => {
           `L${valueOrDash(item.nodeLevel)}`,
           item.summaryStrategy || '',
           item.clusterMethod || '',
+          raptorNodeQualityLabel(item.qualityLevel),
           item.pageRange || '',
           item.keywords || ''
         ]),
@@ -1605,6 +1715,51 @@ function qualityBarWidth(value) {
     return '0%'
   }
   return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`
+}
+
+function raptorQualityLevelLabel(level) {
+  if (level === 'STRONG') return '质量稳定'
+  if (level === 'WATCH') return '需要观察'
+  if (level === 'WEAK') return '质量偏弱'
+  return '暂无评测'
+}
+
+function raptorQualityPanelClass(level) {
+  if (level === 'STRONG') return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
+  if (level === 'WATCH') return 'border-amber-500/20 bg-amber-500/[0.04]'
+  if (level === 'WEAK') return 'border-destructive/20 bg-destructive/[0.04]'
+  return 'border-border bg-secondary'
+}
+
+function raptorQualityBadgeClass(level) {
+  if (level === 'STRONG') return 'bg-[var(--color-success)]/[0.10] text-[var(--color-success)]'
+  if (level === 'WATCH') return 'bg-amber-500/[0.12] text-amber-700'
+  if (level === 'WEAK') return 'bg-destructive/[0.10] text-destructive'
+  return 'bg-secondary text-muted-foreground'
+}
+
+function raptorNodeQualityLabel(level) {
+  if (level === 'HIGH') return '高质量'
+  if (level === 'OK') return '可用'
+  if (level === 'WATCH') return '观察'
+  if (level === 'LOW') return '低分'
+  if (level === 'BLOCKED') return '低于阈值'
+  return ''
+}
+
+function raptorNodeQualityClass(level) {
+  if (level === 'HIGH') return 'bg-[var(--color-success)]/[0.10] text-[var(--color-success)]'
+  if (level === 'OK') return 'bg-primary/[0.08] text-primary'
+  if (level === 'WATCH') return 'bg-amber-500/[0.12] text-amber-700'
+  if (level === 'LOW' || level === 'BLOCKED') return 'bg-destructive/[0.10] text-destructive'
+  return 'bg-secondary text-muted-foreground'
+}
+
+function raptorNodeQualityBarClass(level) {
+  if (level === 'HIGH') return 'bg-[var(--color-success)]'
+  if (level === 'WATCH') return 'bg-amber-500'
+  if (level === 'LOW' || level === 'BLOCKED') return 'bg-destructive'
+  return 'bg-primary'
 }
 
 function raptorLevelClass(level) {

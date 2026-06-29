@@ -3,6 +3,7 @@ package org.javaup.ai.manage.vo;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 
 import java.util.List;
 
@@ -48,6 +49,8 @@ public class DocumentRagSnapshotVo {
     private List<KgCommunityItem> kgCommunities;
 
     private List<RaptorNodeItem> raptorNodes;
+
+    private RaptorQualityReport raptorQuality;
 
     private List<DocumentTaskLogVo> buildLogs;
 
@@ -365,6 +368,10 @@ public class DocumentRagSnapshotVo {
         private String questions;
 
         private Double qualityScore;
+
+        private String qualityLevel;
+
+        private String qualityRisk;
 
         private String summaryStrategy;
 

@@ -765,6 +765,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 	                detail("nodeCount", raptorBuildResult.getNodeCount(),
 	                    "levelCount", raptorBuildResult.getLevelCount(),
 	                    "sourceChunkCount", raptorBuildResult.getSourceChunkCount(),
+	                    "sourceQualityReport", raptorBuildResult.getSourceQualityReport(),
+	                    "savedQualityReport", raptorBuildResult.getSavedQualityReport(),
 	                    "costMillis", raptorCostMillis));
 
             task.setCurrentStage(DocumentTaskStageEnum.STORE_COMPLETE.getCode());

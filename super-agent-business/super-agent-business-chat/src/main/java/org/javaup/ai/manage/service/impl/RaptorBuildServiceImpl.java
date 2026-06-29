@@ -13,7 +13,9 @@ import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
+import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 import org.javaup.ai.manage.service.RaptorBuildService;
+import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
 import org.javaup.ai.manage.support.MybatisBatchExecutor;
@@ -94,6 +96,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private final DocumentManageProperties properties;
 
+    private final RaptorQualityService raptorQualityService;
+
     private final ObjectProvider<RaptorSummaryIndexService> raptorSummaryIndexServiceProvider;
 
     @Value("${spring.ai.openai.embedding.options.model:}")
@@ -129,13 +133,27 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             throw new IllegalStateException("Python RAPTOR 构建接口返回为空。");
         }
         logLlmSummaryFallbacks(documentId, taskId, response.getNodes());
+        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor());
+        log.info("Python RAPTOR 原始摘要质量评测完成，documentId={}, taskId={}, nodeCount={}, avgQuality={}, minQuality={}, p10Quality={}, medianQuality={}, recommendedFloor={}, lowQualityCount={}",
+            documentId,
+            taskId,
+            sourceQualityReport.getNodeCount(),
+            sourceQualityReport.getAverageQualityScore(),
+            sourceQualityReport.getMinQualityScore(),
+            sourceQualityReport.getP10QualityScore(),
+            sourceQualityReport.getMedianQualityScore(),
+            sourceQualityReport.getRecommendedQualityFloor(),
+            sourceQualityReport.getLowQualityNodeCount());
 
         Map<String, Long> idMap = allocateNodeIds(response.getNodes());
         List<SuperAgentRaptorNode> nodes = buildNodeEntities(documentId, taskId, response.getNodes(), idMap);
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR 构建结果没有达到质量阈值的摘要节点，documentId={}, taskId={}, qualityFloor={}",
                 documentId, taskId, qualityFloor());
-            return RaptorBuildResult.builder().build();
+            return RaptorBuildResult.builder()
+                .sourceQualityReport(sourceQualityReport)
+                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor()))
+                .build();
         }
         long insertStartedNanos = System.nanoTime();
         MybatisBatchExecutor.insertBatch(SuperAgentRaptorNode.class, nodes);
@@ -158,6 +176,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             .nodeCount(nodes.size())
             .levelCount(levelCount)
             .sourceChunkCount(sourceChunkCount)
+            .sourceQualityReport(sourceQualityReport)
+            .savedQualityReport(raptorQualityService.evaluate(documentId, taskId))
             .build();
         log.info("RAPTOR 层级摘要树构建完成: documentId={}, taskId={}, result={}, costMillis={}",
             documentId, taskId, result, elapsedMillis(buildStartedNanos));

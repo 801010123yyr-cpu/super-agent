@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
+import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
@@ -37,8 +38,10 @@ import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.graph.GraphRagQualityReport;
+import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 import org.javaup.ai.manage.service.GraphRagQualityService;
 import org.javaup.ai.manage.service.DocumentRagSnapshotService;
+import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogVo;
 import org.javaup.enums.BusinessStatus;
@@ -133,6 +136,10 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private final GraphRagQualityService graphRagQualityService;
 
+    private final RaptorQualityService raptorQualityService;
+
+    private final ChatRagProperties chatRagProperties;
+
     private final ObjectMapper objectMapper;
 
     @Override
@@ -153,6 +160,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         long kgCommunityCount = indexTaskId == null ? 0L : countKgCommunities(document.getId(), indexTaskId);
         long raptorNodeCount = indexTaskId == null ? 0L : countRaptorNodes(document.getId(), indexTaskId);
         GraphRagQualityReport graphRagQuality = graphRagQualityService.evaluate(document.getId(), indexTaskId);
+        RaptorQualityReport raptorQuality = raptorQualityService.evaluate(document.getId(), indexTaskId);
 
         return new DocumentRagSnapshotVo(
             document.getId(),
@@ -173,6 +181,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             listKgRelations(document.getId(), indexTaskId),
             listKgCommunities(document.getId(), indexTaskId),
             listRaptorNodes(document.getId(), indexTaskId),
+            raptorQuality,
             listBuildLogs(indexTaskId),
             "对话运行时的检索通道、RRF 融合、rerank 分数和 citation repair 结果在“对话观测”页面查看；本文档页只展示索引构建后的文档侧 RAG 产物。"
         );
@@ -757,6 +766,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         Map<String, Object> metadata = readMap(node.getMetadataJson());
         Map<String, Object> sourceMetadata = objectMap(metadata.get("sourceMetadata"));
         Map<String, Object> qualitySignals = objectMap(sourceMetadata.get("summaryQualitySignals"));
+        Double qualityScore = doubleValue(metadata.get("summaryQualityScore"));
 
         return new DocumentRagSnapshotVo.RaptorNodeItem(
             node.getId(),
@@ -779,7 +789,9 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             node.getPageRange(),
             node.getKeywords(),
             node.getQuestions(),
-            doubleValue(metadata.get("summaryQualityScore")),
+            qualityScore,
+            raptorNodeQualityLevel(qualityScore),
+            raptorNodeQualityRisk(qualityScore),
             stringValue(firstPresent(sourceMetadata.get("summaryStrategy"), metadata.get("summaryStrategy"))),
             stringValue(firstPresent(sourceMetadata.get("clusterMethod"), metadata.get("clusterMethod"))),
             booleanValue(qualitySignals.get("abstractive")),
@@ -968,6 +980,42 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             return "danger";
         }
         return "neutral";
+    }
+
+    private String raptorNodeQualityLevel(Double qualityScore) {
+        double score = qualityScore == null ? 0D : qualityScore;
+        if (score < qualityFloor()) {
+            return "BLOCKED";
+        }
+        if (score < 0.55D) {
+            return "LOW";
+        }
+        if (score < 0.68D) {
+            return "WATCH";
+        }
+        if (score >= 0.82D) {
+            return "HIGH";
+        }
+        return "OK";
+    }
+
+    private String raptorNodeQualityRisk(Double qualityScore) {
+        double score = qualityScore == null ? 0D : qualityScore;
+        double floor = qualityFloor();
+        if (score < floor) {
+            return "低于当前入库阈值 " + percentText(floor) + "，正常情况下不应进入检索索引，请复查构建阈值和旧数据。";
+        }
+        if (score < 0.55D) {
+            return "低质量摘要，建议检查 source chunk 覆盖、摘要是否过短或过度摘句。";
+        }
+        if (score < 0.68D) {
+            return "观察区间摘要，真实问答若频繁命中但 citation 弱，应优先调 prompt 或聚类。";
+        }
+        return "摘要质量处于可用区间，继续结合 RAPTOR 命中和最终引用观察。";
+    }
+
+    private double qualityFloor() {
+        return Math.max(0D, Math.min(1D, chatRagProperties.getRaptorSummaryQualityFloor()));
     }
 
     private String ratioTone(Double ratio, Long denominator) {

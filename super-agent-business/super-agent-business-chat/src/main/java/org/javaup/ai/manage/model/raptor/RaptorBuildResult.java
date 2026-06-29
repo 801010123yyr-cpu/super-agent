@@ -16,4 +16,8 @@ public class RaptorBuildResult {
     private int levelCount;
 
     private int sourceChunkCount;
+
+    private RaptorQualityReport sourceQualityReport;
+
+    private RaptorQualityReport savedQualityReport;
 }
