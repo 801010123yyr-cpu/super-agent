@@ -70,6 +70,10 @@ public class DocumentManageProperties {
 
         private Integer embeddingParallelism = 1;
 
+        private Integer embeddingBatchMaxAttempts = 3;
+
+        private Long embeddingBatchRetryBackoffMillis = 1200L;
+
         private Boolean elasticsearchRefreshWait = Boolean.FALSE;
 
         private Integer progressLogLimit = 60;

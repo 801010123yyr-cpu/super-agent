@@ -41,6 +41,14 @@ spring:
         # Kafka listener 只负责提交后台任务，但这里仍显式放大 poll 间隔，避免本地调试或同步入口耗时接近默认 5 分钟时重复投递。
         max.poll.interval.ms: ${SUPER_AGENT_KAFKA_MAX_POLL_INTERVAL_MS:1800000}
   ai:
+    retry:
+      # Spring AI 模型调用的统一重试策略。用于吸收 DashScope/OpenAI-compatible 网关偶发 EOF、连接重置、429/5xx 等瞬时失败。
+      # 不重试 4xx 参数错误；业务侧仍会在最终失败时让构建任务失败并记录日志。
+      max-attempts: ${SUPER_AGENT_AI_RETRY_MAX_ATTEMPTS:4}
+      backoff:
+        initial-interval: ${SUPER_AGENT_AI_RETRY_BACKOFF_INITIAL_INTERVAL:1500ms}
+        multiplier: ${SUPER_AGENT_AI_RETRY_BACKOFF_MULTIPLIER:2}
+        max-interval: ${SUPER_AGENT_AI_RETRY_BACKOFF_MAX_INTERVAL:8000ms}
     openai:
       # OpenAI 兼容协议的服务入口。
       # 当前这里接的是阿里云百炼 DashScope 的兼容地址，
@@ -339,9 +347,14 @@ app:
   manage:
     index-build:
       # 文档索引构建时单次 embedding 请求的 chunk 数。阿里百炼 text-embedding-v4 当前限制最大 10，代码也会钳制到 10。
-      embedding-batch-size: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_BATCH_SIZE:10}
+      # 默认用 5 而不是上限 10，降低 HTTP/2 EOF、网关重置或服务端尾延迟对整批构建的影响。
+      embedding-batch-size: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_BATCH_SIZE:5}
       # embedding 批次并发数。默认 1 保持串行；本地调优可设置为 2 或 3。
       embedding-parallelism: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_PARALLELISM:1}
+      # 文档向量化阶段在 Spring AI 重试之外，对同一个 embedding 批次再做有限次网络瞬断重试。
+      # 只用于 EOF、连接重置、超时这类瞬时 I/O 问题；最终失败不会降级到旧链路。
+      embedding-batch-max-attempts: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_BATCH_MAX_ATTEMPTS:3}
+      embedding-batch-retry-backoff-millis: ${SUPER_AGENT_INDEX_BUILD_EMBEDDING_BATCH_RETRY_BACKOFF_MILLIS:1200}
       # 后台构建不强制等待 ES refresh，减少 bulk 写入尾延迟；如需构建完成后立即强一致可临时改为 true。
       elasticsearch-refresh-wait: ${SUPER_AGENT_INDEX_BUILD_ES_REFRESH_WAIT:true}
       # 前端轻量轮询接口单次返回的最新日志数量。

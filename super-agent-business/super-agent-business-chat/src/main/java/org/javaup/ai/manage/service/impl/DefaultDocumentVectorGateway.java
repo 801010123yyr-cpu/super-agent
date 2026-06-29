@@ -21,7 +21,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
 
+import java.io.EOFException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
@@ -174,9 +178,7 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
 
         long batchStartedNanos = System.nanoTime();
         long embeddingStartedNanos = System.nanoTime();
-        List<float[]> embeddingList = embeddingModel.embed(currentBatch.stream()
-            .map(this::embeddingInput)
-            .toList());
+        List<float[]> embeddingList = embedBatchWithRetry(embeddingModel, batch, totalBatchCount);
         long embeddingCostMillis = elapsedMillis(embeddingStartedNanos);
         if (embeddingList.size() != currentBatch.size()) {
             throw new IllegalStateException("EmbeddingModel 返回的向量数量与 chunk 数量不一致。");
@@ -189,6 +191,42 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
 
         log.info("embedding 批次处理完成，batchIndex={}/{}, currentBatchSize={}, embeddingCostMillis={}, pgVectorCostMillis={}, batchCostMillis={}",
             batch.batchIndex(), totalBatchCount, currentBatch.size(), embeddingCostMillis, upsertCostMillis, elapsedMillis(batchStartedNanos));
+    }
+
+    private List<float[]> embedBatchWithRetry(EmbeddingModel embeddingModel, VectorBatch batch, int totalBatchCount) {
+        int maxAttempts = embeddingBatchMaxAttempts();
+        RuntimeException lastException = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            long attemptStartedNanos = System.nanoTime();
+            try {
+                List<float[]> embeddings = embeddingModel.embed(batch.chunks().stream()
+                    .map(this::embeddingInput)
+                    .toList());
+                if (attempt > 1) {
+                    log.info("embedding 批次重试成功，batchIndex={}/{}, attempt={}/{}, costMillis={}",
+                        batch.batchIndex(), totalBatchCount, attempt, maxAttempts, elapsedMillis(attemptStartedNanos));
+                }
+                return embeddings;
+            }
+            catch (RuntimeException exception) {
+                lastException = exception;
+                if (attempt >= maxAttempts || !isTransientEmbeddingException(exception)) {
+                    throw exception;
+                }
+                long backoffMillis = embeddingRetryBackoffMillis(attempt);
+                log.warn("embedding 批次出现瞬时 I/O 异常，准备重试: batchIndex={}/{}, attempt={}/{}, chunkRange=[{}, {}], backoffMillis={}, message={}",
+                    batch.batchIndex(),
+                    totalBatchCount,
+                    attempt,
+                    maxAttempts,
+                    batch.startNo(),
+                    batch.endNo(),
+                    backoffMillis,
+                    rootCauseMessage(exception));
+                sleepBeforeRetry(backoffMillis);
+            }
+        }
+        throw lastException == null ? new IllegalStateException("embedding 批次重试失败。") : lastException;
     }
 
     private List<VectorBatch> buildBatches(List<SuperAgentDocumentChunk> validChunkList, int batchSize) {
@@ -391,12 +429,72 @@ public class DefaultDocumentVectorGateway implements DocumentVectorGateway {
         return Math.min(configured, EMBEDDING_BATCH_SIZE_LIMIT);
     }
 
+    private int embeddingBatchMaxAttempts() {
+        Integer configured = properties.getIndexBuild().getEmbeddingBatchMaxAttempts();
+        if (configured == null || configured <= 1) {
+            return 1;
+        }
+        return Math.min(configured, 5);
+    }
+
+    private long embeddingRetryBackoffMillis(int attempt) {
+        Long configured = properties.getIndexBuild().getEmbeddingBatchRetryBackoffMillis();
+        long baseMillis = configured == null || configured <= 0L ? 1200L : configured;
+        long multiplier = Math.max(1L, attempt);
+        return Math.min(10000L, baseMillis * multiplier);
+    }
+
     private int embeddingParallelism(int totalBatchCount) {
         Integer configured = properties.getIndexBuild().getEmbeddingParallelism();
         if (configured == null || configured <= 1 || totalBatchCount <= 1) {
             return 1;
         }
         return Math.min(Math.min(configured, 4), totalBatchCount);
+    }
+
+    private boolean isTransientEmbeddingException(Throwable throwable) {
+        Throwable cursor = throwable;
+        while (cursor != null) {
+            if (cursor instanceof ResourceAccessException
+                || cursor instanceof EOFException
+                || cursor instanceof SocketTimeoutException
+                || cursor instanceof SocketException) {
+                return true;
+            }
+            String message = cursor.getMessage();
+            if (StrUtil.isNotBlank(message)) {
+                String lowerMessage = message.toLowerCase();
+                if (lowerMessage.contains("eof")
+                    || lowerMessage.contains("connection reset")
+                    || lowerMessage.contains("broken pipe")
+                    || lowerMessage.contains("timed out")
+                    || lowerMessage.contains("connection closed")) {
+                    return true;
+                }
+            }
+            cursor = cursor.getCause();
+        }
+        return false;
+    }
+
+    private String rootCauseMessage(Throwable throwable) {
+        Throwable cursor = throwable;
+        Throwable root = throwable;
+        while (cursor != null) {
+            root = cursor;
+            cursor = cursor.getCause();
+        }
+        return root == null ? "" : StrUtil.maxLength(StrUtil.blankToDefault(root.getMessage(), root.getClass().getSimpleName()), 240);
+    }
+
+    private void sleepBeforeRetry(long backoffMillis) {
+        try {
+            Thread.sleep(backoffMillis);
+        }
+        catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("embedding 批次重试等待被中断。", exception);
+        }
     }
 
     private ThreadFactory vectorThreadFactory() {
