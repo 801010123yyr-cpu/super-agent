@@ -511,6 +511,80 @@
                   <p v-if="record.sampleNote" class="mt-2 text-[11px] text-muted-foreground">{{ record.sampleNote }}</p>
                 </article>
               </div>
+              <div v-else-if="section.key === 'raptor'" class="grid gap-3">
+                <article v-for="record in section.records" :key="`raptor-node-${record.nodeId || record.nodeKey}`" class="rounded-lg border border-border bg-secondary p-3">
+                  <div class="grid gap-3 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.45fr)]">
+                    <div class="grid gap-2">
+                      <div class="flex items-start justify-between gap-3">
+                        <div>
+                          <div class="flex flex-wrap items-center gap-1.5">
+                            <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="raptorLevelClass(record.nodeLevel)">L{{ valueOrDash(record.nodeLevel) }}</span>
+                            <strong class="text-[13px] text-foreground">{{ record.title }}</strong>
+                          </div>
+                          <p class="mt-1 text-xs text-muted-foreground">{{ record.subtitle }}</p>
+                        </div>
+                        <span class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">N#{{ valueOrDash(record.nodeNo) }}</span>
+                      </div>
+                      <div class="grid gap-2 rounded-md border border-border bg-card p-2.5 text-xs">
+                        <div class="flex items-center justify-between gap-2">
+                          <span class="text-muted-foreground">摘要质量</span>
+                          <strong class="text-foreground">{{ formatPercent(record.qualityScore) }}</strong>
+                        </div>
+                        <div class="h-1.5 overflow-hidden rounded-full bg-secondary">
+                          <div class="h-full rounded-full bg-primary" :style="{ width: qualityBarWidth(record.qualityScore) }"></div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                          <span v-for="chip in record.chips.filter(Boolean).slice(0,6)" :key="`raptor-chip-${record.nodeId}-${chip}`" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
+                        </div>
+                      </div>
+                      <div class="grid gap-1.5 text-xs text-muted-foreground">
+                        <p v-if="record.treePath" class="line-clamp-2">树路径：{{ record.treePath }}</p>
+                        <p>摘要节点 ID：{{ record.nodeId || '-' }}</p>
+                        <p>父节点：{{ record.parentNodeId || '根节点' }} · 子节点 {{ formatCount(record.childNodeCount) }}</p>
+                        <p>覆盖 source chunk {{ formatCount(record.sourceChunkCount) }} · ParentBlock {{ formatCount(record.sourceParentBlockCount) }}</p>
+                      </div>
+                    </div>
+                    <div class="grid gap-3">
+                      <div class="rounded-md border border-border bg-card p-3">
+                        <div class="mb-1 flex flex-wrap items-center gap-2">
+                          <strong class="text-xs text-foreground">摘要内容</strong>
+                          <span v-if="record.abstractive" class="rounded-full bg-primary/[0.08] px-2 py-0.5 text-[11px] font-semibold text-primary">LLM 抽象摘要</span>
+                          <span v-if="record.llmSummaryStatus" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{{ record.llmSummaryStatus }}</span>
+                        </div>
+                        <p class="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{{ record.body }}</p>
+                      </div>
+                      <div class="grid gap-2 md:grid-cols-2">
+                        <div class="rounded-md border border-border bg-card p-3">
+                          <div class="mb-2 flex items-center justify-between gap-2">
+                            <strong class="text-xs text-foreground">下钻原文 Chunk</strong>
+                            <span class="text-[11px] text-muted-foreground">{{ formatCount(record.sourceChunks.length) }} 条样例</span>
+                          </div>
+                          <div v-if="record.sourceChunks.length" class="grid gap-2">
+                            <button v-for="chunk in record.sourceChunks" :key="`raptor-source-chunk-${record.nodeId}-${chunk.chunkId}`" class="rounded-md border border-border bg-secondary p-2 text-left transition-colors hover:border-primary/30 hover:bg-primary/[0.04]" type="button" @click="openChunkDetail(chunk.chunkId)">
+                              <span class="block text-xs font-semibold text-foreground">C#{{ valueOrDash(chunk.chunkNo) }} · {{ chunk.sectionPath || '未识别章节' }}</span>
+                              <span class="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{{ chunk.textPreview || '暂无原文预览' }}</span>
+                            </button>
+                          </div>
+                          <p v-else class="text-xs text-muted-foreground">暂无可展示 chunk 样例。</p>
+                        </div>
+                        <div class="rounded-md border border-border bg-card p-3">
+                          <div class="mb-2 flex items-center justify-between gap-2">
+                            <strong class="text-xs text-foreground">下钻 ParentBlock</strong>
+                            <span class="text-[11px] text-muted-foreground">{{ formatCount(record.sourceParentBlocks.length) }} 条样例</span>
+                          </div>
+                          <div v-if="record.sourceParentBlocks.length" class="grid gap-2">
+                            <div v-for="parent in record.sourceParentBlocks" :key="`raptor-source-parent-${record.nodeId}-${parent.parentBlockId}`" class="rounded-md border border-border bg-secondary p-2">
+                              <span class="block text-xs font-semibold text-foreground">P#{{ valueOrDash(parent.parentNo) }} · {{ parent.sectionPath || '未识别章节' }}</span>
+                              <span class="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{{ parent.textPreview || '暂无父块预览' }}</span>
+                            </div>
+                          </div>
+                          <p v-else class="text-xs text-muted-foreground">暂无可展示 ParentBlock 样例。</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              </div>
               <div v-else class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
                 <article v-for="(record, index) in section.records" :key="`${section.key}-${index}`" class="grid gap-2 rounded-lg border border-border bg-secondary p-3">
                   <div>
@@ -857,10 +931,37 @@ const ragArtifactSections = computed(() => {
       caption: '摘要节点只用于导航召回，最终证据必须回到原始 chunk。',
       emptyText: '当前没有 RAPTOR 摘要节点样例。',
       records: asArray(snapshot.raptorNodes).map((item) => ({
+        nodeId: item.nodeId,
+        nodeKey: item.nodeKey,
+        parentNodeId: item.parentNodeId,
+        nodeLevel: item.nodeLevel,
+        nodeNo: item.nodeNo,
+        treeDepth: item.treeDepth,
+        treePath: item.treePath,
+        qualityScore: item.qualityScore,
+        summaryStrategy: item.summaryStrategy,
+        clusterMethod: item.clusterMethod,
+        abstractive: item.abstractive,
+        llmSummaryStatus: item.llmSummaryStatus,
+        sourceChunkCount: item.sourceChunkCount,
+        sourceParentBlockCount: item.sourceParentBlockCount,
+        childNodeCount: item.childNodeCount,
+        sourceChunks: asArray(item.sourceChunks),
+        sourceParentBlocks: asArray(item.sourceParentBlocks),
         title: item.title || `RAPTOR N#${item.nodeNo || '-'}`,
         subtitle: item.sectionPath || `Level ${valueOrDash(item.nodeLevel)}`,
-        chips: [`L${valueOrDash(item.nodeLevel)}`, item.pageRange || '', item.keywords || ''],
-        meta: compactList([item.sourceChunkIdsJson ? `源 chunk ${item.sourceChunkIdsJson}` : '', item.nodeId ? `ID ${item.nodeId}` : '']),
+        chips: compactList([
+          `L${valueOrDash(item.nodeLevel)}`,
+          item.summaryStrategy || '',
+          item.clusterMethod || '',
+          item.pageRange || '',
+          item.keywords || ''
+        ]),
+        meta: compactList([
+          item.sourceChunkIdsJson ? `源 chunk ${item.sourceChunkIdsJson}` : '',
+          item.sourceParentBlockIdsJson ? `源 parent ${item.sourceParentBlockIdsJson}` : '',
+          item.nodeId ? `ID ${item.nodeId}` : ''
+        ]),
         body: item.summary || '暂无摘要'
       }))
     },
@@ -1488,6 +1589,29 @@ function compactList(values) {
 function valueOrDash(value) {
   const text = String(value ?? '').trim()
   return text || '-'
+}
+
+function formatPercent(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    return '-'
+  }
+  return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`
+}
+
+function qualityBarWidth(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    return '0%'
+  }
+  return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`
+}
+
+function raptorLevelClass(level) {
+  const normalized = Number(level)
+  if (normalized >= 3) return 'bg-primary/[0.10] text-primary'
+  if (normalized === 2) return 'bg-[var(--color-success)]/[0.10] text-[var(--color-success)]'
+  return 'bg-secondary text-foreground'
 }
 
 function ragMetricClass(tone) {

@@ -326,6 +326,8 @@ public class DocumentRagSnapshotVo {
 
         private Long nodeId;
 
+        private String nodeKey;
+
         private Long parentNodeId;
 
         private Integer nodeLevel;
@@ -336,12 +338,86 @@ public class DocumentRagSnapshotVo {
 
         private String summary;
 
+        private String summaryWithWeight;
+
         private String sourceChunkIdsJson;
+
+        private String sourceParentBlockIdsJson;
+
+        private List<Long> sourceChunkIds;
+
+        private List<Long> sourceParentBlockIds;
+
+        private Integer sourceChunkCount;
+
+        private Integer sourceParentBlockCount;
+
+        private List<Long> childNodeIds;
+
+        private Integer childNodeCount;
 
         private String sectionPath;
 
         private String pageRange;
 
         private String keywords;
+
+        private String questions;
+
+        private Double qualityScore;
+
+        private String summaryStrategy;
+
+        private String clusterMethod;
+
+        private Boolean abstractive;
+
+        private String llmSummaryStatus;
+
+        private Integer treeDepth;
+
+        private String treePath;
+
+        private List<RaptorSourceChunkItem> sourceChunks;
+
+        private List<RaptorSourceParentBlockItem> sourceParentBlocks;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RaptorSourceChunkItem {
+
+        private Long chunkId;
+
+        private Long parentBlockId;
+
+        private Integer chunkNo;
+
+        private String sectionPath;
+
+        private String title;
+
+        private String pageRange;
+
+        private String textPreview;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RaptorSourceParentBlockItem {
+
+        private Long parentBlockId;
+
+        private Integer parentNo;
+
+        private String sectionPath;
+
+        private Integer childCount;
+
+        private String pageRange;
+
+        private String textPreview;
     }
 }

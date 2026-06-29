@@ -2,6 +2,8 @@ package org.javaup.ai.manage.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
@@ -67,6 +69,12 @@ import java.util.stream.Collectors;
 @AllArgsConstructor
 public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotService {
 
+    private static final TypeReference<List<Long>> LONG_LIST_TYPE = new TypeReference<>() {
+    };
+
+    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
+    };
+
     private static final int PARSE_BLOCK_SAMPLE_SIZE = 8;
 
     private static final int STRUCTURE_NODE_SAMPLE_SIZE = 10;
@@ -85,7 +93,9 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private static final int KG_COMMUNITY_SAMPLE_SIZE = 8;
 
-    private static final int RAPTOR_NODE_SAMPLE_SIZE = 12;
+    private static final int RAPTOR_NODE_SAMPLE_SIZE = 80;
+
+    private static final int RAPTOR_SOURCE_SAMPLE_SIZE = 5;
 
     private static final int BUILD_LOG_SAMPLE_SIZE = 12;
 
@@ -122,6 +132,8 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
     private final SuperAgentRaptorNodeMapper raptorNodeMapper;
 
     private final GraphRagQualityService graphRagQualityService;
+
+    private final ObjectMapper objectMapper;
 
     @Override
     public DocumentRagSnapshotVo querySnapshot(DocumentRagSnapshotQueryDto dto) {
@@ -684,26 +696,157 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         if (indexTaskId == null) {
             return List.of();
         }
-        return raptorNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentRaptorNode>()
+        List<SuperAgentRaptorNode> nodes = raptorNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentRaptorNode>()
                 .eq(SuperAgentRaptorNode::getDocumentId, documentId)
                 .eq(SuperAgentRaptorNode::getTaskId, indexTaskId)
                 .eq(SuperAgentRaptorNode::getStatus, BusinessStatus.YES.getCode())
-                .orderByAsc(SuperAgentRaptorNode::getNodeLevel, SuperAgentRaptorNode::getNodeNo, SuperAgentRaptorNode::getId)
-                .last("limit " + RAPTOR_NODE_SAMPLE_SIZE))
+                .orderByDesc(SuperAgentRaptorNode::getNodeLevel)
+                .orderByAsc(SuperAgentRaptorNode::getNodeNo, SuperAgentRaptorNode::getId)
+                .last("limit " + RAPTOR_NODE_SAMPLE_SIZE));
+        if (nodes.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, SuperAgentRaptorNode> nodeMap = nodes.stream()
+            .collect(Collectors.toMap(SuperAgentRaptorNode::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<Long, SuperAgentDocumentChunk> chunkMap = loadRaptorSourceChunks(nodes);
+        Map<Long, SuperAgentDocumentParentBlock> parentBlockMap = loadRaptorSourceParentBlocks(nodes);
+
+        return nodes.stream()
+            .map(item -> toRaptorNodeItem(item, nodeMap, chunkMap, parentBlockMap))
+            .toList();
+    }
+
+    private Map<Long, SuperAgentDocumentChunk> loadRaptorSourceChunks(List<SuperAgentRaptorNode> nodes) {
+        Set<Long> chunkIds = nodes.stream()
+            .flatMap(node -> readLongList(node.getSourceChunkIdsJson()).stream())
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (chunkIds.isEmpty()) {
+            return Map.of();
+        }
+        return chunkMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentChunk>()
+                .in(SuperAgentDocumentChunk::getId, chunkIds)
+                .eq(SuperAgentDocumentChunk::getStatus, BusinessStatus.YES.getCode()))
             .stream()
-            .map(item -> new DocumentRagSnapshotVo.RaptorNodeItem(
-                item.getId(),
-                item.getParentNodeId(),
-                item.getNodeLevel(),
-                item.getNodeNo(),
-                item.getTitle(),
-                preview(item.getSummary()),
-                item.getSourceChunkIdsJson(),
-                item.getSectionPath(),
-                item.getPageRange(),
-                item.getKeywords()
+            .collect(Collectors.toMap(SuperAgentDocumentChunk::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+    }
+
+    private Map<Long, SuperAgentDocumentParentBlock> loadRaptorSourceParentBlocks(List<SuperAgentRaptorNode> nodes) {
+        Set<Long> parentBlockIds = nodes.stream()
+            .flatMap(node -> readLongList(node.getSourceParentBlockIdsJson()).stream())
+            .filter(Objects::nonNull)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (parentBlockIds.isEmpty()) {
+            return Map.of();
+        }
+        return parentBlockMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentParentBlock>()
+                .in(SuperAgentDocumentParentBlock::getId, parentBlockIds)
+                .eq(SuperAgentDocumentParentBlock::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .collect(Collectors.toMap(SuperAgentDocumentParentBlock::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+    }
+
+    private DocumentRagSnapshotVo.RaptorNodeItem toRaptorNodeItem(SuperAgentRaptorNode node,
+                                                                  Map<Long, SuperAgentRaptorNode> nodeMap,
+                                                                  Map<Long, SuperAgentDocumentChunk> chunkMap,
+                                                                  Map<Long, SuperAgentDocumentParentBlock> parentBlockMap) {
+        List<Long> sourceChunkIds = readLongList(node.getSourceChunkIdsJson());
+        List<Long> sourceParentBlockIds = readLongList(node.getSourceParentBlockIdsJson());
+        List<Long> childNodeIds = readLongList(node.getChildNodeIdsJson());
+        Map<String, Object> metadata = readMap(node.getMetadataJson());
+        Map<String, Object> sourceMetadata = objectMap(metadata.get("sourceMetadata"));
+        Map<String, Object> qualitySignals = objectMap(sourceMetadata.get("summaryQualitySignals"));
+
+        return new DocumentRagSnapshotVo.RaptorNodeItem(
+            node.getId(),
+            node.getNodeKey(),
+            node.getParentNodeId(),
+            node.getNodeLevel(),
+            node.getNodeNo(),
+            node.getTitle(),
+            preview(node.getSummary()),
+            preview(node.getSummaryWithWeight()),
+            node.getSourceChunkIdsJson(),
+            node.getSourceParentBlockIdsJson(),
+            sourceChunkIds,
+            sourceParentBlockIds,
+            sourceChunkIds.size(),
+            sourceParentBlockIds.size(),
+            childNodeIds,
+            childNodeIds.size(),
+            node.getSectionPath(),
+            node.getPageRange(),
+            node.getKeywords(),
+            node.getQuestions(),
+            doubleValue(metadata.get("summaryQualityScore")),
+            stringValue(firstPresent(sourceMetadata.get("summaryStrategy"), metadata.get("summaryStrategy"))),
+            stringValue(firstPresent(sourceMetadata.get("clusterMethod"), metadata.get("clusterMethod"))),
+            booleanValue(qualitySignals.get("abstractive")),
+            stringValue(qualitySignals.get("llmSummaryStatus")),
+            raptorTreeDepth(node, nodeMap),
+            raptorTreePath(node, nodeMap),
+            sourceChunkItems(sourceChunkIds, chunkMap),
+            sourceParentBlockItems(sourceParentBlockIds, parentBlockMap)
+        );
+    }
+
+    private List<DocumentRagSnapshotVo.RaptorSourceChunkItem> sourceChunkItems(List<Long> sourceChunkIds,
+                                                                               Map<Long, SuperAgentDocumentChunk> chunkMap) {
+        return sourceChunkIds.stream()
+            .map(chunkMap::get)
+            .filter(Objects::nonNull)
+            .limit(RAPTOR_SOURCE_SAMPLE_SIZE)
+            .map(chunk -> new DocumentRagSnapshotVo.RaptorSourceChunkItem(
+                chunk.getId(),
+                chunk.getParentBlockId(),
+                chunk.getChunkNo(),
+                chunk.getSectionPath(),
+                chunk.getTitle(),
+                chunk.getPageRange(),
+                preview(firstNotBlank(chunk.getChunkText(), chunk.getContentWithWeight()))
             ))
             .toList();
+    }
+
+    private List<DocumentRagSnapshotVo.RaptorSourceParentBlockItem> sourceParentBlockItems(List<Long> sourceParentBlockIds,
+                                                                                           Map<Long, SuperAgentDocumentParentBlock> parentBlockMap) {
+        return sourceParentBlockIds.stream()
+            .map(parentBlockMap::get)
+            .filter(Objects::nonNull)
+            .limit(RAPTOR_SOURCE_SAMPLE_SIZE)
+            .map(parent -> new DocumentRagSnapshotVo.RaptorSourceParentBlockItem(
+                parent.getId(),
+                parent.getParentNo(),
+                parent.getSectionPath(),
+                parent.getChildCount(),
+                parent.getPageRange(),
+                preview(parent.getParentText())
+            ))
+            .toList();
+    }
+
+    private Integer raptorTreeDepth(SuperAgentRaptorNode node, Map<Long, SuperAgentRaptorNode> nodeMap) {
+        return raptorPathNodes(node, nodeMap).size();
+    }
+
+    private String raptorTreePath(SuperAgentRaptorNode node, Map<Long, SuperAgentRaptorNode> nodeMap) {
+        return raptorPathNodes(node, nodeMap).stream()
+            .map(pathNode -> StrUtil.blankToDefault(pathNode.getTitle(), pathNode.getNodeKey()))
+            .filter(StrUtil::isNotBlank)
+            .collect(Collectors.joining(" > "));
+    }
+
+    private List<SuperAgentRaptorNode> raptorPathNodes(SuperAgentRaptorNode node, Map<Long, SuperAgentRaptorNode> nodeMap) {
+        List<SuperAgentRaptorNode> path = new ArrayList<>();
+        Set<Long> visited = new HashSet<>();
+        SuperAgentRaptorNode cursor = node;
+        while (cursor != null && cursor.getId() != null && visited.add(cursor.getId()) && path.size() < 20) {
+            path.add(cursor);
+            cursor = cursor.getParentNodeId() == null ? null : nodeMap.get(cursor.getParentNodeId());
+        }
+        java.util.Collections.reverse(path);
+        return path;
     }
 
     private List<DocumentTaskLogVo> listBuildLogs(Long indexTaskId) {
@@ -876,6 +1019,90 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private String decimalText(BigDecimal value) {
         return value == null ? "" : value.stripTrailingZeros().toPlainString();
+    }
+
+    private List<Long> readLongList(String json) {
+        if (StrUtil.isBlank(json)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json, LONG_LIST_TYPE).stream()
+                .filter(Objects::nonNull)
+                .toList();
+        }
+        catch (Exception exception) {
+            return List.of();
+        }
+    }
+
+    private Map<String, Object> readMap(String json) {
+        if (StrUtil.isBlank(json)) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, MAP_TYPE);
+        }
+        catch (Exception exception) {
+            return Map.of();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> objectMap(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            map.forEach((key, item) -> {
+                if (key != null) {
+                    result.put(String.valueOf(key), item);
+                }
+            });
+            return result;
+        }
+        return Map.of();
+    }
+
+    private Object firstPresent(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value instanceof String text && StrUtil.isBlank(text)) {
+                continue;
+            }
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private Double doubleValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text && StrUtil.isNotBlank(text)) {
+            try {
+                return Double.parseDouble(text);
+            }
+            catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text && StrUtil.isNotBlank(text)) {
+            return Boolean.parseBoolean(text);
+        }
+        return null;
     }
 
     private String enumMsg(Object enumObject) {
