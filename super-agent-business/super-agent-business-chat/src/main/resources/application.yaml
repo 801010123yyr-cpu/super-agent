@@ -79,7 +79,7 @@ spring:
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+#    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
     local-cache-scope: statement  
 
 app:
@@ -102,7 +102,7 @@ app:
   graph-rag:
     build:
       lease-enabled: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_ENABLED:true}
-      lease-ttl-seconds: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_TTL_SECONDS:120}
+      lease-ttl-seconds: ${SUPER_AGENT_GRAPH_RAG_BUILD_LEASE_TTL_SECONDS:6000}
       max-attempts: ${SUPER_AGENT_GRAPH_RAG_BUILD_MAX_ATTEMPTS:2}
       retry-backoff-millis: ${SUPER_AGENT_GRAPH_RAG_BUILD_RETRY_BACKOFF_MILLIS:500}
     extraction:
@@ -110,6 +110,10 @@ app:
       # 开启后，LLM 只能基于 Java 提供的 chunk 原文返回实体/关系/evidence JSON；
       # Java 会校验 chunkId、sourceChunkIds、quoteText 原文片段、端点实体和置信度后才合并到 KG 候选。
       enabled: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_ENABLED:true}
+      # extraction advisor 按 RAGFlow-style 分批调用 LLM，避免一次大 JSON 截断。
+      # 不建议盲目调大；如果某批仍 JSON 截断，代码会自动拆成单 chunk 重试。
+      batch-chunk-limit: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_BATCH_CHUNK_LIMIT:3}
+      batch-token-limit: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_BATCH_TOKEN_LIMIT:2800}
     community-report:
       # 是否启用 GraphRAG LLM 受控社区报告增强。
       # 开启后，LLM 只能基于 Java 提供的实体/关系/evidence 上下文返回 JSON 报告建议；
