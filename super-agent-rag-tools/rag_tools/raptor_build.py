@@ -21,6 +21,8 @@ MAX_KEYWORDS = 12
 MAX_QUESTIONS = 6
 MIN_QUALITY_SCORE = 0.35
 LLM_CONTEXT_CHARS = 6500
+CLUSTER_METHOD = "sentence_embedding_ahc_balanced_v1"
+TREE_BUILDER_METHOD = "balanced_hierarchical_v1"
 
 CHINESE_STOP_TERMS = {
     "这个", "那个", "以及", "如果", "进行", "可以", "需要", "相关", "当前", "主要", "包括", "通过",
@@ -41,10 +43,11 @@ def build_raptor(request: RaptorBuildRequest) -> RaptorBuildResponse:
     level = 1
 
     while current_items and level <= max_levels:
-        clusters = _cluster_items(current_items, max_cluster_size)
+        cluster_result = _cluster_items(current_items, max_cluster_size)
+        clusters = cluster_result.clusters
         level_nodes: list[RaptorNode] = []
         for index, cluster in enumerate(clusters, start=1):
-            node = _build_node(cluster, level, index, request.llm_summary_enabled)
+            node = _build_node(cluster, level, index, request.llm_summary_enabled, cluster_result.signals)
             level_nodes.append(node)
             nodes.append(node)
 
@@ -129,36 +132,68 @@ class _TreeItem:
         )
 
 
-def _cluster_items(items: list[_TreeItem], max_cluster_size: int) -> list[list[_TreeItem]]:
+@dataclass
+class _ClusterResult:
+    clusters: list[list[_TreeItem]]
+    signals: dict[str, object]
+
+
+def _cluster_items(items: list[_TreeItem], max_cluster_size: int) -> _ClusterResult:
     try:
         vectors = embed_texts([_embedding_text(item) for item in items])
     except SemanticModelUnavailable as exception:
         raise HTTPException(status_code=503, detail=str(exception)) from exception
-    remaining = set(range(len(items)))
-    clusters: list[list[_TreeItem]] = []
-    while remaining:
-        seed_index = min(remaining, key=lambda index: _first_chunk_id(items[index]))
-        remaining.remove(seed_index)
-        ranked_neighbors = sorted(
-            remaining,
-            key=lambda index: _dot(vectors[seed_index], vectors[index]),
-            reverse=True,
+    if len(items) <= max_cluster_size:
+        cluster_indices = [list(range(len(items)))]
+        return _ClusterResult(
+            [_items_by_indices(items, indices) for indices in cluster_indices],
+            _cluster_signals(cluster_indices, vectors, len(items), max_cluster_size),
         )
-        cluster_indices = [seed_index]
-        for neighbor_index in ranked_neighbors:
-            if len(cluster_indices) >= max_cluster_size:
-                break
-            if _dot(vectors[seed_index], vectors[neighbor_index]) < 0.45 and len(cluster_indices) >= 2:
-                continue
-            cluster_indices.append(neighbor_index)
-        for index in cluster_indices[1:]:
-            remaining.remove(index)
-        cluster_indices.sort(key=lambda index: _first_chunk_id(items[index]))
-        clusters.append([items[index] for index in cluster_indices])
-    return clusters
+
+    similarity_matrix = _similarity_matrix(vectors)
+    clusters: list[list[int]] = [[index] for index in range(len(items))]
+    target_cluster_count = max(1, (len(items) + max_cluster_size - 1) // max_cluster_size)
+
+    while len(clusters) > target_cluster_count:
+        best_pair: tuple[int, int] | None = None
+        best_score = -1.0
+        best_balance = 0
+        for left_index in range(len(clusters)):
+            left_cluster = clusters[left_index]
+            for right_index in range(left_index + 1, len(clusters)):
+                right_cluster = clusters[right_index]
+                combined_size = len(left_cluster) + len(right_cluster)
+                if combined_size > max_cluster_size:
+                    continue
+                score = _average_link_similarity(left_cluster, right_cluster, similarity_matrix)
+                balance = min(len(left_cluster), len(right_cluster))
+                if score > best_score or (score == best_score and balance > best_balance):
+                    best_pair = (left_index, right_index)
+                    best_score = score
+                    best_balance = balance
+        if best_pair is None:
+            break
+        left_index, right_index = best_pair
+        merged = sorted(clusters[left_index] + clusters[right_index], key=lambda index: _first_chunk_id(items[index]))
+        clusters[left_index] = merged
+        del clusters[right_index]
+
+    clusters = _merge_singletons(clusters, similarity_matrix, max_cluster_size, items)
+    clusters = [sorted(cluster, key=lambda index: _first_chunk_id(items[index])) for cluster in clusters]
+    clusters.sort(key=lambda cluster: _first_chunk_id(items[cluster[0]]) if cluster else 0)
+    return _ClusterResult(
+        [_items_by_indices(items, indices) for indices in clusters],
+        _cluster_signals(clusters, vectors, len(items), max_cluster_size),
+    )
 
 
-def _build_node(cluster: list[_TreeItem], level: int, node_no: int, llm_summary_enabled: bool) -> RaptorNode:
+def _build_node(
+    cluster: list[_TreeItem],
+    level: int,
+    node_no: int,
+    llm_summary_enabled: bool,
+    cluster_signals: dict[str, object],
+) -> RaptorNode:
     source_chunk_ids = _dedupe_ints(chunk_id for item in cluster for chunk_id in item.chunk_ids)
     source_parent_block_ids = _dedupe_ints(parent_id for item in cluster for parent_id in item.parent_block_ids)
     child_node_ids = _dedupe_strings(child_id for item in cluster for child_id in item.child_node_ids)
@@ -200,7 +235,12 @@ def _build_node(cluster: list[_TreeItem], level: int, node_no: int, llm_summary_
         qualityScore=summary_result.quality_score,
         metadata={
             "itemCount": len(cluster),
-            "clusterMethod": "sentence_embedding_greedy_v1",
+            "clusterMethod": CLUSTER_METHOD,
+            "treeBuilderMethod": TREE_BUILDER_METHOD,
+            "clusterQualitySignals": {
+                **cluster_signals,
+                "nodeClusterSize": len(cluster),
+            },
             "summaryStrategy": summary_result.strategy,
             "summaryQualityScore": summary_result.quality_score,
             "summaryQualitySignals": summary_result.signals,
@@ -246,6 +286,117 @@ def _embedding_text(item: _TreeItem) -> str:
         "、".join(item.keywords),
         item.text,
     ] if part)
+
+
+def _items_by_indices(items: list[_TreeItem], indices: list[int]) -> list[_TreeItem]:
+    return [items[index] for index in indices]
+
+
+def _similarity_matrix(vectors: list[list[float]]) -> list[list[float]]:
+    matrix: list[list[float]] = []
+    for left_index, left_vector in enumerate(vectors):
+        row: list[float] = []
+        for right_index, right_vector in enumerate(vectors):
+            row.append(1.0 if left_index == right_index else _dot(left_vector, right_vector))
+        matrix.append(row)
+    return matrix
+
+
+def _average_link_similarity(left_cluster: list[int], right_cluster: list[int], similarity_matrix: list[list[float]]) -> float:
+    scores = [
+        similarity_matrix[left_index][right_index]
+        for left_index in left_cluster
+        for right_index in right_cluster
+    ]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def _cluster_centroid_similarity(cluster: list[int], candidate: list[int], similarity_matrix: list[list[float]]) -> float:
+    return _average_link_similarity(cluster, candidate, similarity_matrix)
+
+
+def _merge_singletons(
+    clusters: list[list[int]],
+    similarity_matrix: list[list[float]],
+    max_cluster_size: int,
+    items: list[_TreeItem],
+) -> list[list[int]]:
+    changed = True
+    while changed:
+        changed = False
+        singleton_positions = [
+            index for index, cluster in enumerate(clusters)
+            if len(cluster) == 1 and len(clusters) > 1
+        ]
+        for singleton_position in singleton_positions:
+            if singleton_position >= len(clusters) or len(clusters[singleton_position]) != 1:
+                continue
+            singleton = clusters[singleton_position]
+            best_position: int | None = None
+            best_score = -1.0
+            for candidate_position, candidate in enumerate(clusters):
+                if candidate_position == singleton_position:
+                    continue
+                if len(candidate) + len(singleton) > max_cluster_size:
+                    continue
+                score = _cluster_centroid_similarity(singleton, candidate, similarity_matrix)
+                if score > best_score:
+                    best_score = score
+                    best_position = candidate_position
+            if best_position is None:
+                continue
+            clusters[best_position] = sorted(
+                clusters[best_position] + singleton,
+                key=lambda index: _first_chunk_id(items[index]),
+            )
+            del clusters[singleton_position]
+            changed = True
+            break
+    return clusters
+
+
+def _cluster_signals(
+    clusters: list[list[int]],
+    vectors: list[list[float]],
+    input_item_count: int,
+    max_cluster_size: int,
+) -> dict[str, object]:
+    cluster_sizes = [len(cluster) for cluster in clusters]
+    cluster_count = len(clusters)
+    singleton_count = sum(1 for size in cluster_sizes if size == 1)
+    max_observed = max(cluster_sizes) if cluster_sizes else 0
+    avg_size = sum(cluster_sizes) / max(1, cluster_count)
+    matrix = _similarity_matrix(vectors) if vectors else []
+    intra_scores: list[float] = []
+    for cluster in clusters:
+        if len(cluster) <= 1:
+            continue
+        pair_scores = [
+            matrix[left][right]
+            for left_index, left in enumerate(cluster)
+            for right in cluster[left_index + 1:]
+        ]
+        if pair_scores:
+            intra_scores.append(sum(pair_scores) / len(pair_scores))
+    avg_intra = sum(intra_scores) / len(intra_scores) if intra_scores else 0.0
+    compression_ratio = cluster_count / max(1, input_item_count)
+    balance_score = 1.0 - (singleton_count / max(1, cluster_count))
+    if max_observed > 0 and max_cluster_size > 0:
+        balance_score *= min(1.0, avg_size / max_observed)
+    return {
+        "clusterMethod": CLUSTER_METHOD,
+        "treeBuilderMethod": TREE_BUILDER_METHOD,
+        "inputItemCount": input_item_count,
+        "clusterCount": cluster_count,
+        "avgClusterSize": round(avg_size, 4),
+        "maxClusterSizeObserved": max_observed,
+        "singletonClusterCount": singleton_count,
+        "levelCompressionRatio": round(compression_ratio, 4),
+        "avgIntraClusterSimilarity": round(avg_intra, 4),
+        "treeBalanceScore": round(max(0.0, min(1.0, balance_score)), 4),
+    }
 
 
 def _dot(left: list[float], right: list[float]) -> float:

@@ -779,6 +779,39 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             document.setLastIndexTaskId(taskId);
             documentMapper.updateById(document);
 
+            if (StrUtil.isNotBlank(document.getKnowledgeScopeCode())) {
+                saveIndexBuildLog(taskId, documentId,
+                    DocumentTaskStageEnum.RAPTOR.getCode(),
+                    DocumentTaskEventTypeEnum.START.getCode(),
+                    DocumentLogLevelEnum.INFO.getCode(),
+                    DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                    null,
+                    "开始构建 knowledge scope 级 RAPTOR 跨文档摘要树。",
+                    detail("knowledgeScopeCode", document.getKnowledgeScopeCode(),
+                        "knowledgeScopeName", document.getKnowledgeScopeName()));
+                long datasetRaptorStartedNanos = System.nanoTime();
+                RaptorBuildResult datasetRaptorBuildResult = raptorBuildService.rebuildKnowledgeScopeTree(document.getKnowledgeScopeCode());
+                long datasetRaptorCostMillis = elapsedMillis(datasetRaptorStartedNanos);
+                log.info("RAPTOR dataset-level 构建阶段完成，documentId={}, taskId={}, knowledgeScopeCode={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
+                    documentId, taskId, document.getKnowledgeScopeCode(), datasetRaptorBuildResult.getNodeCount(),
+                    datasetRaptorBuildResult.getLevelCount(), datasetRaptorBuildResult.getSourceChunkCount(), datasetRaptorCostMillis);
+                saveIndexBuildLog(taskId, documentId,
+                    DocumentTaskStageEnum.RAPTOR.getCode(),
+                    DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                    DocumentLogLevelEnum.INFO.getCode(),
+                    DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                    null,
+                    "knowledge scope 级 RAPTOR 跨文档摘要树构建完成，耗时 " + datasetRaptorCostMillis + "ms。",
+                    detail("knowledgeScopeCode", document.getKnowledgeScopeCode(),
+                        "knowledgeScopeName", document.getKnowledgeScopeName(),
+                        "nodeCount", datasetRaptorBuildResult.getNodeCount(),
+                        "levelCount", datasetRaptorBuildResult.getLevelCount(),
+                        "sourceChunkCount", datasetRaptorBuildResult.getSourceChunkCount(),
+                        "sourceQualityReport", datasetRaptorBuildResult.getSourceQualityReport(),
+                        "savedQualityReport", datasetRaptorBuildResult.getSavedQualityReport(),
+                        "costMillis", datasetRaptorCostMillis));
+            }
+
             finishTaskSuccess(task, DocumentTaskStageEnum.STORE_COMPLETE.getCode(), startTime);
             progressCacheService.update(document, task);
             saveIndexBuildLog(taskId, documentId,

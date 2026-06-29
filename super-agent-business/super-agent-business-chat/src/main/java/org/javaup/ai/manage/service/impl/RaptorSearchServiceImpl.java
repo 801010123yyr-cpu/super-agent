@@ -5,14 +5,17 @@ import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
+import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.raptor.RaptorSearchResult;
 import org.javaup.ai.manage.service.RaptorSearchService;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
+import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.javaup.enums.BusinessStatus;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
@@ -29,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -43,6 +47,8 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             id,
             document_id,
             task_id,
+            scope_type,
+            scope_key,
             node_level,
             node_no,
             title,
@@ -57,8 +63,10 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             1 - (embedding <=> CAST(? AS vector)) AS similarity_score
         FROM %s
         WHERE status = 1
-          AND document_id IN (%s)
-          AND task_id IN (%s)
+          AND (
+            (document_id IN (%s) AND task_id IN (%s))
+            %s
+          )
         ORDER BY embedding <=> CAST(? AS vector)
         LIMIT ?
         """;
@@ -73,6 +81,8 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
     private final ObjectProvider<EmbeddingModel> embeddingModelProvider;
 
     private final SuperAgentRaptorNodeMapper raptorNodeMapper;
+
+    private final SuperAgentDocumentMapper documentMapper;
 
     private final SuperAgentDocumentChunkMapper chunkMapper;
 
@@ -91,20 +101,24 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             return List.of();
         }
 
-        List<RaptorNodeHit> nodeHits = retrieveSummaryNodes(question, documentIds, taskIds, Math.max(topK * 3, topK));
+        List<SuperAgentDocument> scopeDocuments = loadScopeDocuments(documentIds);
+        List<String> datasetScopeKeys = RaptorScopeSupport.searchScopeKeys(scopeDocuments);
+        List<RaptorNodeHit> nodeHits = retrieveSummaryNodes(question, documentIds, taskIds, datasetScopeKeys, Math.max(topK * 3, topK));
         if (nodeHits.isEmpty()) {
             return List.of();
         }
 
         Map<Long, SuperAgentRaptorNode> nodeMap = loadNodes(nodeHits);
         List<String> terms = extractTerms(question);
+        Set<Long> allowedDocumentIds = new LinkedHashSet<>(documentIds);
+        Set<Long> allowedTaskIds = new LinkedHashSet<>(taskIds);
         Map<Long, RaptorSearchResult> resultMap = new LinkedHashMap<>();
         for (RaptorNodeHit hit : nodeHits) {
             SuperAgentRaptorNode node = nodeMap.get(hit.nodeId());
             if (node == null) {
                 continue;
             }
-            List<SuperAgentDocumentChunk> chunks = loadSourceChunks(node, sourceChunkTopK);
+            List<SuperAgentDocumentChunk> chunks = loadSourceChunks(node, sourceChunkTopK, allowedDocumentIds, allowedTaskIds);
             for (SuperAgentDocumentChunk chunk : chunks) {
                 if (chunk == null || chunk.getId() == null) {
                     continue;
@@ -122,13 +136,17 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             .toList();
     }
 
-    private List<RaptorNodeHit> retrieveSummaryNodes(String question, List<Long> documentIds, List<Long> taskIds, int topK) {
+    private List<RaptorNodeHit> retrieveSummaryNodes(String question,
+                                                     List<Long> documentIds,
+                                                     List<Long> taskIds,
+                                                     List<String> datasetScopeKeys,
+                                                     int topK) {
         Map<Long, RaptorNodeHit> mergedHits = new LinkedHashMap<>();
-        List<RaptorNodeHit> vectorHits = retrieveVectorSummaryNodes(question, documentIds, taskIds, topK);
+        List<RaptorNodeHit> vectorHits = retrieveVectorSummaryNodes(question, documentIds, taskIds, datasetScopeKeys, topK);
         mergeHits(mergedHits, vectorHits, 1.0D);
         RaptorSummaryIndexService indexService = raptorSummaryIndexServiceProvider.getIfAvailable();
         if (indexService != null) {
-            List<RaptorSummaryIndexService.RaptorSummaryHit> lexicalHits = indexService.search(question, documentIds, taskIds, topK);
+            List<RaptorSummaryIndexService.RaptorSummaryHit> lexicalHits = indexService.search(question, documentIds, taskIds, datasetScopeKeys, topK);
             double maxLexicalScore = lexicalHits.stream()
                 .mapToDouble(RaptorSummaryIndexService.RaptorSummaryHit::score)
                 .max()
@@ -144,18 +162,30 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             .toList();
     }
 
-    private List<RaptorNodeHit> retrieveVectorSummaryNodes(String question, List<Long> documentIds, List<Long> taskIds, int topK) {
+    private List<RaptorNodeHit> retrieveVectorSummaryNodes(String question,
+                                                           List<Long> documentIds,
+                                                           List<Long> taskIds,
+                                                           List<String> datasetScopeKeys,
+                                                           int topK) {
         EmbeddingModel embeddingModel = requireEmbeddingModel();
         String questionVector = toVectorLiteral(embeddingModel.embed(question.trim()));
+        String datasetScopeClause = CollUtil.isEmpty(datasetScopeKeys)
+            ? ""
+            : " OR (scope_type = ? AND scope_key IN (" + buildPlaceholders(datasetScopeKeys.size()) + "))";
         String sql = RAPTOR_RETRIEVE_SQL_TEMPLATE.formatted(
             DocumentPgVectorConstants.RAPTOR_EMBEDDING_TABLE_NAME,
             buildPlaceholders(documentIds.size()),
-            buildPlaceholders(taskIds.size())
+            buildPlaceholders(taskIds.size()),
+            datasetScopeClause
         );
         List<Object> params = new ArrayList<>();
         params.add(questionVector);
         params.addAll(documentIds);
         params.addAll(taskIds);
+        if (CollUtil.isNotEmpty(datasetScopeKeys)) {
+            params.add(RaptorScopeSupport.SCOPE_TYPE_DATASET);
+            params.addAll(datasetScopeKeys);
+        }
         params.add(questionVector);
         params.add(Math.max(1, Math.min(topK, 50)));
 
@@ -204,7 +234,10 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             ));
     }
 
-    private List<SuperAgentDocumentChunk> loadSourceChunks(SuperAgentRaptorNode node, int sourceChunkTopK) {
+    private List<SuperAgentDocumentChunk> loadSourceChunks(SuperAgentRaptorNode node,
+                                                           int sourceChunkTopK,
+                                                           Set<Long> allowedDocumentIds,
+                                                           Set<Long> allowedTaskIds) {
         List<Long> chunkIds = readLongList(node.getSourceChunkIdsJson());
         if (chunkIds.isEmpty()) {
             return List.of();
@@ -217,9 +250,20 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             orderMap.put(chunkIds.get(index), index);
         }
         return chunks.stream()
+            .filter(chunk -> allowedDocumentIds.contains(chunk.getDocumentId()))
+            .filter(chunk -> allowedTaskIds.contains(chunk.getTaskId()))
             .sorted(Comparator.comparingInt(chunk -> orderMap.getOrDefault(chunk.getId(), Integer.MAX_VALUE)))
             .limit(Math.max(1, sourceChunkTopK))
             .toList();
+    }
+
+    private List<SuperAgentDocument> loadScopeDocuments(List<Long> documentIds) {
+        if (CollUtil.isEmpty(documentIds)) {
+            return List.of();
+        }
+        return documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+            .in(SuperAgentDocument::getId, documentIds)
+            .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode()));
     }
 
     private RaptorSearchResult toResult(SuperAgentRaptorNode node, SuperAgentDocumentChunk chunk, double score) {

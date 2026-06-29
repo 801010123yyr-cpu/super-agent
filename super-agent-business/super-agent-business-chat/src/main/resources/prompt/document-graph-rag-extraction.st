@@ -67,6 +67,13 @@
    - 如果不是 EXPLICIT_ACTION，请优先使用 ASSOCIATED_WITH 或不输出该关系，不要把清单、修订记录、标题上下文、同段共现升级成 DEPENDS_ON、RESPONSIBLE_FOR、APPROVES 等强关系。
 9. 如果没有可靠图谱信息，返回 {"graphable":false,"entities":[],"relations":[],"evidences":[],"confidence":0.0,"reason":"无可靠图谱信息"}。
 10. 只能返回 JSON，不要 Markdown，不要解释文本。
+11. 严格控制输出规模，避免返回超长 JSON：
+   - entities 最多 <maxEntitiesPerCall> 个，只保留最重要、最可追溯的候选。
+   - relations 最多 <maxRelationsPerCall> 个，只保留有明确 source、target、谓词和 quoteText 的候选。
+   - evidences 最多 <maxEvidencesPerCall> 条。
+   - quoteText 最多 <maxQuoteChars> 个字符，必须优先选择覆盖 source、target 和动作词的最短连续原文片段。
+   - description、relationTypeReason、reason 最多 <maxReasonChars> 个字符。
+   - 如果清单或表格里候选很多，不要展开所有成员；只返回证据最强、关系最明确的少量候选。
 
 制度、流程、表格类文档的抽取方向：
 - 优先补规则/NER 难稳定覆盖的信息：隐式职责关系、别名/缩写、表格行中的职责动作、清单项继承前文语义、系统与流程之间的动作关系。

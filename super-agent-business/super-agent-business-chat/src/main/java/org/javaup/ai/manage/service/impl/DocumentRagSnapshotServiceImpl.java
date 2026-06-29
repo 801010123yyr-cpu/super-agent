@@ -766,6 +766,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         Map<String, Object> metadata = readMap(node.getMetadataJson());
         Map<String, Object> sourceMetadata = objectMap(metadata.get("sourceMetadata"));
         Map<String, Object> qualitySignals = objectMap(sourceMetadata.get("summaryQualitySignals"));
+        Map<String, Object> clusterSignals = objectMap(sourceMetadata.get("clusterQualitySignals"));
         Double qualityScore = doubleValue(metadata.get("summaryQualityScore"));
 
         return new DocumentRagSnapshotVo.RaptorNodeItem(
@@ -794,6 +795,13 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             raptorNodeQualityRisk(qualityScore),
             stringValue(firstPresent(sourceMetadata.get("summaryStrategy"), metadata.get("summaryStrategy"))),
             stringValue(firstPresent(sourceMetadata.get("clusterMethod"), metadata.get("clusterMethod"))),
+            stringValue(firstPresent(sourceMetadata.get("treeBuilderMethod"), metadata.get("treeBuilderMethod"))),
+            doubleValue(clusterSignals.get("avgClusterSize")),
+            integerValue(clusterSignals.get("maxClusterSizeObserved")),
+            integerValue(clusterSignals.get("singletonClusterCount")),
+            doubleValue(clusterSignals.get("levelCompressionRatio")),
+            doubleValue(clusterSignals.get("avgIntraClusterSimilarity")),
+            doubleValue(clusterSignals.get("treeBalanceScore")),
             booleanValue(qualitySignals.get("abstractive")),
             stringValue(qualitySignals.get("llmSummaryStatus")),
             raptorTreeDepth(node, nodeMap),
@@ -1135,6 +1143,21 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         if (value instanceof String text && StrUtil.isNotBlank(text)) {
             try {
                 return Double.parseDouble(text);
+            }
+            catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && StrUtil.isNotBlank(text)) {
+            try {
+                return Integer.parseInt(text);
             }
             catch (NumberFormatException ignored) {
                 return null;

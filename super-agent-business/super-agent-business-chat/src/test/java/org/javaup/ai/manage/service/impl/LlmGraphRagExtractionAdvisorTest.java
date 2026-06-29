@@ -127,7 +127,9 @@ class LlmGraphRagExtractionAdvisorTest {
         assertThat(advice.getReason())
             .contains("batchCount=2")
             .contains("successBatchCount=1")
-            .contains("failedBatchCount=0");
+            .contains("acceptedAdviceCount=1")
+            .contains("failedBatchCount=1")
+            .contains("retryBatchCount=1");
 
         verify(chatModelService, times(5))
             .callText(eq("document_graph_rag_extraction"), any(), anyString(), any(ChatOptions.class), any());
@@ -171,6 +173,99 @@ class LlmGraphRagExtractionAdvisorTest {
         assertThat(result).isPresent();
         assertThat(result.get().getGraphable()).isFalse();
         assertThat(batchSizes).containsExactly(3, 3, 1);
+    }
+
+    @Test
+    void extractSplitsStructuredChunkIntoSmallerUnits() throws Exception {
+        ObservedChatModelService chatModelService = mock(ObservedChatModelService.class);
+        PromptTemplateService promptTemplateService = mock(PromptTemplateService.class);
+        List<Integer> batchSizes = new ArrayList<>();
+        List<String> unitTexts = new ArrayList<>();
+        LlmGraphRagExtractionAdvisor advisor = new LlmGraphRagExtractionAdvisor(
+            chatModelService,
+            promptTemplateService,
+            objectMapper
+        );
+
+        when(promptTemplateService.render(eq(PromptTemplateNames.DOCUMENT_GRAPH_RAG_EXTRACTION), any(Map.class)))
+            .thenAnswer(invocation -> {
+                String context = String.valueOf(((Map<?, ?>) invocation.getArgument(1)).get("context"));
+                JsonNode root = objectMapper.readTree(context);
+                batchSizes.add(root.path("chunks").size());
+                root.path("chunks").forEach(chunk -> unitTexts.add(chunk.path("text").asText()));
+                return context;
+            });
+        when(chatModelService.callText(eq("document_graph_rag_extraction"), any(), anyString(), any(ChatOptions.class), any()))
+            .thenReturn("{\"graphable\":false,\"entities\":[],\"relations\":[],\"evidences\":[],\"confidence\":0.0,\"reason\":\"无可靠图谱信息\"}");
+
+        Optional<GraphRagExtractionAdvice> result = advisor.extract(GraphRagExtractionContext.builder()
+            .documentId(10L)
+            .taskId(20L)
+            .chunks(List.of(chunk(1L, """
+                > 发布部门：客户服务中心 / 研发中心 / SRE 团队 / 数据平台部
+                > 会签部门：信息安全部 / 法务合规部 / 财务部 / 培训与赋能部
+                > 适用对象：客服主管、项目经理、交付实施、知识运营、SRE、值班研发、合规审计
+                > 关联系统：`StarDesk`、`NovaRAG`、`OnePass`、`KeyFlow`
+                """)))
+            .build());
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getGraphable()).isFalse();
+        assertThat(batchSizes).containsExactly(3, 1);
+        assertThat(unitTexts).hasSize(4);
+        assertThat(unitTexts).allMatch(text -> text.length() < 120);
+    }
+
+    @Test
+    void extractSalvagesCompleteItemsFromTruncatedJson() throws Exception {
+        ObservedChatModelService chatModelService = mock(ObservedChatModelService.class);
+        PromptTemplateService promptTemplateService = mock(PromptTemplateService.class);
+        LlmGraphRagExtractionAdvisor advisor = new LlmGraphRagExtractionAdvisor(
+            chatModelService,
+            promptTemplateService,
+            objectMapper
+        );
+
+        when(promptTemplateService.render(eq(PromptTemplateNames.DOCUMENT_GRAPH_RAG_EXTRACTION), any(Map.class)))
+            .thenAnswer(invocation -> String.valueOf(((Map<?, ?>) invocation.getArgument(1)).get("context")));
+        when(chatModelService.callText(eq("document_graph_rag_extraction"), any(), anyString(), any(ChatOptions.class), any()))
+            .thenReturn("""
+                {
+                  "graphable": true,
+                  "entities": [
+                    {"id":"E1","name":"AuditTrail","normalizedName":"audittrail","entityType":"SYSTEM","aliases":[],"description":"审计系统","confidence":0.92,"sourceChunkIds":[1]},
+                    {"id":"E2","name":"权限申请","normalizedName":"权限申请","entityType":"PROCESS","aliases":[],"description":"权限申请流程","confidence":0.9,"sourceChunkIds":[1]}
+                  ],
+                  "relations": [
+                    {"id":"R1","sourceEntityId":"E1","targetEntityId":"E2","relationType":"RECORDS","supportMode":"EXPLICIT_ACTION","predicateQuoteText":"记录","relationTypeReason":"原文明确说明 AuditTrail 记录权限申请。","description":"AuditTrail 记录权限申请。","weight":0.9,"confidence":0.91}
+                  ],
+                  "evidences": [
+                    {"id":"EV1","relationId":"R1","chunkId":1,"quoteText":"AuditTrail 记录权限申请。","confidence":0.93}
+                """);
+
+        Optional<GraphRagExtractionAdvice> result = advisor.extract(GraphRagExtractionContext.builder()
+            .documentId(10L)
+            .taskId(20L)
+            .chunks(List.of(chunk(1L, "AuditTrail 记录权限申请。")))
+            .build());
+
+        assertThat(result).isPresent();
+        GraphRagExtractionAdvice advice = result.get();
+        assertThat(advice.getGraphable()).isTrue();
+        assertThat(advice.getEntities()).extracting(GraphRagExtractionAdvice.EntityItem::getId)
+            .containsExactly("B1_E1", "B1_E2");
+        assertThat(advice.getRelations()).singleElement().satisfies(relation -> {
+            assertThat(relation.getId()).isEqualTo("B1_R1");
+            assertThat(relation.getSourceEntityId()).isEqualTo("B1_E1");
+            assertThat(relation.getTargetEntityId()).isEqualTo("B1_E2");
+        });
+        assertThat(advice.getEvidences()).singleElement().satisfies(evidence -> {
+            assertThat(evidence.getId()).isEqualTo("B1_EV1");
+            assertThat(evidence.getRelationId()).isEqualTo("B1_R1");
+        });
+        assertThat(advice.getReason())
+            .contains("salvagedJsonCount=1")
+            .contains("truncatedJsonCount=1");
     }
 
     private GraphRagExtractionContext.ChunkItem chunk(Long chunkId, String text) {

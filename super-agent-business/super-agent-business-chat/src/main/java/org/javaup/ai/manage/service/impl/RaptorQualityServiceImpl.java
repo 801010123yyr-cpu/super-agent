@@ -71,12 +71,22 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         }
         List<NodeQuality> qualities = nodes.stream()
             .filter(Objects::nonNull)
-            .map(node -> new NodeQuality(
-                node.getLevel(),
-                normalized(node.getQualityScore()),
-                abstractiveFromMetadata(node.getMetadata()),
-                stringValue(node.getId())
-            ))
+            .map(node -> {
+                Map<String, Object> metadata = objectMap(node.getMetadata());
+                Map<String, Object> clusterSignals = objectMap(metadata.get("clusterQualitySignals"));
+                return new NodeQuality(
+                    node.getLevel(),
+                    normalized(node.getQualityScore()),
+                    abstractiveFromMetadata(node.getMetadata()),
+                    stringValue(node.getId()),
+                    doubleValue(clusterSignals.get("avgClusterSize")),
+                    integerValue(clusterSignals.get("maxClusterSizeObserved")),
+                    integerValue(clusterSignals.get("singletonClusterCount")),
+                    doubleValue(clusterSignals.get("levelCompressionRatio")),
+                    doubleValue(clusterSignals.get("avgIntraClusterSimilarity")),
+                    doubleValue(clusterSignals.get("treeBalanceScore"))
+                );
+            })
             .toList();
         return buildReport(qualities, configuredFloor);
     }
@@ -95,6 +105,7 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         long watchCount = scores.stream().filter(score -> score >= LOW_QUALITY_LINE && score < WATCH_QUALITY_LINE).count();
         long highCount = scores.stream().filter(score -> score >= HIGH_QUALITY_LINE).count();
         long blockedCount = scores.stream().filter(score -> score < configuredFloor).count();
+        ClusterQuality clusterQuality = clusterQuality(qualities);
 
         double average = scores.stream().mapToDouble(Double::doubleValue).average().orElse(0D);
         double min = scores.get(0);
@@ -123,6 +134,12 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
             .highQualityNodeCount(highCount)
             .floorBlockedNodeCount(blockedCount)
             .floorBlockedRatio(round(ratio(blockedCount, nodeCount)))
+            .averageClusterSize(roundMetric(clusterQuality.averageClusterSize()))
+            .maxClusterSizeObserved(clusterQuality.maxClusterSizeObserved())
+            .singletonClusterCount(clusterQuality.singletonClusterCount())
+            .averageLevelCompressionRatio(round(clusterQuality.averageLevelCompressionRatio()))
+            .averageIntraClusterSimilarity(round(clusterQuality.averageIntraClusterSimilarity()))
+            .averageTreeBalanceScore(round(clusterQuality.averageTreeBalanceScore()))
             .summary(summary(level, nodeCount, average, median, configuredFloor, recommendedFloor, blockedCount))
             .tuningSuggestions(suggestions(level, configuredFloor, recommendedFloor, lowCount, watchCount, blockedCount, nodeCount, abstractiveCount))
             .levelBuckets(levelBuckets(qualities))
@@ -133,11 +150,41 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         Map<String, Object> metadata = readMap(node == null ? null : node.getMetadataJson());
         Map<String, Object> sourceMetadata = objectMap(metadata.get("sourceMetadata"));
         Map<String, Object> signals = objectMap(sourceMetadata.get("summaryQualitySignals"));
+        Map<String, Object> clusterSignals = objectMap(sourceMetadata.get("clusterQualitySignals"));
         return new NodeQuality(
             node == null ? null : node.getNodeLevel(),
             normalized(firstPresent(metadata.get("summaryQualityScore"), nodeQualityFromSignals(signals))),
             booleanValue(firstPresent(signals.get("abstractive"), sourceMetadata.get("abstractive"))),
-            node == null ? "" : StrUtil.blankToDefault(node.getNodeKey(), String.valueOf(node.getId()))
+            node == null ? "" : StrUtil.blankToDefault(node.getNodeKey(), String.valueOf(node.getId())),
+            doubleValue(clusterSignals.get("avgClusterSize")),
+            integerValue(clusterSignals.get("maxClusterSizeObserved")),
+            integerValue(clusterSignals.get("singletonClusterCount")),
+            doubleValue(clusterSignals.get("levelCompressionRatio")),
+            doubleValue(clusterSignals.get("avgIntraClusterSimilarity")),
+            doubleValue(clusterSignals.get("treeBalanceScore"))
+        );
+    }
+
+    private ClusterQuality clusterQuality(List<NodeQuality> qualities) {
+        Map<Integer, NodeQuality> signalByLevel = qualities.stream()
+            .filter(NodeQuality::hasClusterSignals)
+            .collect(Collectors.toMap(
+                quality -> quality.level() == null ? 0 : quality.level(),
+                quality -> quality,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        List<NodeQuality> signalItems = new ArrayList<>(signalByLevel.values());
+        if (signalItems.isEmpty()) {
+            return new ClusterQuality(0D, 0, 0L, 0D, 0D, 0D);
+        }
+        return new ClusterQuality(
+            signalItems.stream().map(NodeQuality::avgClusterSize).filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0D),
+            signalItems.stream().map(NodeQuality::maxClusterSizeObserved).filter(Objects::nonNull).mapToInt(Integer::intValue).max().orElse(0),
+            signalItems.stream().map(NodeQuality::singletonClusterCount).filter(Objects::nonNull).mapToLong(Integer::longValue).sum(),
+            signalItems.stream().map(NodeQuality::levelCompressionRatio).filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0D),
+            signalItems.stream().map(NodeQuality::avgIntraClusterSimilarity).filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0D),
+            signalItems.stream().map(NodeQuality::treeBalanceScore).filter(Objects::nonNull).mapToDouble(Double::doubleValue).average().orElse(0D)
         );
     }
 
@@ -275,6 +322,12 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
             .highQualityNodeCount(0L)
             .floorBlockedNodeCount(0L)
             .floorBlockedRatio(0D)
+            .averageClusterSize(0D)
+            .maxClusterSizeObserved(0)
+            .singletonClusterCount(0L)
+            .averageLevelCompressionRatio(0D)
+            .averageIntraClusterSimilarity(0D)
+            .averageTreeBalanceScore(0D)
             .summary("当前没有可评测的 RAPTOR 摘要节点。")
             .tuningSuggestions(List.of("先完成索引构建并生成 RAPTOR 节点，再进行摘要质量评测和阈值调优。"))
             .levelBuckets(List.of())
@@ -318,6 +371,21 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         if (value instanceof String text && StrUtil.isNotBlank(text)) {
             try {
                 return Double.parseDouble(text);
+            }
+            catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Integer integerValue(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && StrUtil.isNotBlank(text)) {
+            try {
+                return Integer.parseInt(text);
             }
             catch (NumberFormatException ignored) {
                 return null;
@@ -373,6 +441,10 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         return Math.round(Math.max(0D, Math.min(1D, value)) * 10000D) / 10000D;
     }
 
+    private double roundMetric(double value) {
+        return Math.round(Math.max(0D, value) * 10000D) / 10000D;
+    }
+
     private Map<String, Object> readMap(String json) {
         if (StrUtil.isBlank(json)) {
             return Map.of();
@@ -398,6 +470,32 @@ public class RaptorQualityServiceImpl implements RaptorQualityService {
         return Map.of();
     }
 
-    private record NodeQuality(Integer level, double qualityScore, boolean abstractive, String nodeKey) {
+    private record NodeQuality(Integer level,
+                               double qualityScore,
+                               boolean abstractive,
+                               String nodeKey,
+                               Double avgClusterSize,
+                               Integer maxClusterSizeObserved,
+                               Integer singletonClusterCount,
+                               Double levelCompressionRatio,
+                               Double avgIntraClusterSimilarity,
+                               Double treeBalanceScore) {
+
+        private boolean hasClusterSignals() {
+            return avgClusterSize != null
+                || maxClusterSizeObserved != null
+                || singletonClusterCount != null
+                || levelCompressionRatio != null
+                || avgIntraClusterSimilarity != null
+                || treeBalanceScore != null;
+        }
+    }
+
+    private record ClusterQuality(double averageClusterSize,
+                                  int maxClusterSizeObserved,
+                                  long singletonClusterCount,
+                                  double averageLevelCompressionRatio,
+                                  double averageIntraClusterSimilarity,
+                                  double averageTreeBalanceScore) {
     }
 }

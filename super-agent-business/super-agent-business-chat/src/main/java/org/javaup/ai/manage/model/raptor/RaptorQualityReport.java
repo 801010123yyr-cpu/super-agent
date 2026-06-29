@@ -57,6 +57,18 @@ public class RaptorQualityReport {
 
     private Double floorBlockedRatio;
 
+    private Double averageClusterSize;
+
+    private Integer maxClusterSizeObserved;
+
+    private Long singletonClusterCount;
+
+    private Double averageLevelCompressionRatio;
+
+    private Double averageIntraClusterSimilarity;
+
+    private Double averageTreeBalanceScore;
+
     private String summary;
 
     private List<String> tuningSuggestions;

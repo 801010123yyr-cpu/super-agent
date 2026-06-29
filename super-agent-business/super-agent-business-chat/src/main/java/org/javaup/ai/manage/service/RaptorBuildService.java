@@ -9,7 +9,11 @@ public interface RaptorBuildService {
 
     RaptorBuildResult rebuildDocumentTree(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks);
 
+    RaptorBuildResult rebuildKnowledgeScopeTree(String knowledgeScopeCode);
+
     void deleteByTask(Long documentId, Long taskId);
 
     void deleteByDocumentId(Long documentId);
+
+    void deleteByScope(String scopeType, String scopeKey);
 }

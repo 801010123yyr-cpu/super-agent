@@ -12,7 +12,9 @@ public interface RaptorSummaryIndexService {
 
     void deleteByDocumentId(Long documentId);
 
-    List<RaptorSummaryHit> search(String question, List<Long> documentIds, List<Long> taskIds, int topK);
+    void deleteByScope(String scopeType, String scopeKey);
+
+    List<RaptorSummaryHit> search(String question, List<Long> documentIds, List<Long> taskIds, List<String> datasetScopeKeys, int topK);
 
     record RaptorSummaryHit(Long nodeId, double score) {
     }

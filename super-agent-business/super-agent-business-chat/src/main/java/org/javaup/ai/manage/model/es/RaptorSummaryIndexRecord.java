@@ -20,6 +20,10 @@ public class RaptorSummaryIndexRecord {
 
     private Long taskId;
 
+    private String scopeType;
+
+    private String scopeKey;
+
     private Long parentNodeId;
 
     private Integer nodeLevel;
@@ -47,6 +51,12 @@ public class RaptorSummaryIndexRecord {
 
     @Builder.Default
     private List<Long> sourceParentBlockIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<Long> sourceDocumentIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<Long> sourceTaskIds = new ArrayList<>();
 
     private Double qualityScore;
 

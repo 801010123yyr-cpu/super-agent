@@ -598,6 +598,12 @@
                         <div class="flex flex-wrap gap-1.5">
                           <span v-for="chip in record.chips.filter(Boolean).slice(0,6)" :key="`raptor-chip-${record.nodeId}-${chip}`" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
                         </div>
+                        <div class="grid grid-cols-2 gap-1.5 text-[11px] text-muted-foreground">
+                          <span>簇均值 {{ formatDecimal(record.avgClusterSize) }}</span>
+                          <span>最大簇 {{ formatCount(record.maxClusterSizeObserved) }}</span>
+                          <span>压缩 {{ formatPercent(record.levelCompressionRatio) }}</span>
+                          <span>平衡 {{ formatPercent(record.treeBalanceScore) }}</span>
+                        </div>
                       </div>
                       <div class="grid gap-1.5 text-xs text-muted-foreground">
                         <p v-if="record.treePath" class="line-clamp-2">树路径：{{ record.treePath }}</p>
@@ -891,6 +897,21 @@ const raptorQualityStats = computed(() => {
       label: '阈值拦截',
       value: `${formatCount(report.floorBlockedNodeCount)} 个`,
       hint: `当前样本占比 ${formatPercent(report.floorBlockedRatio)}`
+    },
+    {
+      label: '平均簇大小',
+      value: formatDecimal(report.averageClusterSize),
+      hint: `最大 ${formatCount(report.maxClusterSizeObserved)}`
+    },
+    {
+      label: '树平衡分',
+      value: formatPercent(report.averageTreeBalanceScore),
+      hint: `单节点簇 ${formatCount(report.singletonClusterCount)}`
+    },
+    {
+      label: '层级压缩',
+      value: formatPercent(report.averageLevelCompressionRatio),
+      hint: `簇内相似 ${formatPercent(report.averageIntraClusterSimilarity)}`
     }
   ]
 })
@@ -1050,6 +1071,13 @@ const ragArtifactSections = computed(() => {
         qualityRisk: item.qualityRisk,
         summaryStrategy: item.summaryStrategy,
         clusterMethod: item.clusterMethod,
+        treeBuilderMethod: item.treeBuilderMethod,
+        avgClusterSize: item.avgClusterSize,
+        maxClusterSizeObserved: item.maxClusterSizeObserved,
+        singletonClusterCount: item.singletonClusterCount,
+        levelCompressionRatio: item.levelCompressionRatio,
+        avgIntraClusterSimilarity: item.avgIntraClusterSimilarity,
+        treeBalanceScore: item.treeBalanceScore,
         abstractive: item.abstractive,
         llmSummaryStatus: item.llmSummaryStatus,
         sourceChunkCount: item.sourceChunkCount,
@@ -1063,6 +1091,7 @@ const ragArtifactSections = computed(() => {
           `L${valueOrDash(item.nodeLevel)}`,
           item.summaryStrategy || '',
           item.clusterMethod || '',
+          item.treeBuilderMethod || '',
           raptorNodeQualityLabel(item.qualityLevel),
           item.pageRange || '',
           item.keywords || ''
@@ -1707,6 +1736,14 @@ function formatPercent(value) {
     return '-'
   }
   return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`
+}
+
+function formatDecimal(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    return '-'
+  }
+  return number.toFixed(number >= 10 ? 1 : 2).replace(/\.?0+$/, '')
 }
 
 function qualityBarWidth(value) {

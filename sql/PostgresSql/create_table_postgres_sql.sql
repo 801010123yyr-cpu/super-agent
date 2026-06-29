@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS public.super_agent_raptor_embedding (
     id BIGINT NOT NULL,
     document_id BIGINT NOT NULL,
     task_id BIGINT NOT NULL,
+    scope_type VARCHAR(32) NOT NULL DEFAULT 'DOCUMENT',
+    scope_key VARCHAR(255) NOT NULL DEFAULT '',
     node_level INTEGER NOT NULL,
     node_no INTEGER NOT NULL,
     parent_node_id BIGINT,
@@ -104,6 +106,8 @@ CREATE TABLE IF NOT EXISTS public.super_agent_raptor_embedding (
     summary_with_weight TEXT,
     source_chunk_ids_json TEXT,
     source_parent_block_ids_json TEXT,
+    source_document_ids_json TEXT,
+    source_task_ids_json TEXT,
     section_path VARCHAR(1000),
     page_range VARCHAR(64),
     keywords TEXT,
@@ -121,6 +125,8 @@ COMMENT ON TABLE public.super_agent_raptor_embedding IS 'RAPTOR层级摘要向�
 COMMENT ON COLUMN public.super_agent_raptor_embedding.id IS '主键id，复用 MySQL raptor_node 主键';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.document_id IS '文档id';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.task_id IS '索引任务id';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.scope_type IS 'RAPTOR摘要范围类型：DOCUMENT/DATASET';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.scope_key IS 'RAPTOR摘要范围键，例如 document:{id} / knowledge:{code} / global';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.node_level IS '摘要树层级，1为最贴近原文的摘要';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.node_no IS '同层节点序号';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.parent_node_id IS '父摘要节点id';
@@ -129,6 +135,8 @@ COMMENT ON COLUMN public.super_agent_raptor_embedding.summary IS '摘要文本';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.summary_with_weight IS '带标题/章节/关键词/问题的加权检索文本';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.source_chunk_ids_json IS '可下钻的原文chunk id JSON数组';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.source_parent_block_ids_json IS '可下钻的父块id JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.source_document_ids_json IS '跨文档摘要覆盖的文档id JSON数组';
+COMMENT ON COLUMN public.super_agent_raptor_embedding.source_task_ids_json IS '跨文档摘要覆盖的索引任务id JSON数组';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.section_path IS '摘要覆盖章节路径';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.page_range IS '摘要覆盖页码范围';
 COMMENT ON COLUMN public.super_agent_raptor_embedding.keywords IS '摘要关键词 JSON数组';
@@ -143,6 +151,9 @@ CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_document_id
 
 CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_task_id
     ON public.super_agent_raptor_embedding (task_id);
+
+CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_scope
+    ON public.super_agent_raptor_embedding (scope_type, scope_key);
 
 CREATE INDEX IF NOT EXISTS idx_super_agent_raptor_embedding_level
     ON public.super_agent_raptor_embedding (document_id, node_level);

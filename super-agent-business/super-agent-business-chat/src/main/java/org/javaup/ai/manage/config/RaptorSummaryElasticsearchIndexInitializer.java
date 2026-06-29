@@ -33,7 +33,8 @@ public class RaptorSummaryElasticsearchIndexInitializer {
         String searchAnalyzer = elasticsearch.getSearchAnalyzer();
         try {
             if (indexExists(indexName)) {
-                log.info("Elasticsearch RAPTOR 摘要索引 [{}] 已存在，跳过创建。", indexName);
+                putScopeMappings(indexName);
+                log.info("Elasticsearch RAPTOR 摘要索引 [{}] 已存在，已确认 scope/source 映射。", indexName);
                 return;
             }
             createIndex(indexName, analyzer, searchAnalyzer);
@@ -56,6 +57,8 @@ public class RaptorSummaryElasticsearchIndexInitializer {
                 .properties("nodeId", property -> property.long_(number -> number))
                 .properties("documentId", property -> property.long_(number -> number))
                 .properties("taskId", property -> property.long_(number -> number))
+                .properties("scopeType", property -> property.keyword(keyword -> keyword))
+                .properties("scopeKey", property -> property.keyword(keyword -> keyword))
                 .properties("parentNodeId", property -> property.long_(number -> number))
                 .properties("nodeLevel", property -> property.integer(number -> number))
                 .properties("nodeNo", property -> property.integer(number -> number))
@@ -80,9 +83,21 @@ public class RaptorSummaryElasticsearchIndexInitializer {
                     .searchAnalyzer(searchAnalyzer)))
                 .properties("sourceChunkIds", property -> property.long_(number -> number))
                 .properties("sourceParentBlockIds", property -> property.long_(number -> number))
+                .properties("sourceDocumentIds", property -> property.long_(number -> number))
+                .properties("sourceTaskIds", property -> property.long_(number -> number))
                 .properties("qualityScore", property -> property.double_(number -> number))
                 .properties("summaryStrategy", property -> property.keyword(keyword -> keyword))
             )
+        );
+    }
+
+    private void putScopeMappings(String indexName) throws IOException {
+        elasticsearchClient.indices().putMapping(mapping -> mapping
+            .index(indexName)
+            .properties("scopeType", property -> property.keyword(keyword -> keyword))
+            .properties("scopeKey", property -> property.keyword(keyword -> keyword))
+            .properties("sourceDocumentIds", property -> property.long_(number -> number))
+            .properties("sourceTaskIds", property -> property.long_(number -> number))
         );
     }
 }

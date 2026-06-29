@@ -16,6 +16,7 @@ import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
 import org.javaup.ai.manage.model.es.RaptorSummaryIndexRecord;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
+import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
@@ -129,26 +130,77 @@ public class ElasticsearchRaptorSummaryIndexService implements RaptorSummaryInde
     }
 
     @Override
-    public List<RaptorSummaryHit> search(String question, List<Long> documentIds, List<Long> taskIds, int topK) {
+    public void deleteByScope(String scopeType, String scopeKey) {
+        if (StrUtil.isBlank(scopeType) || StrUtil.isBlank(scopeKey)) {
+            return;
+        }
+        try {
+            elasticsearchClient.deleteByQuery(delete -> delete
+                .index(properties.getElasticsearch().getRaptorSummaryIndexName())
+                .refresh(true)
+                .query(query -> query.bool(bool -> bool
+                    .filter(filter -> filter.term(term -> term.field("scopeType").value(scopeType)))
+                    .filter(filter -> filter.term(term -> term.field("scopeKey").value(scopeKey)))
+                ))
+            );
+        }
+        catch (IOException exception) {
+            throw new IllegalStateException("删除 RAPTOR 摘要索引 scope 数据失败", exception);
+        }
+    }
+
+    @Override
+    public List<RaptorSummaryHit> search(String question,
+                                         List<Long> documentIds,
+                                         List<Long> taskIds,
+                                         List<String> datasetScopeKeys,
+                                         int topK) {
         if (StrUtil.isBlank(question) || CollUtil.isEmpty(documentIds) || CollUtil.isEmpty(taskIds) || topK <= 0) {
             return List.of();
         }
         List<FieldValue> documentValues = documentIds.stream().map(FieldValue::of).toList();
         List<FieldValue> taskValues = taskIds.stream().map(FieldValue::of).toList();
+        List<FieldValue> scopeValues = CollUtil.emptyIfNull(datasetScopeKeys).stream().map(FieldValue::of).toList();
         String retrievalQuery = question.trim();
         try {
             SearchResponse<RaptorSummaryIndexRecord> response = elasticsearchClient.search(search -> search
                     .index(properties.getElasticsearch().getRaptorSummaryIndexName())
                     .size(Math.max(1, Math.min(topK, 50)))
                     .query(query -> query.bool(bool -> {
-                        bool.filter(filter -> filter.terms(terms -> terms
-                            .field("documentId")
-                            .terms(values -> values.value(documentValues))
-                        ));
-                        bool.filter(filter -> filter.terms(terms -> terms
-                            .field("taskId")
-                            .terms(values -> values.value(taskValues))
-                        ));
+                        bool.filter(filter -> filter.bool(scopeFilter -> {
+                            scopeFilter.should(should -> should.bool(documentScope -> documentScope
+                                .filter(item -> item.terms(terms -> terms
+                                    .field("documentId")
+                                    .terms(values -> values.value(documentValues))
+                                ))
+                                .filter(item -> item.terms(terms -> terms
+                                    .field("taskId")
+                                    .terms(values -> values.value(taskValues))
+                                ))
+                            ));
+                            if (CollUtil.isNotEmpty(scopeValues)) {
+                                scopeFilter.should(should -> should.bool(datasetScope -> datasetScope
+                                    .filter(item -> item.term(term -> term
+                                        .field("scopeType")
+                                        .value(RaptorScopeSupport.SCOPE_TYPE_DATASET)
+                                    ))
+                                    .filter(item -> item.terms(terms -> terms
+                                        .field("scopeKey")
+                                        .terms(values -> values.value(scopeValues))
+                                    ))
+                                    .filter(item -> item.terms(terms -> terms
+                                        .field("sourceDocumentIds")
+                                        .terms(values -> values.value(documentValues))
+                                    ))
+                                    .filter(item -> item.terms(terms -> terms
+                                        .field("sourceTaskIds")
+                                        .terms(values -> values.value(taskValues))
+                                    ))
+                                ));
+                            }
+                            scopeFilter.minimumShouldMatch("1");
+                            return scopeFilter;
+                        }));
                         bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
                             .field("title")
                             .query(retrievalQuery)
@@ -202,6 +254,8 @@ public class ElasticsearchRaptorSummaryIndexService implements RaptorSummaryInde
             .nodeId(node.getId())
             .documentId(node.getDocumentId())
             .taskId(node.getTaskId())
+            .scopeType(safeText(node.getScopeType()))
+            .scopeKey(safeText(node.getScopeKey()))
             .parentNodeId(node.getParentNodeId())
             .nodeLevel(node.getNodeLevel())
             .nodeNo(node.getNodeNo())
@@ -214,6 +268,8 @@ public class ElasticsearchRaptorSummaryIndexService implements RaptorSummaryInde
             .questions(readStringList(node.getQuestions()))
             .sourceChunkIds(readLongList(node.getSourceChunkIdsJson()))
             .sourceParentBlockIds(readLongList(node.getSourceParentBlockIdsJson()))
+            .sourceDocumentIds(readLongList(node.getSourceDocumentIdsJson()))
+            .sourceTaskIds(readLongList(node.getSourceTaskIdsJson()))
             .qualityScore(doubleValue(metadata.get("summaryQualityScore")))
             .summaryStrategy(safeText(sourceMetadata.get("summaryStrategy")))
             .build();

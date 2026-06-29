@@ -9,8 +9,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
+import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
 import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
@@ -19,10 +22,13 @@ import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
 import org.javaup.ai.manage.support.MybatisBatchExecutor;
+import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsRaptorBuildRequest;
 import org.javaup.ai.ragtools.model.RagToolsRaptorBuildResponse;
 import org.javaup.enums.BusinessStatus;
+import org.javaup.enums.DocumentChunkSourceTypeEnum;
+import org.javaup.enums.DocumentIndexStatusEnum;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -41,6 +47,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Slf4j
 @AllArgsConstructor
@@ -49,13 +56,15 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private static final String UPSERT_SQL_TEMPLATE = """
         INSERT INTO %s
-        (id, document_id, task_id, node_level, node_no, parent_node_id, title, summary, summary_with_weight,
-         source_chunk_ids_json, source_parent_block_ids_json, section_path, page_range, keywords, questions,
+        (id, document_id, task_id, scope_type, scope_key, node_level, node_no, parent_node_id, title, summary, summary_with_weight,
+         source_chunk_ids_json, source_parent_block_ids_json, source_document_ids_json, source_task_ids_json, section_path, page_range, keywords, questions,
          embedding_model, metadata_json, embedding, create_time, edit_time, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS vector), NOW(), NOW(), ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS vector), NOW(), NOW(), ?)
         ON CONFLICT (id) DO UPDATE SET
             document_id = EXCLUDED.document_id,
             task_id = EXCLUDED.task_id,
+            scope_type = EXCLUDED.scope_type,
+            scope_key = EXCLUDED.scope_key,
             node_level = EXCLUDED.node_level,
             node_no = EXCLUDED.node_no,
             parent_node_id = EXCLUDED.parent_node_id,
@@ -64,6 +73,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             summary_with_weight = EXCLUDED.summary_with_weight,
             source_chunk_ids_json = EXCLUDED.source_chunk_ids_json,
             source_parent_block_ids_json = EXCLUDED.source_parent_block_ids_json,
+            source_document_ids_json = EXCLUDED.source_document_ids_json,
+            source_task_ids_json = EXCLUDED.source_task_ids_json,
             section_path = EXCLUDED.section_path,
             page_range = EXCLUDED.page_range,
             keywords = EXCLUDED.keywords,
@@ -79,9 +90,19 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private static final String DELETE_VECTOR_BY_DOCUMENT_SQL_TEMPLATE = "DELETE FROM %s WHERE document_id = ?";
 
+    private static final String DELETE_VECTOR_BY_SCOPE_SQL_TEMPLATE = "DELETE FROM %s WHERE scope_type = ? AND scope_key = ?";
+
+    private static final long DATASET_DOCUMENT_ID = 0L;
+
+    private static final long DATASET_TASK_ID = 0L;
+
     private static final int EMBEDDING_BATCH_SIZE_LIMIT = 10;
 
     private final SuperAgentRaptorNodeMapper raptorNodeMapper;
+
+    private final SuperAgentDocumentMapper documentMapper;
+
+    private final SuperAgentDocumentChunkMapper chunkMapper;
 
     private final RagToolsClient ragToolsClient;
 
@@ -125,10 +146,11 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
         long buildStartedNanos = System.nanoTime();
         log.info("开始构建 RAPTOR 摘要树，documentId={}, taskId={}, chunkCount={}", documentId, taskId, chunks.size());
+        String scopeKey = RaptorScopeSupport.documentScopeKey(documentId);
         long pythonStartedNanos = System.nanoTime();
         RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(documentId, taskId, chunks));
-        log.info("Python RAPTOR 构建调用完成，documentId={}, taskId={}, costMillis={}",
-            documentId, taskId, elapsedMillis(pythonStartedNanos));
+        log.info("Python RAPTOR 构建调用完成，documentId={}, taskId={}, scopeType={}, scopeKey={}, costMillis={}",
+            documentId, taskId, RaptorScopeSupport.SCOPE_TYPE_DOCUMENT, scopeKey, elapsedMillis(pythonStartedNanos));
         if (response == null) {
             throw new IllegalStateException("Python RAPTOR 构建接口返回为空。");
         }
@@ -146,7 +168,16 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             sourceQualityReport.getLowQualityNodeCount());
 
         Map<String, Long> idMap = allocateNodeIds(response.getNodes());
-        List<SuperAgentRaptorNode> nodes = buildNodeEntities(documentId, taskId, response.getNodes(), idMap);
+        List<SuperAgentRaptorNode> nodes = buildNodeEntities(
+            documentId,
+            taskId,
+            RaptorScopeSupport.SCOPE_TYPE_DOCUMENT,
+            scopeKey,
+            response.getNodes(),
+            idMap,
+            distinctChunkDocumentIds(chunks),
+            distinctChunkTaskIds(chunks)
+        );
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR 构建结果没有达到质量阈值的摘要节点，documentId={}, taskId={}, qualityFloor={}",
                 documentId, taskId, qualityFloor());
@@ -186,6 +217,98 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public RaptorBuildResult rebuildKnowledgeScopeTree(String knowledgeScopeCode) {
+        String normalizedScopeCode = RaptorScopeSupport.normalizeScopeCode(knowledgeScopeCode);
+        if (StrUtil.isBlank(normalizedScopeCode)) {
+            return RaptorBuildResult.builder().build();
+        }
+        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(normalizedScopeCode);
+        List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+            .eq(SuperAgentDocument::getKnowledgeScopeCode, knowledgeScopeCode)
+            .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
+            .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
+            .isNotNull(SuperAgentDocument::getLastIndexTaskId)
+            .orderByAsc(SuperAgentDocument::getId));
+        if (documents.size() < 2) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识域内已完成索引文档不足 2 篇: scopeKey={}, documentCount={}",
+                scopeKey, documents.size());
+            return RaptorBuildResult.builder().build();
+        }
+        List<SuperAgentDocumentChunk> chunks = loadLatestChunks(documents);
+        if (CollUtil.isEmpty(chunks)) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识域内没有可用 chunk: scopeKey={}, documentCount={}",
+                scopeKey, documents.size());
+            return RaptorBuildResult.builder().build();
+        }
+
+        deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+        List<Long> sourceDocumentIds = documents.stream()
+            .map(SuperAgentDocument::getId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        List<Long> sourceTaskIds = documents.stream()
+            .map(SuperAgentDocument::getLastIndexTaskId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        long buildStartedNanos = System.nanoTime();
+        log.info("开始构建 RAPTOR dataset-level 摘要树，scopeKey={}, documentCount={}, chunkCount={}",
+            scopeKey, sourceDocumentIds.size(), chunks.size());
+        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(DATASET_DOCUMENT_ID, DATASET_TASK_ID, chunks));
+        if (response == null) {
+            throw new IllegalStateException("Python RAPTOR dataset-level 构建接口返回为空。");
+        }
+        logLlmSummaryFallbacks(DATASET_DOCUMENT_ID, DATASET_TASK_ID, response.getNodes());
+        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor());
+        Map<String, Long> idMap = allocateNodeIds(response.getNodes());
+        List<SuperAgentRaptorNode> nodes = buildNodeEntities(
+            DATASET_DOCUMENT_ID,
+            DATASET_TASK_ID,
+            RaptorScopeSupport.SCOPE_TYPE_DATASET,
+            scopeKey,
+            response.getNodes(),
+            idMap,
+            sourceDocumentIds,
+            sourceTaskIds
+        );
+        if (CollUtil.isEmpty(nodes)) {
+            log.info("RAPTOR dataset-level 构建没有达到质量阈值的摘要节点，scopeKey={}, qualityFloor={}",
+                scopeKey, qualityFloor());
+            return RaptorBuildResult.builder()
+                .sourceQualityReport(sourceQualityReport)
+                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor()))
+                .build();
+        }
+        MybatisBatchExecutor.insertBatch(SuperAgentRaptorNode.class, nodes);
+        vectorize(nodes);
+        indexSummaries(nodes);
+
+        int levelCount = nodes.stream()
+            .map(SuperAgentRaptorNode::getNodeLevel)
+            .filter(Objects::nonNull)
+            .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll)
+            .size();
+        int sourceChunkCount = nodes.stream()
+            .flatMap(node -> readLongList(node.getSourceChunkIdsJson()).stream())
+            .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll)
+            .size();
+        RaptorBuildResult result = RaptorBuildResult.builder()
+            .nodeCount(nodes.size())
+            .levelCount(levelCount)
+            .sourceChunkCount(sourceChunkCount)
+            .sourceQualityReport(sourceQualityReport)
+            .savedQualityReport(raptorQualityService.evaluate(nodes, qualityFloor()))
+            .build();
+        log.info("RAPTOR dataset-level 摘要树构建完成: scopeKey={}, documentCount={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
+            scopeKey, sourceDocumentIds.size(), result.getNodeCount(), result.getLevelCount(), result.getSourceChunkCount(), elapsedMillis(buildStartedNanos));
+        return result;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void deleteByTask(Long documentId, Long taskId) {
         if (documentId == null || taskId == null) {
             return;
@@ -214,6 +337,23 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         RaptorSummaryIndexService indexService = raptorSummaryIndexServiceProvider.getIfAvailable();
         if (indexService != null) {
             indexService.deleteByDocumentId(documentId);
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteByScope(String scopeType, String scopeKey) {
+        if (StrUtil.isBlank(scopeType) || StrUtil.isBlank(scopeKey)) {
+            return;
+        }
+        raptorNodeMapper.delete(new LambdaQueryWrapper<SuperAgentRaptorNode>()
+            .eq(SuperAgentRaptorNode::getScopeType, scopeType)
+            .eq(SuperAgentRaptorNode::getScopeKey, scopeKey));
+        pgVectorJdbcTemplate.update(DELETE_VECTOR_BY_SCOPE_SQL_TEMPLATE.formatted(DocumentPgVectorConstants.RAPTOR_EMBEDDING_TABLE_NAME),
+            scopeType, scopeKey);
+        RaptorSummaryIndexService indexService = raptorSummaryIndexServiceProvider.getIfAvailable();
+        if (indexService != null) {
+            indexService.deleteByScope(scopeType, scopeKey);
         }
     }
 
@@ -260,6 +400,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         metadata.put("itemIndex", chunk.getItemIndex());
         metadata.put("keywords", chunk.getKeywords());
         metadata.put("questions", chunk.getQuestions());
+        metadata.put("documentId", chunk.getDocumentId());
+        metadata.put("taskId", chunk.getTaskId());
         return metadata;
     }
 
@@ -278,8 +420,12 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private List<SuperAgentRaptorNode> buildNodeEntities(Long documentId,
                                                          Long taskId,
+                                                         String scopeType,
+                                                         String scopeKey,
                                                          List<RagToolsRaptorBuildResponse.Node> extractedNodes,
-                                                         Map<String, Long> idMap) {
+                                                         Map<String, Long> idMap,
+                                                         List<Long> sourceDocumentIds,
+                                                         List<Long> sourceTaskIds) {
         if (CollUtil.isEmpty(extractedNodes)) {
             return List.of();
         }
@@ -297,7 +443,9 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             node.setId(nodeId);
             node.setDocumentId(documentId);
             node.setTaskId(taskId);
-            node.setNodeKey(limit(extracted.getId(), 255));
+            node.setScopeType(limit(StrUtil.blankToDefault(scopeType, RaptorScopeSupport.SCOPE_TYPE_DOCUMENT), 32));
+            node.setScopeKey(limit(StrUtil.blankToDefault(scopeKey, RaptorScopeSupport.documentScopeKey(documentId)), 255));
+            node.setNodeKey(limit(nodeKey(scopeType, scopeKey, extracted.getId()), 255));
             node.setParentNodeId(StrUtil.isBlank(extracted.getParentId()) ? null : idMap.get(extracted.getParentId()));
             node.setNodeLevel(defaultInteger(extracted.getLevel(), 1));
             node.setNodeNo(defaultInteger(extracted.getNodeNo(), nodes.size() + 1));
@@ -307,6 +455,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             node.setChildNodeIdsJson(writeJson(remapIds(extracted.getChildNodeIds(), idMap)));
             node.setSourceChunkIdsJson(writeJson(extracted.getSourceChunkIds()));
             node.setSourceParentBlockIdsJson(writeJson(extracted.getSourceParentBlockIds()));
+            node.setSourceDocumentIdsJson(writeJson(sourceDocumentIds));
+            node.setSourceTaskIdsJson(writeJson(sourceTaskIds));
             node.setSectionPath(limit(extracted.getSectionPath(), 1000));
             node.setPageRange(limit(extracted.getPageRange(), 64));
             node.setKeywords(writeJson(extracted.getKeywords()));
@@ -315,6 +465,10 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                 "sourceNodeId", extracted.getId(),
                 "sourceParentId", extracted.getParentId(),
                 "sourceChildNodeIds", extracted.getChildNodeIds(),
+                "scopeType", node.getScopeType(),
+                "scopeKey", node.getScopeKey(),
+                "sourceDocumentIds", sourceDocumentIds,
+                "sourceTaskIds", sourceTaskIds,
                 "summaryQualityScore", summaryQualityScore(extracted),
                 "sourceMetadata", extracted.getMetadata()
             )));
@@ -401,27 +555,31 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                 ps.setLong(1, node.getId());
                 ps.setLong(2, node.getDocumentId());
                 ps.setLong(3, node.getTaskId());
-                ps.setInt(4, defaultInteger(node.getNodeLevel(), 1));
-                ps.setInt(5, defaultInteger(node.getNodeNo(), 0));
+                ps.setString(4, node.getScopeType());
+                ps.setString(5, node.getScopeKey());
+                ps.setInt(6, defaultInteger(node.getNodeLevel(), 1));
+                ps.setInt(7, defaultInteger(node.getNodeNo(), 0));
                 if (node.getParentNodeId() == null) {
-                    ps.setNull(6, Types.BIGINT);
+                    ps.setNull(8, Types.BIGINT);
                 }
                 else {
-                    ps.setLong(6, node.getParentNodeId());
+                    ps.setLong(8, node.getParentNodeId());
                 }
-                ps.setString(7, node.getTitle());
-                ps.setString(8, node.getSummary());
-                ps.setString(9, embeddingInput(node));
-                ps.setString(10, node.getSourceChunkIdsJson());
-                ps.setString(11, node.getSourceParentBlockIdsJson());
-                ps.setString(12, node.getSectionPath());
-                ps.setString(13, node.getPageRange());
-                ps.setString(14, node.getKeywords());
-                ps.setString(15, node.getQuestions());
-                ps.setString(16, embeddingModelName);
-                ps.setString(17, buildMetadataJson(node, embeddingModelName));
-                ps.setString(18, toVectorLiteral(embeddingBatch.get(index)));
-                ps.setInt(19, BusinessStatus.YES.getCode());
+                ps.setString(9, node.getTitle());
+                ps.setString(10, node.getSummary());
+                ps.setString(11, embeddingInput(node));
+                ps.setString(12, node.getSourceChunkIdsJson());
+                ps.setString(13, node.getSourceParentBlockIdsJson());
+                ps.setString(14, node.getSourceDocumentIdsJson());
+                ps.setString(15, node.getSourceTaskIdsJson());
+                ps.setString(16, node.getSectionPath());
+                ps.setString(17, node.getPageRange());
+                ps.setString(18, node.getKeywords());
+                ps.setString(19, node.getQuestions());
+                ps.setString(20, embeddingModelName);
+                ps.setString(21, buildMetadataJson(node, embeddingModelName));
+                ps.setString(22, toVectorLiteral(embeddingBatch.get(index)));
+                ps.setInt(23, BusinessStatus.YES.getCode());
             }
 
             @Override
@@ -435,6 +593,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("documentId", node.getDocumentId());
         metadata.put("taskId", node.getTaskId());
+        metadata.put("scopeType", node.getScopeType());
+        metadata.put("scopeKey", node.getScopeKey());
         metadata.put("raptorNodeId", node.getId());
         metadata.put("nodeLevel", node.getNodeLevel());
         metadata.put("nodeNo", node.getNodeNo());
@@ -446,6 +606,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         metadata.put("questions", node.getQuestions());
         metadata.put("sourceChunkIds", readLongList(node.getSourceChunkIdsJson()));
         metadata.put("sourceParentBlockIds", readLongList(node.getSourceParentBlockIdsJson()));
+        metadata.put("sourceDocumentIds", readLongList(node.getSourceDocumentIdsJson()));
+        metadata.put("sourceTaskIds", readLongList(node.getSourceTaskIdsJson()));
         metadata.put("summaryQualityScore", metadataValue(node.getMetadataJson(), "summaryQualityScore"));
         metadata.put("embeddingModel", embeddingModelName);
         return writeJson(metadata);
@@ -610,5 +772,50 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private int defaultInteger(Integer value, int defaultValue) {
         return Objects.requireNonNullElse(value, defaultValue);
+    }
+
+    private List<SuperAgentDocumentChunk> loadLatestChunks(List<SuperAgentDocument> documents) {
+        Map<Long, Long> latestTaskIdByDocumentId = documents.stream()
+            .filter(document -> document.getId() != null && document.getLastIndexTaskId() != null)
+            .collect(Collectors.toMap(
+                SuperAgentDocument::getId,
+                SuperAgentDocument::getLastIndexTaskId,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        if (latestTaskIdByDocumentId.isEmpty()) {
+            return List.of();
+        }
+        List<SuperAgentDocumentChunk> chunks = chunkMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentChunk>()
+            .in(SuperAgentDocumentChunk::getDocumentId, latestTaskIdByDocumentId.keySet())
+            .eq(SuperAgentDocumentChunk::getSourceType, DocumentChunkSourceTypeEnum.ORIGINAL.getCode())
+            .eq(SuperAgentDocumentChunk::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentDocumentChunk::getDocumentId, SuperAgentDocumentChunk::getChunkNo, SuperAgentDocumentChunk::getId));
+        return chunks.stream()
+            .filter(chunk -> Objects.equals(latestTaskIdByDocumentId.get(chunk.getDocumentId()), chunk.getTaskId()))
+            .toList();
+    }
+
+    private List<Long> distinctChunkDocumentIds(List<SuperAgentDocumentChunk> chunks) {
+        return CollUtil.emptyIfNull(chunks).stream()
+            .map(SuperAgentDocumentChunk::getDocumentId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+    }
+
+    private List<Long> distinctChunkTaskIds(List<SuperAgentDocumentChunk> chunks) {
+        return CollUtil.emptyIfNull(chunks).stream()
+            .map(SuperAgentDocumentChunk::getTaskId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+    }
+
+    private String nodeKey(String scopeType, String scopeKey, String sourceNodeId) {
+        if (RaptorScopeSupport.isDatasetScope(scopeType)) {
+            return scopeKey + ":" + sourceNodeId;
+        }
+        return sourceNodeId;
     }
 }

@@ -377,6 +377,20 @@ public class DocumentRagSnapshotVo {
 
         private String clusterMethod;
 
+        private String treeBuilderMethod;
+
+        private Double avgClusterSize;
+
+        private Integer maxClusterSizeObserved;
+
+        private Integer singletonClusterCount;
+
+        private Double levelCompressionRatio;
+
+        private Double avgIntraClusterSimilarity;
+
+        private Double treeBalanceScore;
+
         private Boolean abstractive;
 
         private String llmSummaryStatus;

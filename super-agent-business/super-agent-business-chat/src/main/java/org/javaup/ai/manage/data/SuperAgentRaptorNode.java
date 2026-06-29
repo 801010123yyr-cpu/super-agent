@@ -23,6 +23,10 @@ public class SuperAgentRaptorNode extends BaseTableData {
 
     private Long taskId;
 
+    private String scopeType;
+
+    private String scopeKey;
+
     private String nodeKey;
 
     private Long parentNodeId;
@@ -42,6 +46,10 @@ public class SuperAgentRaptorNode extends BaseTableData {
     private String sourceChunkIdsJson;
 
     private String sourceParentBlockIdsJson;
+
+    private String sourceDocumentIdsJson;
+
+    private String sourceTaskIdsJson;
 
     private String sectionPath;
 

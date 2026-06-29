@@ -122,6 +122,14 @@ app:
       # 不建议盲目调大；如果某批仍 JSON 截断，代码会自动拆成单 chunk 重试。
       batch-chunk-limit: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_BATCH_CHUNK_LIMIT:3}
       batch-token-limit: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_BATCH_TOKEN_LIMIT:2800}
+      # 单次 advisor 输出上限。高密度清单/表格只抽少量强证据候选，避免 JSON 输出过长。
+      max-entities-per-call: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_ENTITIES_PER_CALL:8}
+      max-relations-per-call: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_RELATIONS_PER_CALL:6}
+      max-evidences-per-call: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_EVIDENCES_PER_CALL:8}
+      max-quote-chars: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_QUOTE_CHARS:180}
+      max-reason-chars: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_REASON_CHARS:240}
+      # 对结构化清单、表格行、metadata 行做更小粒度 advisor unit，仍保留原 chunkId 供 Java 校验。
+      max-unit-text-chars: ${SUPER_AGENT_GRAPH_RAG_EXTRACTION_MAX_UNIT_TEXT_CHARS:420}
     community-report:
       # 是否启用 GraphRAG LLM 受控社区报告增强。
       # 开启后，LLM 只能基于 Java 提供的实体/关系/evidence 上下文返回 JSON 报告建议；
