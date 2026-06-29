@@ -4,11 +4,12 @@ import logging
 import os
 import urllib.request
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from fastapi import HTTPException
 
-from rag_tools.config import config_float, config_value
+from rag_tools.config import config_float, config_int, config_value
 from rag_tools.prompt_loader import load_prompt, render_prompt
 from rag_tools.semantic_model import SemanticModelUnavailable, embed_texts
 from rag_tools.schemas.raptor_build import RaptorBuildRequest, RaptorBuildResponse, RaptorChunk, RaptorNode
@@ -23,6 +24,8 @@ MIN_QUALITY_SCORE = 0.35
 LLM_CONTEXT_CHARS = 6500
 CLUSTER_METHOD = "sentence_embedding_ahc_balanced_v1"
 TREE_BUILDER_METHOD = "balanced_hierarchical_v1"
+DEFAULT_LLM_CONCURRENCY = 3
+MAX_LLM_CONCURRENCY = 5
 
 CHINESE_STOP_TERMS = {
     "这个", "那个", "以及", "如果", "进行", "可以", "需要", "相关", "当前", "主要", "包括", "通过",
@@ -45,11 +48,8 @@ def build_raptor(request: RaptorBuildRequest) -> RaptorBuildResponse:
     while current_items and level <= max_levels:
         cluster_result = _cluster_items(current_items, max_cluster_size)
         clusters = cluster_result.clusters
-        level_nodes: list[RaptorNode] = []
-        for index, cluster in enumerate(clusters, start=1):
-            node = _build_node(cluster, level, index, request.llm_summary_enabled, cluster_result.signals)
-            level_nodes.append(node)
-            nodes.append(node)
+        level_nodes = _build_level_nodes(clusters, level, request.llm_summary_enabled, cluster_result.signals)
+        nodes.extend(level_nodes)
 
         if len(level_nodes) <= 1:
             break
@@ -72,6 +72,50 @@ def build_raptor(request: RaptorBuildRequest) -> RaptorBuildResponse:
         node.parent_id = parent_by_child.get(node.id, "")
 
     return RaptorBuildResponse(nodes=nodes)
+
+
+def _build_level_nodes(
+    clusters: list[list["_TreeItem"]],
+    level: int,
+    llm_summary_enabled: bool,
+    cluster_signals: dict[str, object],
+) -> list[RaptorNode]:
+    if not clusters:
+        return []
+    concurrency = _llm_summary_concurrency() if llm_summary_enabled else 1
+    if concurrency <= 1 or len(clusters) <= 1:
+        return [
+            _build_node(cluster, level, index, llm_summary_enabled, cluster_signals)
+            for index, cluster in enumerate(clusters, start=1)
+        ]
+    workers = min(concurrency, len(clusters))
+    logger.info(
+        "RAPTOR level nodes build with bounded LLM concurrency: level=%s clusterCount=%s workers=%s",
+        level,
+        len(clusters),
+        workers,
+    )
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="raptor-llm") as executor:
+        return list(executor.map(
+            lambda indexed_cluster: _build_node(
+                indexed_cluster[1],
+                level,
+                indexed_cluster[0],
+                llm_summary_enabled,
+                cluster_signals,
+            ),
+            enumerate(clusters, start=1),
+        ))
+
+
+def _llm_summary_concurrency() -> int:
+    return config_int(
+        "ragTools.raptor.llmConcurrency",
+        "RAG_TOOLS_RAPTOR_LLM_CONCURRENCY",
+        DEFAULT_LLM_CONCURRENCY,
+        1,
+        MAX_LLM_CONCURRENCY,
+    )
 
 
 class _TreeItem:

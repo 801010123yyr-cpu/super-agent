@@ -27,6 +27,22 @@ def config_float(path: str, env_name: str, default: float) -> float:
         return default
 
 
+def config_int(path: str, env_name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+    value = config_value(path, env_name, "")
+    if not value:
+        result = default
+    else:
+        try:
+            result = int(value)
+        except ValueError:
+            result = default
+    if min_value is not None:
+        result = max(min_value, result)
+    if max_value is not None:
+        result = min(max_value, result)
+    return result
+
+
 def _load_config() -> dict[str, Any]:
     global _CONFIG_CACHE
     if _CONFIG_CACHE is not None:

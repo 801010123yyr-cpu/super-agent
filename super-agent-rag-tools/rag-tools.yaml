@@ -11,3 +11,6 @@ ragTools:
     # Example: qwen-plus-latest
     model: "qwen-plus-latest"
     timeoutSeconds: 30
+  raptor:
+    # Bounded per-level LLM summary concurrency for RAPTOR build. Environment variable RAG_TOOLS_RAPTOR_LLM_CONCURRENCY takes precedence.
+    llmConcurrency: 3

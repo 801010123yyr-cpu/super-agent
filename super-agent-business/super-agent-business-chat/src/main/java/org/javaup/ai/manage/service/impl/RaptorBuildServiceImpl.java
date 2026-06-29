@@ -22,6 +22,7 @@ import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
 import org.javaup.ai.manage.support.MybatisBatchExecutor;
+import org.javaup.ai.manage.support.RaptorDatasetBuildSupport;
 import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsRaptorBuildRequest;
@@ -119,6 +120,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private final RaptorQualityService raptorQualityService;
 
+    private final RaptorDatasetBuildSupport raptorDatasetBuildSupport;
+
     private final ObjectProvider<RaptorSummaryIndexService> raptorSummaryIndexServiceProvider;
 
     @Value("${spring.ai.openai.embedding.options.model:}")
@@ -176,7 +179,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             response.getNodes(),
             idMap,
             distinctChunkDocumentIds(chunks),
-            distinctChunkTaskIds(chunks)
+            distinctChunkTaskIds(chunks),
+            null
         );
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR 构建结果没有达到质量阈值的摘要节点，documentId={}, taskId={}, qualityFloor={}",
@@ -236,14 +240,6 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             return RaptorBuildResult.builder().build();
         }
         List<SuperAgentDocumentChunk> chunks = loadLatestChunks(documents);
-        if (CollUtil.isEmpty(chunks)) {
-            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
-            log.info("跳过 RAPTOR dataset-level 构建，知识域内没有可用 chunk: scopeKey={}, documentCount={}",
-                scopeKey, documents.size());
-            return RaptorBuildResult.builder().build();
-        }
-
-        deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
         List<Long> sourceDocumentIds = documents.stream()
             .map(SuperAgentDocument::getId)
             .filter(Objects::nonNull)
@@ -254,10 +250,30 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             .filter(Objects::nonNull)
             .distinct()
             .toList();
+        List<SuperAgentRaptorNode> reusableSummaryNodes = loadReusableDocumentSummaryNodes(documents);
+        if (!coversAllDocuments(reusableSummaryNodes, sourceDocumentIds)) {
+            reusableSummaryNodes = List.of();
+        }
+        RaptorDatasetBuildSupport.DatasetInputs datasetInputs =
+            raptorDatasetBuildSupport.buildInputs(reusableSummaryNodes, chunks);
+        if (CollUtil.isEmpty(datasetInputs.inputs())) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识域内没有可用输入: scopeKey={}, documentCount={}, originalChunkCount={}, reusableSummaryCount={}",
+                scopeKey, documents.size(), chunks.size(), reusableSummaryNodes.size());
+            return RaptorBuildResult.builder().build();
+        }
+        if (CollUtil.isEmpty(chunks)) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识域内没有可追溯原文 chunk: scopeKey={}, documentCount={}",
+                scopeKey, documents.size());
+            return RaptorBuildResult.builder().build();
+        }
+
+        deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
         long buildStartedNanos = System.nanoTime();
-        log.info("开始构建 RAPTOR dataset-level 摘要树，scopeKey={}, documentCount={}, chunkCount={}",
-            scopeKey, sourceDocumentIds.size(), chunks.size());
-        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(DATASET_DOCUMENT_ID, DATASET_TASK_ID, chunks));
+        log.info("开始构建 RAPTOR dataset-level 摘要树，scopeKey={}, documentCount={}, originalChunkCount={}, inputMode={}, inputCount={}, reusableSummaryCount={}",
+            scopeKey, sourceDocumentIds.size(), chunks.size(), datasetInputs.inputMode(), datasetInputs.inputs().size(), reusableSummaryNodes.size());
+        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildDatasetRequest(DATASET_DOCUMENT_ID, DATASET_TASK_ID, datasetInputs));
         if (response == null) {
             throw new IllegalStateException("Python RAPTOR dataset-level 构建接口返回为空。");
         }
@@ -272,7 +288,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             response.getNodes(),
             idMap,
             sourceDocumentIds,
-            sourceTaskIds
+            sourceTaskIds,
+            datasetInputs
         );
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR dataset-level 构建没有达到质量阈值的摘要节点，scopeKey={}, qualityFloor={}",
@@ -299,11 +316,15 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             .nodeCount(nodes.size())
             .levelCount(levelCount)
             .sourceChunkCount(sourceChunkCount)
+            .inputMode(datasetInputs.inputMode())
+            .inputCount(datasetInputs.inputs().size())
+            .reusableSummaryInputCount(datasetInputs.reusableSummaryInputCount())
+            .originalChunkInputCount(datasetInputs.originalChunkInputCount())
             .sourceQualityReport(sourceQualityReport)
             .savedQualityReport(raptorQualityService.evaluate(nodes, qualityFloor()))
             .build();
-        log.info("RAPTOR dataset-level 摘要树构建完成: scopeKey={}, documentCount={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
-            scopeKey, sourceDocumentIds.size(), result.getNodeCount(), result.getLevelCount(), result.getSourceChunkCount(), elapsedMillis(buildStartedNanos));
+        log.info("RAPTOR dataset-level 摘要树构建完成: scopeKey={}, documentCount={}, inputMode={}, inputCount={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
+            scopeKey, sourceDocumentIds.size(), result.getInputMode(), result.getInputCount(), result.getNodeCount(), result.getLevelCount(), result.getSourceChunkCount(), elapsedMillis(buildStartedNanos));
         return result;
     }
 
@@ -390,6 +411,25 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return request;
     }
 
+    private RagToolsRaptorBuildRequest buildDatasetRequest(Long documentId,
+                                                           Long taskId,
+                                                           RaptorDatasetBuildSupport.DatasetInputs datasetInputs) {
+        RagToolsRaptorBuildRequest request = new RagToolsRaptorBuildRequest();
+        request.setDocumentId(documentId);
+        request.setTaskId(taskId);
+        request.setMaxClusterSize(maxClusterSize);
+        request.setMaxLevels(maxLevels);
+        request.setLlmSummaryEnabled(Boolean.TRUE.equals(llmSummaryEnabled));
+
+        List<RagToolsRaptorBuildRequest.Chunk> requestChunks = new ArrayList<>();
+        int chunkNo = 1;
+        for (RaptorDatasetBuildSupport.DatasetInput input : datasetInputs.inputs()) {
+            requestChunks.add(raptorDatasetBuildSupport.toRequestChunk(input, chunkNo++));
+        }
+        request.setChunks(requestChunks);
+        return request;
+    }
+
     private Map<String, Object> chunkMetadata(SuperAgentDocumentChunk chunk) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("planId", chunk.getPlanId());
@@ -425,7 +465,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                                                          List<RagToolsRaptorBuildResponse.Node> extractedNodes,
                                                          Map<String, Long> idMap,
                                                          List<Long> sourceDocumentIds,
-                                                         List<Long> sourceTaskIds) {
+                                                         List<Long> sourceTaskIds,
+                                                         RaptorDatasetBuildSupport.DatasetInputs datasetInputs) {
         if (CollUtil.isEmpty(extractedNodes)) {
             return List.of();
         }
@@ -453,8 +494,14 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             node.setSummary(extracted.getSummary());
             node.setSummaryWithWeight(StrUtil.blankToDefault(extracted.getSummaryWithWeight(), extracted.getSummary()));
             node.setChildNodeIdsJson(writeJson(remapIds(extracted.getChildNodeIds(), idMap)));
-            node.setSourceChunkIdsJson(writeJson(extracted.getSourceChunkIds()));
-            node.setSourceParentBlockIdsJson(writeJson(extracted.getSourceParentBlockIds()));
+            List<Long> sourceChunkIds = datasetInputs == null
+                ? extracted.getSourceChunkIds()
+                : datasetInputs.expandSourceChunkIds(extracted.getSourceChunkIds());
+            List<Long> sourceParentBlockIds = datasetInputs == null
+                ? extracted.getSourceParentBlockIds()
+                : datasetInputs.expandSourceParentBlockIds(extracted.getSourceChunkIds());
+            node.setSourceChunkIdsJson(writeJson(sourceChunkIds));
+            node.setSourceParentBlockIdsJson(writeJson(sourceParentBlockIds));
             node.setSourceDocumentIdsJson(writeJson(sourceDocumentIds));
             node.setSourceTaskIdsJson(writeJson(sourceTaskIds));
             node.setSectionPath(limit(extracted.getSectionPath(), 1000));
@@ -467,6 +514,7 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                 "sourceChildNodeIds", extracted.getChildNodeIds(),
                 "scopeType", node.getScopeType(),
                 "scopeKey", node.getScopeKey(),
+                "datasetInputMode", datasetInputs == null ? null : datasetInputs.inputMode(),
                 "sourceDocumentIds", sourceDocumentIds,
                 "sourceTaskIds", sourceTaskIds,
                 "summaryQualityScore", summaryQualityScore(extracted),
@@ -794,6 +842,40 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return chunks.stream()
             .filter(chunk -> Objects.equals(latestTaskIdByDocumentId.get(chunk.getDocumentId()), chunk.getTaskId()))
             .toList();
+    }
+
+    private List<SuperAgentRaptorNode> loadReusableDocumentSummaryNodes(List<SuperAgentDocument> documents) {
+        Map<Long, Long> latestTaskIdByDocumentId = documents.stream()
+            .filter(document -> document.getId() != null && document.getLastIndexTaskId() != null)
+            .collect(Collectors.toMap(
+                SuperAgentDocument::getId,
+                SuperAgentDocument::getLastIndexTaskId,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        if (latestTaskIdByDocumentId.isEmpty()) {
+            return List.of();
+        }
+        List<SuperAgentRaptorNode> nodes = raptorNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentRaptorNode>()
+            .in(SuperAgentRaptorNode::getDocumentId, latestTaskIdByDocumentId.keySet())
+            .eq(SuperAgentRaptorNode::getScopeType, RaptorScopeSupport.SCOPE_TYPE_DOCUMENT)
+            .ge(SuperAgentRaptorNode::getNodeLevel, 2)
+            .eq(SuperAgentRaptorNode::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentRaptorNode::getDocumentId, SuperAgentRaptorNode::getNodeLevel, SuperAgentRaptorNode::getNodeNo, SuperAgentRaptorNode::getId));
+        return nodes.stream()
+            .filter(node -> Objects.equals(latestTaskIdByDocumentId.get(node.getDocumentId()), node.getTaskId()))
+            .toList();
+    }
+
+    private boolean coversAllDocuments(List<SuperAgentRaptorNode> reusableSummaryNodes, List<Long> sourceDocumentIds) {
+        if (CollUtil.isEmpty(reusableSummaryNodes) || CollUtil.isEmpty(sourceDocumentIds)) {
+            return false;
+        }
+        LinkedHashSet<Long> coveredDocumentIds = reusableSummaryNodes.stream()
+            .map(SuperAgentRaptorNode::getDocumentId)
+            .filter(Objects::nonNull)
+            .collect(LinkedHashSet::new, LinkedHashSet::add, LinkedHashSet::addAll);
+        return coveredDocumentIds.containsAll(sourceDocumentIds);
     }
 
     private List<Long> distinctChunkDocumentIds(List<SuperAgentDocumentChunk> chunks) {

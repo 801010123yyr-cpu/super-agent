@@ -38,6 +38,25 @@ public class DocumentManageExecutorConfiguration {
         );
     }
 
+    @Bean(name = "documentDatasetRaptorExecutorService", destroyMethod = "shutdown")
+    public ExecutorService documentDatasetRaptorExecutorService() {
+        AtomicInteger threadCounter = new AtomicInteger(1);
+        return new ThreadPoolExecutor(
+            1,
+            1,
+            60L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(16),
+            runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("document-dataset-raptor-" + threadCounter.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+            },
+            new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
+
     private int positiveOrDefault(Integer value, int defaultValue) {
         return value == null || value <= 0 ? defaultValue : value;
     }

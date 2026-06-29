@@ -17,6 +17,14 @@ public class RaptorBuildResult {
 
     private int sourceChunkCount;
 
+    private String inputMode;
+
+    private int inputCount;
+
+    private int reusableSummaryInputCount;
+
+    private int originalChunkInputCount;
+
     private RaptorQualityReport sourceQualityReport;
 
     private RaptorQualityReport savedQualityReport;
