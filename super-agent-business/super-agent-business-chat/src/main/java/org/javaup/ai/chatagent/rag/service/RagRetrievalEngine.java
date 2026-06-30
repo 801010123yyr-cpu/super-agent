@@ -1444,6 +1444,16 @@ public class RagRetrievalEngine {
                         view.setChunkNo(Integer.parseInt(String.valueOf(chunkNoObj)));
                     }
 
+                    Object parentBlockIdObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
+                    if (parentBlockIdObj != null) {
+                        view.setParentBlockId(Long.parseLong(String.valueOf(parentBlockIdObj)));
+                    }
+
+                    Object parentBlockNoObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO);
+                    if (parentBlockNoObj != null) {
+                        view.setParentBlockNo(Integer.parseInt(String.valueOf(parentBlockNoObj)));
+                    }
+
                     Object sectionPathObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.SECTION_PATH);
                     if (sectionPathObj != null) {
                         view.setSectionPath(String.valueOf(sectionPathObj));

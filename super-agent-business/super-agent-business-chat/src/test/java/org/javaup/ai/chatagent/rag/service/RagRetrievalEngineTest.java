@@ -7,6 +7,10 @@ import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
+import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
+import org.javaup.ai.chatagent.service.RetrievalObserveStore;
+import org.javaup.ai.chatagent.model.ChannelExecutionView;
+import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
@@ -16,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -776,6 +781,74 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void retrievalObservationRecordsRaptorParentBlockId() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        LinkedHashMap<String, Object> raptorMetadata = new LinkedHashMap<>();
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "RAPTOR");
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.RAPTOR.getName());
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.87D);
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1001L);
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "跨文档上线规范.md");
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.CHUNK_ID, 2001L);
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.CHUNK_NO, 7);
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9001L);
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "上线治理 > 灰度");
+        raptorMetadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_ID, 3001L);
+        Document raptorDoc = Document.builder()
+            .id("raptor-3001-2001")
+            .text("RAPTOR: 灰度期需要观察回答准确率、人工转接率和无证据回复率。")
+            .metadata(raptorMetadata)
+            .score(0.87D)
+            .build();
+
+        InMemoryRetrievalObserveStore observeStore = new InMemoryRetrievalObserveStore();
+        ConversationTraceRecorder traceRecorder = new ConversationTraceRecorder(
+            null,
+            observeStore,
+            "conv-raptor-observe",
+            8001L,
+            "trace-raptor-observe"
+        );
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.RAPTOR.getName(), List.of(raptorDoc))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.RAPTOR)
+                .retrievalQuestion("总结灰度上线风险控制要求")
+                .retrievalSubQuestions(List.of("总结灰度上线风险控制要求"))
+                .build();
+
+            engine.retrieve(plan, traceRecorder);
+
+            assertThat(observeStore.results)
+                .singleElement()
+                .satisfies(result -> {
+                    assertThat(result.getChannelType()).isEqualTo(RetrievalChannelEnum.RAPTOR.getName());
+                    assertThat(result.getChunkId()).isEqualTo(2001L);
+                    assertThat(result.getParentBlockId()).isEqualTo(9001L);
+                });
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);
@@ -833,6 +906,38 @@ class RagRetrievalEngineTest {
         @Override
         public RetrievalChannelResult retrieve(String subQuestion, ConversationExecutionPlan plan) {
             return new RetrievalChannelResult(channelName, documents);
+        }
+    }
+
+    private static class InMemoryRetrievalObserveStore implements RetrievalObserveStore {
+
+        private final List<RetrievalResultView> results = new ArrayList<>();
+        private final List<ChannelExecutionView> channelExecutions = new ArrayList<>();
+
+        @Override
+        public void batchSaveResults(String conversationId, long exchangeId, List<RetrievalResultView> results) {
+            this.results.addAll(results);
+        }
+
+        @Override
+        public void batchSaveChannelExecutions(String conversationId, long exchangeId, List<ChannelExecutionView> executions) {
+            this.channelExecutions.addAll(executions);
+        }
+
+        @Override
+        public List<RetrievalResultView> listResults(String conversationId, long exchangeId) {
+            return results;
+        }
+
+        @Override
+        public List<ChannelExecutionView> listChannelExecutions(String conversationId, long exchangeId) {
+            return channelExecutions;
+        }
+
+        @Override
+        public void deleteByConversation(String conversationId) {
+            results.clear();
+            channelExecutions.clear();
         }
     }
 
