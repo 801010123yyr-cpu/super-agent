@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -59,6 +60,9 @@ class RagToolsDocumentParserServiceTest {
         assertThat(result.getParserProviderVersion()).isEqualTo("0.1.0");
         assertThat(result.getParserElapsedMs()).isEqualTo(1);
         assertThat(result.getParserWarnings()).isEmpty();
+        assertThat(result.getParserTraceMetadata())
+            .containsEntry("pageCount", 1)
+            .containsEntry("bboxBlockCoverage", 0.5D);
     }
 
     @Test
@@ -114,6 +118,11 @@ class RagToolsDocumentParserServiceTest {
             response.setElapsedMs(1);
             response.setWarnings(List.of());
             response.setFailedReason("");
+            response.setTraceMetadata(Map.of(
+                "pageCount", 1,
+                "bboxBlockCount", 1,
+                "bboxBlockCoverage", 0.5D
+            ));
             return response;
         }
     }

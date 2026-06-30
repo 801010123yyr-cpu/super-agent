@@ -62,6 +62,7 @@ public class RagToolsDocumentParserService implements DocumentParserService {
         result.setParserElapsedMs(response.getElapsedMs() == null ? 0 : response.getElapsedMs());
         result.setParserWarnings(response.getWarnings() == null ? List.of() : response.getWarnings());
         result.setParserFailedReason(response.getFailedReason());
+        result.setParserTraceMetadata(response.getTraceMetadata() == null ? new java.util.LinkedHashMap<>() : response.getTraceMetadata());
         result.setStructureNodes(toStructureNodes(response.getStructureNodes()));
         result.setParseArtifacts(toArtifacts(response.getArtifacts()));
         result.setBlocks(toBlocks(response.getBlocks()));

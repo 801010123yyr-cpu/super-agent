@@ -6,6 +6,7 @@ import lombok.NoArgsConstructor;
 import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -31,6 +32,8 @@ public class DocumentRagSnapshotVo {
     private List<MetricItem> metrics;
 
     private List<PipelineStageItem> pipelineStages;
+
+    private ParserTraceItem parserTrace;
 
     private List<ParseBlockItem> parseBlocks;
 
@@ -84,6 +87,60 @@ public class DocumentRagSnapshotVo {
         private String description;
 
         private Long count;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ParserTraceItem {
+
+        private String providerName;
+
+        private String providerVersion;
+
+        private String jobId;
+
+        private Integer pageCount;
+
+        private Integer ocrPageCount;
+
+        private Integer blockCount;
+
+        private Integer rawLayoutCount;
+
+        private Integer tableCount;
+
+        private Integer figureCount;
+
+        private Integer captionCount;
+
+        private Integer bboxBlockCount;
+
+        private Double bboxBlockCoverage;
+
+        private Integer tableCellCount;
+
+        private Integer tableCellBboxCount;
+
+        private Double tableCellBboxCoverage;
+
+        private Integer warningCount;
+
+        private Integer pollCount;
+
+        private Integer submitElapsedMs;
+
+        private Integer pollElapsedMs;
+
+        private Integer resultFetchElapsedMs;
+
+        private Integer standardizeElapsedMs;
+
+        private Integer elapsedMs;
+
+        private Map<String, Object> blockTypeCounts;
+
+        private List<String> warnings;
     }
 
     @Data

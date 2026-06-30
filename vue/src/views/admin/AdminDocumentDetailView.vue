@@ -432,6 +432,60 @@
               </article>
             </div>
 
+            <section v-if="parserTrace" class="rounded-lg border border-[#0d7c7c]/20 bg-[#0d7c7c]/[0.04] p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">解析观测</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">{{ parserTraceSummary }}</p>
+                </div>
+                <div class="flex flex-wrap gap-1.5">
+                  <span class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">{{ parserTrace.providerName || 'parser' }}</span>
+                  <span v-if="parserTrace.jobId" class="rounded-full bg-card px-2 py-0.5 text-[11px] text-muted-foreground">Job {{ parserTrace.jobId }}</span>
+                </div>
+              </div>
+              <div class="mb-3 grid gap-2" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))">
+                <article v-for="item in parserTraceStats" :key="`parser-trace-stat-${item.label}`" class="grid gap-1 rounded-md border border-border bg-card px-3 py-2.5">
+                  <span class="text-[11px] text-muted-foreground">{{ item.label }}</span>
+                  <strong class="text-sm text-foreground">{{ item.value }}</strong>
+                  <span class="text-[11px] text-muted-foreground">{{ item.hint }}</span>
+                </article>
+              </div>
+              <div class="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <div class="rounded-md border border-border bg-card p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">bbox 覆盖</strong>
+                    <span class="text-[11px] text-muted-foreground">block / cell</span>
+                  </div>
+                  <div class="grid gap-2">
+                    <div v-for="item in parserTraceCoverage" :key="`parser-trace-coverage-${item.label}`" class="grid grid-cols-[74px_minmax(0,1fr)_82px] items-center gap-2 text-xs">
+                      <span class="text-muted-foreground">{{ item.label }}</span>
+                      <div class="h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div class="h-full rounded-full" :class="item.tone" :style="{ width: qualityBarWidth(item.value) }"></div>
+                      </div>
+                      <div class="text-right">
+                        <strong class="block text-foreground">{{ formatPercent(item.value) }}</strong>
+                        <span class="text-[10px] text-muted-foreground">{{ item.hint }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="rounded-md border border-border bg-card p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">Block 类型</strong>
+                    <span class="text-[11px] text-muted-foreground">{{ formatCount(parserTrace.blockCount) }} 个 block</span>
+                  </div>
+                  <div v-if="parserTraceBlockTypes.length" class="flex flex-wrap gap-1.5">
+                    <span v-for="item in parserTraceBlockTypes" :key="`parser-trace-type-${item.type}`" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-foreground">{{ item.type }} {{ formatCount(item.count) }}</span>
+                  </div>
+                  <p v-else class="text-xs text-muted-foreground">暂无类型分布。</p>
+                </div>
+              </div>
+              <div v-if="parserTraceWarnings.length" class="mt-3 rounded-md border border-amber-500/20 bg-amber-500/[0.05] p-3">
+                <strong class="mb-1.5 block text-xs text-foreground">解析 warning</strong>
+                <p v-for="(item, index) in parserTraceWarnings" :key="`parser-trace-warning-${index}`" class="text-xs leading-5 text-muted-foreground">{{ index + 1 }}. {{ item }}</p>
+              </div>
+            </section>
+
             <section v-if="raptorQualityReport" class="rounded-lg border p-4" :class="raptorQualityPanelClass(raptorQualityReport.qualityLevel)">
               <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
                 <div>
@@ -864,6 +918,83 @@ const chunkGroupedRecords = computed(() => {
 })
 const ragSnapshotMetrics = computed(() => asArray(ragSnapshot.value?.metrics))
 const ragPipelineStages = computed(() => asArray(ragSnapshot.value?.pipelineStages))
+const parserTrace = computed(() => ragSnapshot.value?.parserTrace || null)
+const parserTraceWarnings = computed(() => asArray(parserTrace.value?.warnings).slice(0, 5))
+const parserTraceBlockTypes = computed(() => {
+  const counts = parserTrace.value?.blockTypeCounts || {}
+  return Object.entries(counts)
+    .map(([type, count]) => ({ type, count: Number(count || 0) }))
+    .filter((item) => item.count > 0)
+    .sort((left, right) => right.count - left.count)
+})
+const parserTraceSummary = computed(() => {
+  if (!parserTrace.value) {
+    return '暂无解析观测数据。'
+  }
+  return compactList([
+    parserTrace.value.pageCount ? `${formatCount(parserTrace.value.pageCount)} 页` : '',
+    parserTrace.value.blockCount ? `${formatCount(parserTrace.value.blockCount)} 个 block` : '',
+    parserTrace.value.tableCount ? `${formatCount(parserTrace.value.tableCount)} 个表格` : '',
+    parserTrace.value.figureCount ? `${formatCount(parserTrace.value.figureCount)} 个图示` : '',
+    parserTrace.value.elapsedMs ? `总耗时 ${formatDuration(parserTrace.value.elapsedMs)}` : ''
+  ]).join(' · ') || '解析 trace 已记录，等待更多统计字段。'
+})
+const parserTraceStats = computed(() => {
+  const trace = parserTrace.value || {}
+  return [
+    {
+      label: '页数 / OCR',
+      value: `${formatCount(trace.pageCount)}/${formatCount(trace.ocrPageCount)}`,
+      hint: 'pageCount / ocrPageCount'
+    },
+    {
+      label: 'Layout 区域',
+      value: formatCount(trace.rawLayoutCount || trace.blockCount),
+      hint: `标准 block ${formatCount(trace.blockCount)}`
+    },
+    {
+      label: '表格 / 图示',
+      value: `${formatCount(trace.tableCount)}/${formatCount(trace.figureCount)}`,
+      hint: `caption ${formatCount(trace.captionCount)}`
+    },
+    {
+      label: '轮询次数',
+      value: formatCount(trace.pollCount),
+      hint: trace.jobId ? `Job ${trace.jobId}` : 'native_text 无云端 job'
+    },
+    {
+      label: '提交 / 轮询',
+      value: `${formatDuration(trace.submitElapsedMs)} / ${formatDuration(trace.pollElapsedMs)}`,
+      hint: 'Document Mind 阶段耗时'
+    },
+    {
+      label: '拉取 / 标准化',
+      value: `${formatDuration(trace.resultFetchElapsedMs)} / ${formatDuration(trace.standardizeElapsedMs)}`,
+      hint: `总耗时 ${formatDuration(trace.elapsedMs)}`
+    }
+  ]
+})
+const parserTraceCoverage = computed(() => {
+  const trace = parserTrace.value || {}
+  return [
+    {
+      label: 'Block',
+      value: Number(trace.bboxBlockCoverage || 0),
+      tone: coverageBarClass(trace.bboxBlockCoverage),
+      numerator: trace.bboxBlockCount,
+      denominator: trace.blockCount,
+      hint: `${formatCount(trace.bboxBlockCount)}/${formatCount(trace.blockCount)}`
+    },
+    {
+      label: 'Cell',
+      value: Number(trace.tableCellBboxCoverage || 0),
+      tone: coverageBarClass(trace.tableCellBboxCoverage),
+      numerator: trace.tableCellBboxCount,
+      denominator: trace.tableCellCount,
+      hint: `${formatCount(trace.tableCellBboxCount)}/${formatCount(trace.tableCellCount)}`
+    }
+  ]
+})
 const raptorQualityReport = computed(() => ragSnapshot.value?.raptorQuality || null)
 const raptorQualityStats = computed(() => {
   const report = raptorQualityReport.value || {}
@@ -1752,6 +1883,20 @@ function qualityBarWidth(value) {
     return '0%'
   }
   return `${Math.round(Math.max(0, Math.min(1, number)) * 100)}%`
+}
+
+function coverageBarClass(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number) || number <= 0) {
+    return 'bg-destructive'
+  }
+  if (number >= 0.8) {
+    return 'bg-[var(--color-success)]'
+  }
+  if (number >= 0.5) {
+    return 'bg-amber-500'
+  }
+  return 'bg-destructive'
 }
 
 function raptorQualityLevelLabel(level) {

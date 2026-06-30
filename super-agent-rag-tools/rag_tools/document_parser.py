@@ -105,16 +105,44 @@ class AliyunDocMindParser:
         if not self.is_available():
             raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 不可用: {self.unavailable_reason()}")
 
+        trace: dict[str, Any] = {
+            "providerName": self.provider_name,
+            "providerVersion": self.provider_version,
+            "fileType": file_type,
+            "fileName": request.file_name,
+            "fileSizeBytes": len(content or b""),
+        }
         client = self._client()
+        submit_started = time.perf_counter()
         job_id = self._submit_job(client, content, request.file_name, file_type)
-        status_payload = self._wait_until_finished(client, job_id)
-        result_payload = self._fetch_result_pages(client, job_id)
+        trace["jobId"] = job_id
+        trace["submitElapsedMs"] = _elapsed_ms(submit_started)
+        wait_started = time.perf_counter()
+        status_payload, poll_count = self._wait_until_finished(client, job_id)
+        trace["pollElapsedMs"] = _elapsed_ms(wait_started)
+        trace["pollCount"] = poll_count
+        result_started = time.perf_counter()
+        result_payload, result_batch_count = self._fetch_result_pages(client, job_id)
+        trace["resultFetchElapsedMs"] = _elapsed_ms(result_started)
+        trace["resultBatchCount"] = result_batch_count
         response_payload = {
             "jobId": job_id,
             "status": status_payload,
             "result": result_payload,
         }
+        normalize_started = time.perf_counter()
         blocks, warnings = self._result_to_blocks(result_payload)
+        trace["standardizeElapsedMs"] = _elapsed_ms(normalize_started)
+        trace.update(_parse_trace_metadata(
+            blocks,
+            warnings,
+            status_payload=status_payload,
+            result_payload=result_payload,
+            job_id=job_id,
+            parser_name=self.provider_name,
+            parser_version=self.provider_version,
+        ))
+        response_payload["traceMetadata"] = trace
         artifacts = [
             _artifact(
                 "ALIYUN_DOCMIND_JSON",
@@ -129,11 +157,7 @@ class AliyunDocMindParser:
             blocks=blocks,
             artifacts=artifacts,
             warnings=warnings,
-            metadata={
-                "jobId": job_id,
-                "pageCountEstimate": _deep_get(status_payload, "Data", "PageCountEstimate")
-                    or _deep_get(status_payload, "data", "pageCountEstimate"),
-            },
+            metadata=trace,
         )
 
     def _sdk_available(self) -> bool:
@@ -194,7 +218,7 @@ class AliyunDocMindParser:
             raise HTTPException(status_code=502, detail="阿里云 Document Mind 提交成功但未返回 jobId。")
         return str(job_id)
 
-    def _wait_until_finished(self, client, job_id: str) -> dict[str, Any]:
+    def _wait_until_finished(self, client, job_id: str) -> tuple[dict[str, Any], int]:
         try:
             from alibabacloud_docmind_api20220711 import models as docmind_models
         except Exception as exception:
@@ -202,11 +226,13 @@ class AliyunDocMindParser:
 
         deadline = time.monotonic() + self._timeout_seconds()
         last_payload: dict[str, Any] = {}
+        poll_count = 0
         while time.monotonic() < deadline:
             try:
                 response = client.query_doc_parser_status(docmind_models.QueryDocParserStatusRequest(id=job_id))
             except Exception as exception:
                 raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 查询解析状态失败: {exception}") from exception
+            poll_count += 1
             payload = _tea_model_to_map(getattr(response, "body", response))
             last_payload = payload
             status = str(_deep_get(payload, "Data", "Status") or _deep_get(payload, "data", "status") or "").lower()
@@ -214,13 +240,13 @@ class AliyunDocMindParser:
             if code and code not in {"200", "OK", "Success", "success"}:
                 raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 状态查询失败: {payload.get('Message') or payload.get('message') or code}")
             if status in {"success", "finished", "finish", "succeeded", "completed", "complete"}:
-                return payload
+                return payload, poll_count
             if status in {"fail", "failed", "error"}:
                 raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 解析失败: {payload.get('Message') or payload.get('message') or status}")
             time.sleep(self._poll_interval_seconds())
         raise HTTPException(status_code=504, detail=f"阿里云 Document Mind 解析超时: jobId={job_id}, lastStatus={last_payload}")
 
-    def _fetch_result_pages(self, client, job_id: str) -> dict[str, Any]:
+    def _fetch_result_pages(self, client, job_id: str) -> tuple[dict[str, Any], int]:
         try:
             from alibabacloud_docmind_api20220711 import models as docmind_models
         except Exception as exception:
@@ -229,6 +255,7 @@ class AliyunDocMindParser:
         all_layouts: list[dict[str, Any]] = []
         first_payload: dict[str, Any] | None = None
         step_size = self._layout_step_size()
+        result_batch_count = 0
         for layout_num in range(0, self._max_result_pages() * step_size, step_size):
             get_request = docmind_models.GetDocParserResultRequest(
                 id=job_id,
@@ -249,6 +276,7 @@ class AliyunDocMindParser:
             layouts = _extract_docmind_layouts(data)
             if not layouts:
                 break
+            result_batch_count += 1
             all_layouts.extend(layouts)
             if len(layouts) < step_size:
                 break
@@ -257,7 +285,7 @@ class AliyunDocMindParser:
         if isinstance(data, dict):
             data["layouts"] = all_layouts
             data["Layouts"] = all_layouts
-        return merged
+        return merged, result_batch_count
 
     def _result_to_blocks(self, result_payload: dict[str, Any]) -> tuple[list[DocumentBlock], list[str]]:
         data = _docmind_data(result_payload)
@@ -450,7 +478,15 @@ def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
     structure_nodes = _build_structure_nodes(request.file_name, normalized_blocks, parsed_text)
     paragraph_list = _paragraphs(parsed_text)
     heading_count = sum(1 for block in normalized_blocks if block.block_type == "TITLE")
-    artifacts = _build_artifacts(request.file_name, parsed_text, normalized_blocks, parser, parser_result.artifacts)
+    trace_metadata = _parse_trace_metadata(
+        normalized_blocks,
+        parser_result.warnings,
+        base_metadata=parser_result.metadata,
+        parser_name=parser.provider_name,
+        parser_version=parser.provider_version,
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
+    artifacts = _build_artifacts(request.file_name, parsed_text, normalized_blocks, parser, parser_result.artifacts, trace_metadata)
     capabilities = _response_capabilities(parser, artifacts)
 
     return DocumentParseResponse(
@@ -468,9 +504,10 @@ def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
         providerName=parser.provider_name,
         providerVersion=parser.provider_version,
         capabilities=capabilities,
-        elapsedMs=int((time.perf_counter() - started) * 1000),
+        elapsedMs=trace_metadata.get("elapsedMs", int((time.perf_counter() - started) * 1000)),
         warnings=parser_result.warnings,
         failedReason="",
+        traceMetadata=trace_metadata,
     )
 
 
@@ -643,6 +680,8 @@ def _docmind_layout_to_block(layout: dict[str, Any], block_no: int) -> DocumentB
         "layoutConfidence": _float_or_none(_first_present(layout, "layoutConf", "LayoutConf", "confidence", "Confidence")),
         "docmindRawType": _first_present(layout, "type", "Type"),
     }
+    if bbox:
+        metadata["bboxSource"] = _docmind_bbox_source(layout) or "unknown"
     table_cell_metadata = _docmind_table_cell_metadata(layout, table_rows, page_no)
     if table_cell_metadata:
         metadata["tableCellMetadata"] = table_cell_metadata
@@ -740,6 +779,7 @@ def _docmind_table_cell_metadata(layout: dict[str, Any], rows: list[list[str]], 
             bbox = _docmind_bbox(cell)
             if bbox:
                 item["bboxJson"] = _bbox_json(bbox)
+                item["bboxSource"] = _docmind_bbox_source(cell) or "unknown"
             metadata.append({key: value for key, value in item.items() if value not in (None, "", 0)})
     if metadata:
         return metadata
@@ -763,11 +803,66 @@ def _docmind_page_no(layout: dict[str, Any]) -> int | None:
 
 
 def _docmind_bbox(layout: dict[str, Any]) -> tuple[float, float, float, float] | None:
-    for key in ("pos", "Pos", "bbox", "Bbox", "BoundingBox", "boundingBox"):
+    for key in (
+        "pos",
+        "Pos",
+        "bbox",
+        "Bbox",
+        "BBox",
+        "box",
+        "Box",
+        "rect",
+        "Rect",
+        "region",
+        "Region",
+        "position",
+        "Position",
+        "coordinates",
+        "Coordinates",
+        "BoundingBox",
+        "boundingBox",
+    ):
         bbox = _coerce_bbox(layout.get(key))
         if bbox:
             return bbox
+    bbox = _coerce_bbox(layout)
+    if bbox:
+        return bbox
+    for key in ("polygon", "Polygon", "points", "Points", "quad", "Quad"):
+        bbox = _coerce_polygon_bbox(layout.get(key))
+        if bbox:
+            return bbox
     return None
+
+
+def _docmind_bbox_source(layout: dict[str, Any]) -> str:
+    for key in (
+        "pos",
+        "Pos",
+        "bbox",
+        "Bbox",
+        "BBox",
+        "box",
+        "Box",
+        "rect",
+        "Rect",
+        "region",
+        "Region",
+        "position",
+        "Position",
+        "coordinates",
+        "Coordinates",
+        "BoundingBox",
+        "boundingBox",
+    ):
+        if _coerce_bbox(layout.get(key)):
+            return key
+    if _coerce_bbox(layout):
+        return "inline"
+    for key in ("polygon", "Polygon", "points", "Points", "quad", "Quad"):
+        if _coerce_polygon_bbox(layout.get(key)):
+            return key
+    return ""
 
 
 def _docmind_block_type(layout_type: str, text: str) -> str:
@@ -949,6 +1044,111 @@ def _clip_text(text: str, max_length: int) -> str:
     return cleaned[:max_length].rstrip() + "..."
 
 
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _parse_trace_metadata(blocks: list[DocumentBlock],
+                          warnings: list[str] | None,
+                          *,
+                          base_metadata: dict[str, Any] | None = None,
+                          status_payload: dict[str, Any] | None = None,
+                          result_payload: dict[str, Any] | None = None,
+                          job_id: str = "",
+                          parser_name: str = "",
+                          parser_version: str = "",
+                          elapsed_ms: int | None = None) -> dict[str, Any]:
+    trace: dict[str, Any] = dict(base_metadata or {})
+    if parser_name:
+        trace.setdefault("providerName", parser_name)
+    if parser_version:
+        trace.setdefault("providerVersion", parser_version)
+    if job_id:
+        trace.setdefault("jobId", job_id)
+    if elapsed_ms is not None:
+        trace["elapsedMs"] = elapsed_ms
+
+    block_type_counts: dict[str, int] = {}
+    page_numbers: set[int] = set()
+    bbox_block_count = 0
+    table_cell_count = 0
+    table_cell_bbox_count = 0
+    caption_count = 0
+    for block in blocks or []:
+        block_type = (block.block_type or "UNKNOWN").upper()
+        block_type_counts[block_type] = block_type_counts.get(block_type, 0) + 1
+        if block.page_no is not None:
+            page_numbers.add(block.page_no)
+        if block.bbox_json:
+            bbox_block_count += 1
+        if block.image_caption:
+            caption_count += 1
+        metadata = _read_metadata(block.metadata_json)
+        table_cell_metadata = metadata.get("tableCellMetadata")
+        if isinstance(table_cell_metadata, list):
+            table_cell_count += len([item for item in table_cell_metadata if isinstance(item, dict)])
+            table_cell_bbox_count += len([
+                item for item in table_cell_metadata
+                if isinstance(item, dict) and item.get("bboxJson")
+            ])
+
+    raw_layout_count = _to_int(trace.get("rawLayoutCount")) or 0
+    if result_payload is not None:
+        raw_layout_count = len(_extract_docmind_layouts(result_payload))
+
+    status_page_count = _to_int(_deep_get(status_payload or {}, "Data", "PageCountEstimate")
+                                or _deep_get(status_payload or {}, "data", "pageCountEstimate"))
+    page_count = _page_count(page_numbers, status_page_count)
+
+    trace.update({
+        "pageCount": page_count,
+        "pageNumbers": sorted(page_numbers),
+        "ocrPageCount": _ocr_page_count(page_numbers, blocks),
+        "blockCount": len(blocks or []),
+        "rawLayoutCount": raw_layout_count,
+        "blockTypeCounts": block_type_counts,
+        "tableCount": block_type_counts.get("TABLE", 0),
+        "figureCount": block_type_counts.get("FIGURE", 0) + block_type_counts.get("IMAGE", 0),
+        "captionCount": caption_count,
+        "bboxBlockCount": bbox_block_count,
+        "bboxBlockCoverage": _ratio(bbox_block_count, len(blocks or [])),
+        "tableCellCount": table_cell_count,
+        "tableCellBboxCount": table_cell_bbox_count,
+        "tableCellBboxCoverage": _ratio(table_cell_bbox_count, table_cell_count),
+        "warningCount": len(warnings or []),
+    })
+    if warnings:
+        trace["warnings"] = warnings
+    if status_page_count is not None:
+        trace["pageCountEstimate"] = status_page_count
+    return {key: value for key, value in trace.items() if value not in (None, "")}
+
+
+def _page_count(page_numbers: set[int], fallback: int | None = None) -> int:
+    if page_numbers:
+        min_page = min(page_numbers)
+        max_page = max(page_numbers)
+        if min_page == 0:
+            return max_page + 1
+        return max_page
+    return fallback or 0
+
+
+def _ocr_page_count(page_numbers: set[int], blocks: list[DocumentBlock] | None) -> int:
+    pages_with_content = {
+        block.page_no
+        for block in (blocks or [])
+        if block.page_no is not None and (block.text or block.table_rows or block.image_caption)
+    }
+    return len(pages_with_content or page_numbers)
+
+
+def _ratio(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 4)
+
+
 def _build_structure_nodes(file_name: str, blocks: list[DocumentBlock], parsed_text: str) -> list[StructureNode]:
     nodes = [
         StructureNode(
@@ -994,7 +1194,8 @@ def _build_artifacts(file_name: str,
                      parsed_text: str,
                      blocks: list[DocumentBlock],
                      parser,
-                     parser_artifacts: list[ParseArtifact] | None = None) -> list[ParseArtifact]:
+                     parser_artifacts: list[ParseArtifact] | None = None,
+                     trace_metadata: dict[str, Any] | None = None) -> list[ParseArtifact]:
     base_name = _base_name(file_name)
     markdown_bytes = parsed_text.encode("utf-8")
     blocks_payload = {
@@ -1002,6 +1203,7 @@ def _build_artifacts(file_name: str,
         "providerVersion": parser.provider_version,
         "capabilities": parser.capabilities,
         "blockCount": len(blocks),
+        "traceMetadata": trace_metadata or {},
         "blocks": [block.model_dump(by_alias=True) for block in blocks],
     }
     blocks_json_bytes = json.dumps(blocks_payload, ensure_ascii=False, indent=2).encode("utf-8")
@@ -1023,7 +1225,7 @@ def _build_artifacts(file_name: str,
             parser_version=parser.provider_version,
         ),
     ]
-    layout_payload = _layout_payload(blocks, parser)
+    layout_payload = _layout_payload(blocks, parser, trace_metadata)
     if layout_payload["blocks"]:
         artifacts.append(_artifact(
             "LAYOUT_JSON",
@@ -1055,13 +1257,14 @@ def _artifact(artifact_type: str,
     )
 
 
-def _layout_payload(blocks: list[DocumentBlock], parser) -> dict[str, Any]:
+def _layout_payload(blocks: list[DocumentBlock], parser, trace_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     if parser.provider_name == NATIVE_TEXT_PARSER_NAME:
         return {
             "providerName": parser.provider_name,
             "providerVersion": parser.provider_version,
             "pageCount": 0,
             "blockCount": 0,
+            "traceMetadata": trace_metadata or {},
             "blocks": [],
         }
     layout_blocks = []
@@ -1089,8 +1292,9 @@ def _layout_payload(blocks: list[DocumentBlock], parser) -> dict[str, Any]:
     return {
         "providerName": parser.provider_name,
         "providerVersion": parser.provider_version,
-        "pageCount": max(page_numbers) if page_numbers else 0,
+        "pageCount": _page_count(page_numbers),
         "blockCount": len(layout_blocks),
+        "traceMetadata": trace_metadata or {},
         "blocks": layout_blocks,
     }
 
@@ -1206,6 +1410,54 @@ def _coerce_bbox(value) -> tuple[float, float, float, float] | None:
     if isinstance(value, (list, tuple)) and len(value) >= 4:
         try:
             return float(value[0]), float(value[1]), float(value[2]), float(value[3])
+        except (TypeError, ValueError):
+            return _coerce_polygon_bbox(value)
+    return None
+
+
+def _coerce_polygon_bbox(value) -> tuple[float, float, float, float] | None:
+    if not value:
+        return None
+    points: list[tuple[float, float]] = []
+    if isinstance(value, dict):
+        for key in ("points", "Points", "polygon", "Polygon"):
+            candidate = _coerce_polygon_bbox(value.get(key))
+            if candidate:
+                return candidate
+        return None
+    if isinstance(value, (list, tuple)):
+        if len(value) >= 8 and all(isinstance(item, (int, float, str)) for item in value):
+            numeric_values: list[float] = []
+            for item in value:
+                try:
+                    numeric_values.append(float(item))
+                except (TypeError, ValueError):
+                    return None
+            for index in range(0, len(numeric_values) - 1, 2):
+                points.append((numeric_values[index], numeric_values[index + 1]))
+        else:
+            for item in value:
+                point = _coerce_point(item)
+                if point:
+                    points.append(point)
+    if len(points) < 2:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _coerce_point(value) -> tuple[float, float] | None:
+    if isinstance(value, dict):
+        x = value.get("x") if "x" in value else value.get("X")
+        y = value.get("y") if "y" in value else value.get("Y")
+        try:
+            return float(x), float(y)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return float(value[0]), float(value[1])
         except (TypeError, ValueError):
             return None
     return None

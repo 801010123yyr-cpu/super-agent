@@ -6,6 +6,8 @@ import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -45,6 +47,8 @@ public class DocumentAnalysisResult {
     private List<String> parserWarnings = new ArrayList<>();
 
     private String parserFailedReason;
+
+    private Map<String, Object> parserTraceMetadata = new LinkedHashMap<>();
 
     private List<DocumentStructureNodeCandidate> structureNodes = new ArrayList<>();
 

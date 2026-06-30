@@ -119,7 +119,17 @@ class AliyunDocMindDocumentParserTest(unittest.TestCase):
         table_metadata = json.loads(response.blocks[1].metadata_json)
         self.assertEqual("table", table_metadata.get("layoutType"))
         self.assertEqual("aliyun_docmind", table_metadata.get("providerName"))
+        self.assertEqual("pos", table_metadata.get("bboxSource"))
         self.assertTrue(table_metadata.get("tableCellMetadata"))
+        self.assertTrue(table_metadata["tableCellMetadata"][0].get("bboxJson"))
+        self.assertEqual("pos", table_metadata["tableCellMetadata"][0].get("bboxSource"))
+        self.assertEqual(1, response.trace_metadata.get("pageCount"))
+        self.assertEqual(3, response.trace_metadata.get("blockCount"))
+        self.assertEqual(3, response.trace_metadata.get("rawLayoutCount"))
+        self.assertEqual(3, response.trace_metadata.get("bboxBlockCount"))
+        self.assertEqual(4, response.trace_metadata.get("tableCellBboxCount"))
+        self.assertEqual(1.0, response.trace_metadata.get("tableCellBboxCoverage"))
+        self.assertEqual("docmind-job-1", response.trace_metadata.get("jobId"))
 
         artifact_types = {artifact.artifact_type for artifact in response.artifacts}
         self.assertIn("ALIYUN_DOCMIND_JSON", artifact_types)
@@ -128,6 +138,12 @@ class AliyunDocMindDocumentParserTest(unittest.TestCase):
         self.assertIn("MARKDOWN", artifact_types)
         raw_payload = self._artifact_payload(response.artifacts, "ALIYUN_DOCMIND_JSON")
         self.assertEqual("docmind-job-1", raw_payload.get("jobId"))
+        self.assertEqual(4, raw_payload.get("traceMetadata", {}).get("tableCellBboxCount"))
+        blocks_payload = self._artifact_payload(response.artifacts, "JSON")
+        self.assertEqual(3, blocks_payload.get("traceMetadata", {}).get("rawLayoutCount"))
+        self.assertEqual(3, blocks_payload.get("traceMetadata", {}).get("bboxBlockCount"))
+        layout_payload = self._artifact_payload(response.artifacts, "LAYOUT_JSON")
+        self.assertEqual(1, layout_payload.get("traceMetadata", {}).get("pageCount"))
 
     def _artifact_payload(self, artifacts, artifact_type: str) -> dict:
         matches = [artifact for artifact in artifacts if artifact.artifact_type == artifact_type]
@@ -176,7 +192,7 @@ class _FakeDocMindClient:
                         "text": "年度经营摘要",
                         "pageNum": 1,
                         "layoutConf": 0.98,
-                        "pos": {"x0": 12, "y0": 24, "x1": 260, "y1": 60},
+                        "pos": [{"x": 12, "y": 24}, {"x": 260, "y": 24}, {"x": 260, "y": 60}, {"x": 12, "y": 60}],
                     },
                     {
                         "index": 2,
@@ -184,12 +200,12 @@ class _FakeDocMindClient:
                         "llmResult": "<table><tr><td>指标</td><td>数值</td></tr><tr><td>收入</td><td>100</td></tr></table>",
                         "pageNum": 1,
                         "layoutConf": 0.95,
-                        "pos": {"x": 16, "y": 80, "width": 300, "height": 120},
+                        "pos": [{"x": 16, "y": 80}, {"x": 316, "y": 80}, {"x": 316, "y": 200}, {"x": 16, "y": 200}],
                         "cells": [
-                            {"rowIndex": 1, "colIndex": 1, "text": "指标", "pos": {"x0": 16, "y0": 80, "x1": 100, "y1": 110}},
-                            {"rowIndex": 1, "colIndex": 2, "text": "数值", "pos": {"x0": 100, "y0": 80, "x1": 180, "y1": 110}},
-                            {"rowIndex": 2, "colIndex": 1, "text": "收入", "pos": {"x0": 16, "y0": 110, "x1": 100, "y1": 140}},
-                            {"rowIndex": 2, "colIndex": 2, "text": "100", "pos": {"x0": 100, "y0": 110, "x1": 180, "y1": 140}},
+                            {"rowIndex": 1, "colIndex": 1, "text": "指标", "pos": [{"x": 16, "y": 80}, {"x": 100, "y": 80}, {"x": 100, "y": 110}, {"x": 16, "y": 110}]},
+                            {"rowIndex": 1, "colIndex": 2, "text": "数值", "pos": [{"x": 100, "y": 80}, {"x": 180, "y": 80}, {"x": 180, "y": 110}, {"x": 100, "y": 110}]},
+                            {"rowIndex": 2, "colIndex": 1, "text": "收入", "pos": [{"x": 16, "y": 110}, {"x": 100, "y": 110}, {"x": 100, "y": 140}, {"x": 16, "y": 140}]},
+                            {"rowIndex": 2, "colIndex": 2, "text": "100", "pos": [{"x": 100, "y": 110}, {"x": 180, "y": 110}, {"x": 180, "y": 140}, {"x": 100, "y": 140}]},
                         ],
                     },
                     {
@@ -197,7 +213,7 @@ class _FakeDocMindClient:
                         "type": "figure",
                         "text": "收入趋势图显示持续增长。",
                         "pageNum": 1,
-                        "pos": {"left": 20, "top": 220, "right": 260, "bottom": 320},
+                        "pos": [{"x": 20, "y": 220}, {"x": 260, "y": 220}, {"x": 260, "y": 320}, {"x": 20, "y": 320}],
                     },
                 ],
             },

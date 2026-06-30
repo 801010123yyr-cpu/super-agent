@@ -387,6 +387,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                 readText(item, "sheetName"),
                 readInteger(item, "pageNo"),
                 readText(item, "bboxJson"),
+                readText(item, "bboxSource"),
                 readText(item, "value"),
                 readBoolean(item, "mergedCell"),
                 readBoolean(item, "mergedCellAnchor"),
@@ -478,6 +479,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
         Map<String, Object> values = new LinkedHashMap<>();
         putIfPresent(values, "sheetName", metadata.sheetName());
         putIfPresent(values, "pageNo", metadata.pageNo());
+        putIfPresent(values, "bboxSource", metadata.bboxSource());
         putIfPresent(values, "value", metadata.value());
         putIfPresent(values, "sourceRowNo", metadata.sourceRowNo());
         putIfPresent(values, "sourceColumnNo", metadata.sourceColumnNo());
@@ -943,6 +945,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                                      String sheetName,
                                      Integer pageNo,
                                      String bboxJson,
+                                     String bboxSource,
                                      String value,
                                      Boolean mergedCell,
                                      Boolean mergedCellAnchor,
@@ -955,7 +958,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                                      Boolean flattenedHeader,
                                      Integer headerSourceRows) {
         private static TableCellMetadata empty() {
-            return new TableCellMetadata(null, null, null, null, "", "", "", null, "", "",
+            return new TableCellMetadata(null, null, null, null, "", "", "", null, "", "", "",
                 null, null, "", "", "", null, null, null, null, null);
         }
 
@@ -969,6 +972,7 @@ public class DocumentTableStructureServiceImpl implements DocumentTableStructure
                 && StrUtil.isBlank(sheetName)
                 && pageNo == null
                 && StrUtil.isBlank(bboxJson)
+                && StrUtil.isBlank(bboxSource)
                 && StrUtil.isBlank(value)
                 && mergedCell == null
                 && mergedCellAnchor == null

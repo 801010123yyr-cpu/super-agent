@@ -4,6 +4,9 @@ import cn.hutool.core.util.StrUtil;
 import com.baidu.fsg.uid.UidGenerator;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.Resource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -100,6 +103,9 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 
     private static final Set<String> RUNNING_DATASET_RAPTOR_SCOPE_KEYS = ConcurrentHashMap.newKeySet();
 
+    private static final TypeReference<Map<String, Object>> EXT_JSON_TYPE = new TypeReference<>() {
+    };
+
     private final SuperAgentDocumentMapper documentMapper;
 
     private final SuperAgentDocumentStrategyPlanMapper planMapper;
@@ -143,6 +149,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
     private final RaptorBuildService raptorBuildService;
 
     private final DocumentManageProperties properties;
+
+    private final ObjectMapper objectMapper;
 
     @Resource
     private UidGenerator uidGenerator;
@@ -255,6 +263,7 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                     "parserCapabilities", analysisResult.getParserCapabilities(),
                     "parserElapsedMs", analysisResult.getParserElapsedMs(),
                     "parserWarnings", analysisResult.getParserWarnings(),
+                    "parserTraceMetadata", analysisResult.getParserTraceMetadata(),
                     "structureNodeCount", structureNodeCount,
                     "artifactCount", artifactCount,
                     "blockCount", blockCount,
@@ -342,6 +351,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             document.setLastParseTaskId(taskId);
             document.setStructureNodeCount(structureNodeCount);
             documentMapper.updateById(document);
+
+            persistParserTraceMetadata(taskId, analysisResult);
 
             finishTaskSuccess(task, DocumentTaskStageEnum.STRATEGY_ROUTE.getCode(), startTime);
             taskLogService.saveLog(taskId, documentId,
@@ -1389,6 +1400,42 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             detailMap.put(String.valueOf(keyValues[index]), keyValues[index + 1]);
         }
         return detailMap;
+    }
+
+    private void persistParserTraceMetadata(Long taskId, DocumentAnalysisResult analysisResult) {
+        if (taskId == null || analysisResult == null || analysisResult.getParserTraceMetadata() == null
+            || analysisResult.getParserTraceMetadata().isEmpty()) {
+            return;
+        }
+        SuperAgentDocumentTask persistedTask = taskMapper.selectById(taskId);
+        if (persistedTask == null) {
+            return;
+        }
+        try {
+            Map<String, Object> extJson = readTaskExtJson(persistedTask.getExtJson());
+            extJson.put("parserTraceMetadata", analysisResult.getParserTraceMetadata());
+            SuperAgentDocumentTask update = new SuperAgentDocumentTask();
+            update.setId(taskId);
+            update.setExtJson(objectMapper.writeValueAsString(extJson));
+            taskMapper.updateById(update);
+        }
+        catch (JsonProcessingException exception) {
+            log.warn("写入解析 trace metadata 失败，taskId={}", taskId, exception);
+        }
+    }
+
+    private Map<String, Object> readTaskExtJson(String extJson) throws JsonProcessingException {
+        if (StrUtil.isBlank(extJson)) {
+            return new LinkedHashMap<>();
+        }
+        try {
+            return objectMapper.readValue(extJson, EXT_JSON_TYPE);
+        }
+        catch (JsonProcessingException exception) {
+            Map<String, Object> legacy = new LinkedHashMap<>();
+            legacy.put("legacyExtJson", extJson);
+            return legacy;
+        }
     }
 
     private int embeddingBatchSize() {

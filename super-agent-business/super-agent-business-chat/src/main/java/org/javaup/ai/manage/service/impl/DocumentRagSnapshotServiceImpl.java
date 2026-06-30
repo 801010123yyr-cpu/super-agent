@@ -172,6 +172,7 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
                 tableCount, kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount, graphRagQuality),
             buildPipelineStages(parseBlockCount, structureNodeCount, parentBlockCount, chunkCount, tableCount,
                 kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount),
+            buildParserTrace(parseTaskId),
             listParseBlocks(document.getId(), parseTaskId),
             listStructureNodes(document.getId(), parseTaskId),
             listParentBlocks(document.getId(), indexTaskId),
@@ -883,6 +884,67 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             .toList();
     }
 
+    private DocumentRagSnapshotVo.ParserTraceItem buildParserTrace(Long parseTaskId) {
+        Map<String, Object> trace = parserTraceMap(parseTaskId);
+        if (trace.isEmpty()) {
+            return null;
+        }
+        return new DocumentRagSnapshotVo.ParserTraceItem(
+            stringValue(trace.get("providerName")),
+            stringValue(trace.get("providerVersion")),
+            stringValue(trace.get("jobId")),
+            integerValue(trace.get("pageCount")),
+            integerValue(trace.get("ocrPageCount")),
+            integerValue(trace.get("blockCount")),
+            integerValue(trace.get("rawLayoutCount")),
+            integerValue(trace.get("tableCount")),
+            integerValue(trace.get("figureCount")),
+            integerValue(trace.get("captionCount")),
+            integerValue(trace.get("bboxBlockCount")),
+            doubleValue(trace.get("bboxBlockCoverage")),
+            integerValue(trace.get("tableCellCount")),
+            integerValue(trace.get("tableCellBboxCount")),
+            doubleValue(trace.get("tableCellBboxCoverage")),
+            integerValue(trace.get("warningCount")),
+            integerValue(trace.get("pollCount")),
+            integerValue(trace.get("submitElapsedMs")),
+            integerValue(trace.get("pollElapsedMs")),
+            integerValue(trace.get("resultFetchElapsedMs")),
+            integerValue(trace.get("standardizeElapsedMs")),
+            integerValue(trace.get("elapsedMs")),
+            objectMap(trace.get("blockTypeCounts")),
+            stringList(trace.get("warnings"))
+        );
+    }
+
+    private Map<String, Object> parserTraceMap(Long parseTaskId) {
+        if (parseTaskId == null) {
+            return Map.of();
+        }
+        SuperAgentDocumentTask task = taskMapper.selectById(parseTaskId);
+        Map<String, Object> extJson = task == null ? Map.of() : readMap(task.getExtJson());
+        Map<String, Object> trace = objectMap(extJson.get("parserTraceMetadata"));
+        if (!trace.isEmpty()) {
+            return trace;
+        }
+        return parserTraceMapFromLogs(parseTaskId);
+    }
+
+    private Map<String, Object> parserTraceMapFromLogs(Long parseTaskId) {
+        SuperAgentDocumentTaskLog parseCompleteLog = taskLogMapper.selectOne(new LambdaQueryWrapper<SuperAgentDocumentTaskLog>()
+            .eq(SuperAgentDocumentTaskLog::getTaskId, parseTaskId)
+            .eq(SuperAgentDocumentTaskLog::getStageType, DocumentTaskStageEnum.CONTENT_PARSE.getCode())
+            .eq(SuperAgentDocumentTaskLog::getEventType, DocumentTaskEventTypeEnum.COMPLETE.getCode())
+            .eq(SuperAgentDocumentTaskLog::getStatus, BusinessStatus.YES.getCode())
+            .orderByDesc(SuperAgentDocumentTaskLog::getCreateTime, SuperAgentDocumentTaskLog::getId)
+            .last("limit 1"));
+        if (parseCompleteLog == null) {
+            return Map.of();
+        }
+        Map<String, Object> detail = readMap(parseCompleteLog.getDetailJson());
+        return objectMap(detail.get("parserTraceMetadata"));
+    }
+
     private long countBlocks(Long documentId, Long taskId) {
         return blockMapper.selectCount(new LambdaQueryWrapper<SuperAgentDocumentBlock>()
             .eq(SuperAgentDocumentBlock::getDocumentId, documentId)
@@ -1115,6 +1177,16 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             return result;
         }
         return Map.of();
+    }
+
+    private List<String> stringList(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream()
+            .map(this::stringValue)
+            .filter(StrUtil::isNotBlank)
+            .toList();
     }
 
     private Object firstPresent(Object... values) {

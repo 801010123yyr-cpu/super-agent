@@ -3,6 +3,7 @@ package org.javaup.ai.ragtools.model;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 public class RagToolsDocumentParseResponse {
@@ -40,6 +41,8 @@ public class RagToolsDocumentParseResponse {
     private List<String> warnings;
 
     private String failedReason;
+
+    private Map<String, Object> traceMetadata;
 
     @Data
     public static class Artifact {

@@ -106,6 +106,7 @@ class DocumentTableStructureServiceImplTest {
         assertThat(departmentCell.getSourceCellRef()).isEqualTo("A2");
         assertThat(departmentCell.getBboxJson()).contains("\"x0\":10");
         assertThat(departmentCell.getMetadataJson()).contains("\"sheetName\":\"报销\"");
+        assertThat(departmentCell.getMetadataJson()).contains("\"bboxSource\":\"pos\"");
         assertThat(departmentCell.getMetadataJson()).contains("\"mergedCellRange\":\"A2:A3\"");
         assertThat(departmentCell.getMetadataJson()).contains("\"rowSpan\":2");
         assertThat(departmentCell.getMetadataJson()).contains("\"mergedValueFilled\":true");
@@ -222,7 +223,7 @@ class DocumentTableStructureServiceImplTest {
               "tableCellMetadata":[
                 {"rowNo":1,"columnNo":1,"sourceRowNo":1,"sourceColumnNo":1,"excelAddress":"A1","sheetName":"报销","value":"部门"},
                 {"rowNo":1,"columnNo":2,"sourceRowNo":1,"sourceColumnNo":2,"excelAddress":"B1","sheetName":"报销","value":"报销金额"},
-                {"rowNo":2,"columnNo":1,"sourceRowNo":2,"sourceColumnNo":1,"excelAddress":"A2","sheetName":"报销","bboxJson":"{\\"x0\\":10,\\"y0\\":20,\\"x1\\":40,\\"y1\\":32}","mergedCell":true,"mergedCellAnchor":true,"mergedCellRange":"A2:A3","mergedCellAnchorAddress":"A2","mergedCellValue":"研发部","rowSpan":2,"columnSpan":1,"mergedValueFilled":true,"value":"研发部"},
+                {"rowNo":2,"columnNo":1,"sourceRowNo":2,"sourceColumnNo":1,"excelAddress":"A2","sheetName":"报销","bboxJson":"{\\"x0\\":10,\\"y0\\":20,\\"x1\\":40,\\"y1\\":32}","bboxSource":"pos","mergedCell":true,"mergedCellAnchor":true,"mergedCellRange":"A2:A3","mergedCellAnchorAddress":"A2","mergedCellValue":"研发部","rowSpan":2,"columnSpan":1,"mergedValueFilled":true,"value":"研发部"},
                 {"rowNo":2,"columnNo":2,"sourceRowNo":2,"sourceColumnNo":2,"excelAddress":"B2","sheetName":"报销","bboxJson":"{\\"x0\\":42,\\"y0\\":20,\\"x1\\":80,\\"y1\\":32}","value":"1200"}
               ]
             }

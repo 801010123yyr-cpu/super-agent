@@ -83,6 +83,7 @@ class DocumentParseResponse(BaseModel):
     elapsed_ms: int = Field(default=0, alias="elapsedMs")
     warnings: list[str] = Field(default_factory=list)
     failed_reason: str = Field(default="", alias="failedReason")
+    trace_metadata: dict[str, Any] = Field(default_factory=dict, alias="traceMetadata")
 
 
 def json_metadata(data: dict[str, Any]) -> str:
