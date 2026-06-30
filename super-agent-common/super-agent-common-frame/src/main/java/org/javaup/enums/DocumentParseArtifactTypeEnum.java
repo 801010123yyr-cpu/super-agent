@@ -11,7 +11,11 @@ public enum DocumentParseArtifactTypeEnum {
     JSON("JSON", "结构化解析 JSON"),
     PAGE_IMAGE("PAGE_IMAGE", "页面图片"),
     TABLE_IMAGE("TABLE_IMAGE", "表格图片"),
-    OCR_JSON("OCR_JSON", "OCR 结果 JSON");
+    FIGURE_IMAGE("FIGURE_IMAGE", "图示图片"),
+    OCR_JSON("OCR_JSON", "OCR 结果 JSON"),
+    LAYOUT_JSON("LAYOUT_JSON", "版面识别 JSON"),
+    ALIYUN_DOCMIND_JSON("ALIYUN_DOCMIND_JSON", "阿里云文档智能原始解析 JSON"),
+    TABLE_HTML("TABLE_HTML", "表格 HTML");
 
     private final String code;
 

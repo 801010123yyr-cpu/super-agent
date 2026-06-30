@@ -34,6 +34,18 @@ public class DocumentAnalysisResult {
 
     private Integer maxParagraphLength;
 
+    private String parserProviderName;
+
+    private String parserProviderVersion;
+
+    private List<String> parserCapabilities = new ArrayList<>();
+
+    private Integer parserElapsedMs;
+
+    private List<String> parserWarnings = new ArrayList<>();
+
+    private String parserFailedReason;
+
     private List<DocumentStructureNodeCandidate> structureNodes = new ArrayList<>();
 
     private List<DocumentParseArtifactCandidate> parseArtifacts = new ArrayList<>();

@@ -23,7 +23,7 @@
 
         <div class="mt-3.5 flex items-stretch justify-between gap-3 max-[860px]:flex-col">
           <div class="flex min-w-0 flex-1 flex-col justify-center rounded-md border border-border bg-secondary px-4 py-3.5">
-            <span class="text-[13px] text-muted-foreground">支持 PDF / DOC / DOCX / XLSX / TXT / MD / HTML</span>
+            <span class="text-[13px] text-muted-foreground">支持 PDF / DOC / DOCX / XLSX / TXT / MD / HTML / PNG / JPG / BMP / GIF</span>
             <strong class="mt-2 block break-all text-[13px] text-foreground">{{ uploadForm.file ? uploadForm.file.name : '尚未选择文件' }}</strong>
           </div>
           <div class="flex flex-none items-center gap-3 self-center">

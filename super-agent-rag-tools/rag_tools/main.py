@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic.warnings import UnsupportedFieldAttributeWarning
 
 from rag_tools.citation_repair import repair_citations
-from rag_tools.document_parser import parse_document
+from rag_tools.document_parser import document_parser_status, parse_document
 from rag_tools.graph_extract import extract_graph
 from rag_tools.raptor_build import build_raptor
 from rag_tools.schemas.citation_repair import CitationRepairRequest, CitationRepairResponse
@@ -33,6 +33,7 @@ def health() -> dict[str, object]:
         "service": SERVICE_NAME,
         "version": SERVICE_VERSION,
         "semanticModels": semantic_model_status(),
+        "documentParsers": document_parser_status(),
     }
 
 

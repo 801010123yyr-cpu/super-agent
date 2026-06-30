@@ -13,7 +13,12 @@ public enum DocumentFileTypeEnum {
     TXT(4, "TXT"),
     MD(5, "MD"),
     HTML(6, "HTML"),
-    XLSX(7, "XLSX");
+    XLSX(7, "XLSX"),
+    PNG(8, "PNG"),
+    JPG(9, "JPG"),
+    JPEG(10, "JPEG"),
+    BMP(11, "BMP"),
+    GIF(12, "GIF");
 
     private final Integer code;
 
@@ -54,6 +59,11 @@ public enum DocumentFileTypeEnum {
             case "md", "markdown" -> MD;
             case "html", "htm" -> HTML;
             case "xlsx" -> XLSX;
+            case "png" -> PNG;
+            case "jpg" -> JPG;
+            case "jpeg" -> JPEG;
+            case "bmp" -> BMP;
+            case "gif" -> GIF;
             default -> null;
         };
     }

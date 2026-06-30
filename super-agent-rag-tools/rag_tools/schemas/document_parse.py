@@ -77,6 +77,12 @@ class DocumentParseResponse(BaseModel):
     artifacts: list[ParseArtifact] = Field(default_factory=list)
     blocks: list[DocumentBlock] = Field(default_factory=list)
     structure_nodes: list[StructureNode] = Field(default_factory=list, alias="structureNodes")
+    provider_name: str = Field(default="", alias="providerName")
+    provider_version: str = Field(default="", alias="providerVersion")
+    capabilities: list[str] = Field(default_factory=list)
+    elapsed_ms: int = Field(default=0, alias="elapsedMs")
+    warnings: list[str] = Field(default_factory=list)
+    failed_reason: str = Field(default="", alias="failedReason")
 
 
 def json_metadata(data: dict[str, Any]) -> str:

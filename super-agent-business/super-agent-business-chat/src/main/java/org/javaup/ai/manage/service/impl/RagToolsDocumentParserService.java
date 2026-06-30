@@ -56,6 +56,12 @@ public class RagToolsDocumentParserService implements DocumentParserService {
         result.setHeadingCount(response.getHeadingCount() == null ? 0 : response.getHeadingCount());
         result.setParagraphCount(response.getParagraphCount() == null ? 0 : response.getParagraphCount());
         result.setMaxParagraphLength(response.getMaxParagraphLength() == null ? 0 : response.getMaxParagraphLength());
+        result.setParserProviderName(response.getProviderName());
+        result.setParserProviderVersion(response.getProviderVersion());
+        result.setParserCapabilities(response.getCapabilities() == null ? List.of() : response.getCapabilities());
+        result.setParserElapsedMs(response.getElapsedMs() == null ? 0 : response.getElapsedMs());
+        result.setParserWarnings(response.getWarnings() == null ? List.of() : response.getWarnings());
+        result.setParserFailedReason(response.getFailedReason());
         result.setStructureNodes(toStructureNodes(response.getStructureNodes()));
         result.setParseArtifacts(toArtifacts(response.getArtifacts()));
         result.setBlocks(toBlocks(response.getBlocks()));

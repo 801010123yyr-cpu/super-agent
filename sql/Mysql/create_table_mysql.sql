@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_block` (
    `content_with_weight` longtext COMMENT '带标题/章节/关键词等权重信息的检索文本',
    `table_html` longtext COMMENT '表格HTML',
    `image_object_name` varchar(512) DEFAULT NULL COMMENT '图片对象名称',
-   `image_caption` varchar(1000) DEFAULT NULL COMMENT '图片说明',
+   `image_caption` longtext COMMENT '图片说明/OCR语义文本',
    `metadata_json` text COMMENT '扩展元数据JSON',
    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',

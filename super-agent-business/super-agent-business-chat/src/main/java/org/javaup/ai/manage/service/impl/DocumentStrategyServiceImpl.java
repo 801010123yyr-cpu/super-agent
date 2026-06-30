@@ -906,7 +906,12 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             || fileType == DocumentFileTypeEnum.DOCX
             || fileType == DocumentFileTypeEnum.MD
             || fileType == DocumentFileTypeEnum.HTML
-            || fileType == DocumentFileTypeEnum.XLSX;
+            || fileType == DocumentFileTypeEnum.XLSX
+            || fileType == DocumentFileTypeEnum.PNG
+            || fileType == DocumentFileTypeEnum.JPG
+            || fileType == DocumentFileTypeEnum.JPEG
+            || fileType == DocumentFileTypeEnum.BMP
+            || fileType == DocumentFileTypeEnum.GIF;
         if (fileType == DocumentFileTypeEnum.XLSX) {
             return true;
         }

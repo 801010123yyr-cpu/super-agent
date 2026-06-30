@@ -2,6 +2,19 @@
 # Environment variables still take precedence over this file.
 
 ragTools:
+  documentParser:
+    aliyunDocMind:
+      endpoint: "${RAG_TOOLS_ALIYUN_DOCMIND_ENDPOINT:docmind-api.cn-hangzhou.aliyuncs.com}"
+      accessKeyId: "${ALIBABA_CLOUD_ACCESS_KEY_ID:}"
+      accessKeySecret: "${ALIBABA_CLOUD_ACCESS_KEY_SECRET:}"
+      timeoutSeconds: 600
+      pollIntervalSeconds: 3
+      maxResultPages: 200
+      llmEnhancement: true
+      enhancementMode: "VLM"
+      formulaEnhancement: true
+      outputHtmlTable: true
+      outputFormats: "markdown,visualLayoutInfo"
   llm:
     # OpenAI-compatible chat completions base URL.
     # DashScope example: https://dashscope.aliyuncs.com/compatible-mode/v1

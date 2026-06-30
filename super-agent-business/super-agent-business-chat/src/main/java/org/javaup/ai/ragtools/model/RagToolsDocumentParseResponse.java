@@ -29,6 +29,18 @@ public class RagToolsDocumentParseResponse {
 
     private List<StructureNode> structureNodes;
 
+    private String providerName;
+
+    private String providerVersion;
+
+    private List<String> capabilities;
+
+    private Integer elapsedMs;
+
+    private List<String> warnings;
+
+    private String failedReason;
+
     @Data
     public static class Artifact {
 

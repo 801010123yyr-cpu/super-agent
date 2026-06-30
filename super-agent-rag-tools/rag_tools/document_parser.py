@@ -3,11 +3,15 @@ import hashlib
 import html
 import json
 import re
+import time
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from io import BytesIO
+from typing import Any
 
 from fastapi import HTTPException
 
+from rag_tools.config import config_int, config_value
 from rag_tools.schemas.document_parse import (
     DocumentBlock,
     DocumentParseRequest,
@@ -17,42 +21,437 @@ from rag_tools.schemas.document_parse import (
     json_metadata,
 )
 
-PARSER_NAME = "rag-tools-python-parser"
+ALIYUN_DOCMIND_PARSER_NAME = "aliyun_docmind"
+NATIVE_TEXT_PARSER_NAME = "native_text"
 PARSER_VERSION = "0.1.0"
 
 NODE_TYPE_DOCUMENT = 1
 NODE_TYPE_SECTION = 2
 
+ALIYUN_DOCMIND_FILE_TYPES = {"PDF", "DOCX", "XLSX", "PNG", "JPG", "JPEG", "BMP", "GIF"}
+NATIVE_TEXT_FILE_TYPES = {"TXT", "MD", "HTML"}
+SUPPORTED_FILE_TYPES = ALIYUN_DOCMIND_FILE_TYPES | NATIVE_TEXT_FILE_TYPES
+ALIYUN_DOCMIND_CAPABILITIES = [
+    "cloud-document-parser",
+    "ocr",
+    "layout",
+    "reading-order",
+    "table",
+    "figure",
+    "markdown",
+    "layout-json",
+    "visual-layout-info",
+    "html-table",
+]
+NATIVE_TEXT_CAPABILITIES = [
+    "native-text",
+    "text",
+    "markdown",
+    "html",
+    "structure",
+]
+
+
+@dataclass
+class DocMindParseResult:
+    blocks: list[DocumentBlock]
+    artifacts: list[ParseArtifact] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class AliyunDocMindParser:
+    provider_name = ALIYUN_DOCMIND_PARSER_NAME
+    provider_version = PARSER_VERSION
+    supported_file_types = ALIYUN_DOCMIND_FILE_TYPES
+    capabilities = ALIYUN_DOCMIND_CAPABILITIES
+
+    def is_available(self) -> bool:
+        return self._sdk_available() and bool(self._access_key_id()) and bool(self._access_key_secret())
+
+    def unavailable_reason(self) -> str:
+        if not self._sdk_available():
+            return "未安装阿里云 Document Mind SDK，请执行 pip install -r requirements.txt。"
+        missing = []
+        if not self._access_key_id():
+            missing.append("ALIBABA_CLOUD_ACCESS_KEY_ID")
+        if not self._access_key_secret():
+            missing.append("ALIBABA_CLOUD_ACCESS_KEY_SECRET")
+        if missing:
+            return "缺少阿里云访问凭证: " + ", ".join(missing)
+        return ""
+
+    def status(self) -> dict[str, Any]:
+        available = self.is_available()
+        return {
+            "providerName": self.provider_name,
+            "providerVersion": self.provider_version,
+            "available": available,
+            "failedReason": "" if available else self.unavailable_reason(),
+            "supportedFileTypes": sorted(item.lower() for item in self.supported_file_types),
+            "capabilities": list(self.capabilities),
+            "endpoint": self._endpoint(),
+            "llmEnhancement": self._llm_enhancement(),
+            "enhancementMode": self._enhancement_mode(),
+            "formulaEnhancement": self._formula_enhancement(),
+            "outputHtmlTable": self._output_html_table(),
+            "outputFormats": self._output_formats(),
+            "credentialConfigured": bool(self._access_key_id()) and bool(self._access_key_secret()),
+        }
+
+    def parse(self, content: bytes, file_type: str, request: DocumentParseRequest) -> DocMindParseResult:
+        if file_type not in self.supported_file_types:
+            raise HTTPException(status_code=422, detail=f"阿里云 Document Mind 当前不支持文件类型: {file_type or 'UNKNOWN'}")
+        if not self.is_available():
+            raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 不可用: {self.unavailable_reason()}")
+
+        client = self._client()
+        job_id = self._submit_job(client, content, request.file_name, file_type)
+        status_payload = self._wait_until_finished(client, job_id)
+        result_payload = self._fetch_result_pages(client, job_id)
+        response_payload = {
+            "jobId": job_id,
+            "status": status_payload,
+            "result": result_payload,
+        }
+        blocks, warnings = self._result_to_blocks(result_payload)
+        artifacts = [
+            _artifact(
+                "ALIYUN_DOCMIND_JSON",
+                f"{_base_name(request.file_name)}.aliyun-docmind.json",
+                "application/json;charset=UTF-8",
+                json.dumps(response_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+                parser_name=self.provider_name,
+                parser_version=self.provider_version,
+            )
+        ]
+        return DocMindParseResult(
+            blocks=blocks,
+            artifacts=artifacts,
+            warnings=warnings,
+            metadata={
+                "jobId": job_id,
+                "pageCountEstimate": _deep_get(status_payload, "Data", "PageCountEstimate")
+                    or _deep_get(status_payload, "data", "pageCountEstimate"),
+            },
+        )
+
+    def _sdk_available(self) -> bool:
+        try:
+            from alibabacloud_docmind_api20220711.client import Client as _Client  # noqa: F401
+            from alibabacloud_docmind_api20220711 import models as _models  # noqa: F401
+            from alibabacloud_tea_openapi import models as _open_api_models  # noqa: F401
+            from alibabacloud_tea_util import models as _util_models  # noqa: F401
+            return True
+        except Exception:
+            return False
+
+    def _client(self):
+        try:
+            from alibabacloud_docmind_api20220711.client import Client as DocMindClient
+            from alibabacloud_tea_openapi import models as open_api_models
+        except Exception as exception:
+            raise HTTPException(status_code=503, detail=self.unavailable_reason()) from exception
+        config = open_api_models.Config(
+            access_key_id=self._access_key_id(),
+            access_key_secret=self._access_key_secret(),
+        )
+        config.endpoint = self._endpoint()
+        return DocMindClient(config)
+
+    def _submit_job(self, client, content: bytes, file_name: str, file_type: str) -> str:
+        try:
+            from alibabacloud_docmind_api20220711 import models as docmind_models
+            from alibabacloud_tea_util import models as util_models
+        except Exception as exception:
+            raise HTTPException(status_code=503, detail=self.unavailable_reason()) from exception
+
+        safe_file_name = file_name or f"document.{file_type.lower()}"
+        with BytesIO(content) as file_stream:
+            submit_request = docmind_models.SubmitDocParserJobAdvanceRequest(
+                file_url_object=file_stream,
+                file_name=safe_file_name,
+                file_name_extension=self._file_extension(safe_file_name, file_type),
+                formula_enhancement=self._formula_enhancement(),
+                llm_enhancement=self._llm_enhancement(),
+                enhancement_mode=self._enhancement_mode() if self._llm_enhancement() else None,
+                output_format=self._output_formats(),
+                output_html_table=self._output_html_table(),
+                need_header_footer=self._need_header_footer(),
+                page_index=self._page_index() or None,
+            )
+            try:
+                response = client.submit_doc_parser_job_advance(submit_request, self._runtime_options(util_models))
+            except Exception as exception:
+                raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 提交解析任务失败: {exception}") from exception
+
+        body = _tea_model_to_map(getattr(response, "body", response))
+        code = str(body.get("Code") or body.get("code") or "")
+        if code and code not in {"200", "OK", "Success", "success"}:
+            raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 提交失败: {body.get('Message') or body.get('message') or code}")
+        job_id = _deep_get(body, "Data", "Id") or _deep_get(body, "data", "id")
+        if not job_id:
+            raise HTTPException(status_code=502, detail="阿里云 Document Mind 提交成功但未返回 jobId。")
+        return str(job_id)
+
+    def _wait_until_finished(self, client, job_id: str) -> dict[str, Any]:
+        try:
+            from alibabacloud_docmind_api20220711 import models as docmind_models
+        except Exception as exception:
+            raise HTTPException(status_code=503, detail=self.unavailable_reason()) from exception
+
+        deadline = time.monotonic() + self._timeout_seconds()
+        last_payload: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            try:
+                response = client.query_doc_parser_status(docmind_models.QueryDocParserStatusRequest(id=job_id))
+            except Exception as exception:
+                raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 查询解析状态失败: {exception}") from exception
+            payload = _tea_model_to_map(getattr(response, "body", response))
+            last_payload = payload
+            status = str(_deep_get(payload, "Data", "Status") or _deep_get(payload, "data", "status") or "").lower()
+            code = str(payload.get("Code") or payload.get("code") or "")
+            if code and code not in {"200", "OK", "Success", "success"}:
+                raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 状态查询失败: {payload.get('Message') or payload.get('message') or code}")
+            if status in {"success", "finished", "finish", "succeeded", "completed", "complete"}:
+                return payload
+            if status in {"fail", "failed", "error"}:
+                raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 解析失败: {payload.get('Message') or payload.get('message') or status}")
+            time.sleep(self._poll_interval_seconds())
+        raise HTTPException(status_code=504, detail=f"阿里云 Document Mind 解析超时: jobId={job_id}, lastStatus={last_payload}")
+
+    def _fetch_result_pages(self, client, job_id: str) -> dict[str, Any]:
+        try:
+            from alibabacloud_docmind_api20220711 import models as docmind_models
+        except Exception as exception:
+            raise HTTPException(status_code=503, detail=self.unavailable_reason()) from exception
+
+        all_layouts: list[dict[str, Any]] = []
+        first_payload: dict[str, Any] | None = None
+        step_size = self._layout_step_size()
+        for layout_num in range(0, self._max_result_pages() * step_size, step_size):
+            get_request = docmind_models.GetDocParserResultRequest(
+                id=job_id,
+                layout_num=layout_num,
+                layout_step_size=step_size,
+            )
+            try:
+                response = client.get_doc_parser_result(get_request)
+            except Exception as exception:
+                raise HTTPException(status_code=503, detail=f"阿里云 Document Mind 拉取解析结果失败: {exception}") from exception
+            payload = _tea_model_to_map(getattr(response, "body", response))
+            if first_payload is None:
+                first_payload = payload
+            code = str(payload.get("Code") or payload.get("code") or "")
+            if code and code not in {"200", "OK", "Success", "success"}:
+                raise HTTPException(status_code=502, detail=f"阿里云 Document Mind 结果查询失败: {payload.get('Message') or payload.get('message') or code}")
+            data = _docmind_data(payload)
+            layouts = _extract_docmind_layouts(data)
+            if not layouts:
+                break
+            all_layouts.extend(layouts)
+            if len(layouts) < step_size:
+                break
+        merged = first_payload or {}
+        data = _docmind_data(merged)
+        if isinstance(data, dict):
+            data["layouts"] = all_layouts
+            data["Layouts"] = all_layouts
+        return merged
+
+    def _result_to_blocks(self, result_payload: dict[str, Any]) -> tuple[list[DocumentBlock], list[str]]:
+        data = _docmind_data(result_payload)
+        markdown = _extract_docmind_markdown(data)
+        layouts = _extract_docmind_layouts(data)
+        warnings: list[str] = []
+        if not layouts and markdown:
+            return _parse_plain_text(markdown.encode("utf-8"), markdown=True, parser_name=self.provider_name), warnings
+        blocks: list[DocumentBlock] = []
+        for index, layout in enumerate(layouts, start=1):
+            block = _docmind_layout_to_block(layout, index)
+            if block is not None:
+                blocks.append(block)
+        if blocks:
+            return blocks, warnings
+        if markdown:
+            warnings.append("阿里云 Document Mind 未返回可映射 layout，已使用 markdown 生成基础 block。")
+            return _parse_plain_text(markdown.encode("utf-8"), markdown=True, parser_name=self.provider_name), warnings
+        raise HTTPException(status_code=422, detail="阿里云 Document Mind 未返回可用文本或 layout。")
+
+    def _runtime_options(self, util_models):
+        timeout_ms = max(1000, self._timeout_seconds() * 1000)
+        return util_models.RuntimeOptions(
+            connect_timeout=min(timeout_ms, 30000),
+            read_timeout=timeout_ms,
+            autoretry=True,
+            max_attempts=2,
+        )
+
+    def _endpoint(self) -> str:
+        return config_value(
+            "ragTools.documentParser.aliyunDocMind.endpoint",
+            "RAG_TOOLS_ALIYUN_DOCMIND_ENDPOINT",
+            "docmind-api.cn-hangzhou.aliyuncs.com",
+        ) or "docmind-api.cn-hangzhou.aliyuncs.com"
+
+    def _access_key_id(self) -> str:
+        return config_value(
+            "ragTools.documentParser.aliyunDocMind.accessKeyId",
+            "ALIBABA_CLOUD_ACCESS_KEY_ID",
+            "",
+        )
+
+    def _access_key_secret(self) -> str:
+        return config_value(
+            "ragTools.documentParser.aliyunDocMind.accessKeySecret",
+            "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+            "",
+        )
+
+    def _timeout_seconds(self) -> int:
+        return config_int(
+            "ragTools.documentParser.aliyunDocMind.timeoutSeconds",
+            "RAG_TOOLS_ALIYUN_DOCMIND_TIMEOUT_SECONDS",
+            600,
+            min_value=30,
+            max_value=7200,
+        )
+
+    def _poll_interval_seconds(self) -> int:
+        return config_int(
+            "ragTools.documentParser.aliyunDocMind.pollIntervalSeconds",
+            "RAG_TOOLS_ALIYUN_DOCMIND_POLL_INTERVAL_SECONDS",
+            3,
+            min_value=1,
+            max_value=60,
+        )
+
+    def _layout_step_size(self) -> int:
+        return config_int(
+            "ragTools.documentParser.aliyunDocMind.layoutStepSize",
+            "RAG_TOOLS_ALIYUN_DOCMIND_LAYOUT_STEP_SIZE",
+            100,
+            min_value=1,
+            max_value=1000,
+        )
+
+    def _max_result_pages(self) -> int:
+        return config_int(
+            "ragTools.documentParser.aliyunDocMind.maxResultPages",
+            "RAG_TOOLS_ALIYUN_DOCMIND_MAX_RESULT_PAGES",
+            200,
+            min_value=1,
+            max_value=10000,
+        )
+
+    def _llm_enhancement(self) -> bool:
+        return _config_bool(
+            "ragTools.documentParser.aliyunDocMind.llmEnhancement",
+            "RAG_TOOLS_ALIYUN_DOCMIND_LLM_ENHANCEMENT",
+            True,
+        )
+
+    def _formula_enhancement(self) -> bool:
+        return _config_bool(
+            "ragTools.documentParser.aliyunDocMind.formulaEnhancement",
+            "RAG_TOOLS_ALIYUN_DOCMIND_FORMULA_ENHANCEMENT",
+            True,
+        )
+
+    def _output_html_table(self) -> bool:
+        return _config_bool(
+            "ragTools.documentParser.aliyunDocMind.outputHtmlTable",
+            "RAG_TOOLS_ALIYUN_DOCMIND_OUTPUT_HTML_TABLE",
+            True,
+        )
+
+    def _need_header_footer(self) -> bool:
+        return _config_bool(
+            "ragTools.documentParser.aliyunDocMind.needHeaderFooter",
+            "RAG_TOOLS_ALIYUN_DOCMIND_NEED_HEADER_FOOTER",
+            False,
+        )
+
+    def _enhancement_mode(self) -> str:
+        return config_value(
+            "ragTools.documentParser.aliyunDocMind.enhancementMode",
+            "RAG_TOOLS_ALIYUN_DOCMIND_ENHANCEMENT_MODE",
+            "VLM",
+        )
+
+    def _output_formats(self) -> list[str]:
+        raw = config_value(
+            "ragTools.documentParser.aliyunDocMind.outputFormats",
+            "RAG_TOOLS_ALIYUN_DOCMIND_OUTPUT_FORMATS",
+            "markdown,visualLayoutInfo",
+        )
+        values = [item.strip() for item in str(raw or "").split(",") if item.strip()]
+        return values or ["markdown", "visualLayoutInfo"]
+
+    def _page_index(self) -> str:
+        return config_value(
+            "ragTools.documentParser.aliyunDocMind.pageIndex",
+            "RAG_TOOLS_ALIYUN_DOCMIND_PAGE_INDEX",
+            "",
+        )
+
+    def _file_extension(self, file_name: str, file_type: str) -> str:
+        if "." in (file_name or ""):
+            return file_name.rsplit(".", 1)[-1].lower()
+        return (file_type or "").lower()
+
+
+class NativeTextParser:
+    provider_name = NATIVE_TEXT_PARSER_NAME
+    provider_version = PARSER_VERSION
+    supported_file_types = NATIVE_TEXT_FILE_TYPES
+    capabilities = NATIVE_TEXT_CAPABILITIES
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "providerName": self.provider_name,
+            "providerVersion": self.provider_version,
+            "available": True,
+            "failedReason": "",
+            "supportedFileTypes": sorted(item.lower() for item in self.supported_file_types),
+            "capabilities": list(self.capabilities),
+        }
+
+    def parse(self, content: bytes, file_type: str, request: DocumentParseRequest) -> DocMindParseResult:
+        if file_type == "MD":
+            blocks = _parse_plain_text(content, markdown=True, parser_name=self.provider_name)
+        elif file_type == "TXT":
+            blocks = _parse_plain_text(content, markdown=False, parser_name=self.provider_name)
+        elif file_type == "HTML":
+            blocks = _parse_html(content)
+        else:
+            raise HTTPException(status_code=422, detail=f"native_text 当前不支持文件类型: {file_type or 'UNKNOWN'}")
+        return DocMindParseResult(blocks=blocks)
+
 
 def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
+    started = time.perf_counter()
     content = _decode_content(request.content_base64)
     file_type = _resolve_file_type(request.file_name, request.file_type, request.mime_type)
 
-    if file_type in {"TXT", "MD"}:
-        blocks = _parse_plain_text(content, markdown=file_type == "MD")
-    elif file_type == "HTML":
-        blocks = _parse_html(content)
-    elif file_type == "PDF":
-        blocks = _parse_pdf(content)
-    elif file_type == "DOCX":
-        blocks = _parse_docx(content)
-    elif file_type == "XLSX":
-        blocks = _parse_xlsx(content)
-    elif file_type == "XLS":
+    if file_type == "XLS":
         raise HTTPException(status_code=422, detail="XLS 解析未启用，请先转为 XLSX 后上传。")
-    elif file_type == "DOC":
+    if file_type == "DOC":
         raise HTTPException(status_code=422, detail="DOC 解析未启用，请先转为 DOCX 后上传。")
-    else:
+    parser = _parser_for_file_type(file_type)
+    if parser is None:
         raise HTTPException(status_code=422, detail=f"不支持的文件类型: {file_type or 'UNKNOWN'}")
 
-    normalized_blocks = _normalize_blocks(blocks)
+    parser_result = parser.parse(content, file_type, request)
+    normalized_blocks = _normalize_blocks(parser_result.blocks)
+    _stamp_parser_metadata(normalized_blocks, parser)
     _apply_table_context(normalized_blocks)
     parsed_text = _render_parsed_text(normalized_blocks)
     structure_nodes = _build_structure_nodes(request.file_name, normalized_blocks, parsed_text)
     paragraph_list = _paragraphs(parsed_text)
     heading_count = sum(1 for block in normalized_blocks if block.block_type == "TITLE")
-
-    artifacts = _build_artifacts(request.file_name, parsed_text, normalized_blocks)
+    artifacts = _build_artifacts(request.file_name, parsed_text, normalized_blocks, parser, parser_result.artifacts)
+    capabilities = _response_capabilities(parser, artifacts)
 
     return DocumentParseResponse(
         parsedText=parsed_text,
@@ -66,7 +465,50 @@ def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
         artifacts=artifacts,
         blocks=normalized_blocks,
         structureNodes=structure_nodes,
+        providerName=parser.provider_name,
+        providerVersion=parser.provider_version,
+        capabilities=capabilities,
+        elapsedMs=int((time.perf_counter() - started) * 1000),
+        warnings=parser_result.warnings,
+        failedReason="",
     )
+
+
+def document_parser_status() -> dict[str, Any]:
+    native_parser = _native_text_parser()
+    docmind_parser = _parser()
+    return {
+        "defaultProvider": "type_routed",
+        "routes": [
+            {
+                "providerName": native_parser.provider_name,
+                "fileTypes": sorted(item.lower() for item in native_parser.supported_file_types),
+                "description": "TXT、Markdown、HTML 使用本地确定性结构解析，不依赖 OCR 或云端 Document Mind。",
+            },
+            {
+                "providerName": docmind_parser.provider_name,
+                "fileTypes": sorted(item.lower() for item in docmind_parser.supported_file_types),
+                "description": "PDF、DOCX、XLSX、PNG、JPG/JPEG、BMP、GIF 使用阿里云 Document Mind 处理 OCR、layout、reading order、表格和图片结构。",
+            },
+        ],
+        "providers": [native_parser.status(), docmind_parser.status()],
+    }
+
+
+def _parser() -> AliyunDocMindParser:
+    return AliyunDocMindParser()
+
+
+def _native_text_parser() -> NativeTextParser:
+    return NativeTextParser()
+
+
+def _parser_for_file_type(file_type: str):
+    if file_type in NATIVE_TEXT_FILE_TYPES:
+        return _native_text_parser()
+    if file_type in ALIYUN_DOCMIND_FILE_TYPES:
+        return _parser()
+    return None
 
 
 def _decode_content(content_base64: str) -> bytes:
@@ -93,6 +535,8 @@ def _resolve_file_type(file_name: str, file_type: str, mime_type: str) -> str:
         return "XLSX"
     if suffix == "xls":
         return "XLS"
+    if suffix in {"png", "jpg", "jpeg", "bmp", "gif"}:
+        return suffix.upper()
     if suffix in {"md", "markdown"}:
         return "MD"
     if suffix in {"html", "htm"}:
@@ -102,14 +546,273 @@ def _resolve_file_type(file_name: str, file_type: str, mime_type: str) -> str:
     return explicit
 
 
-def _parse_plain_text(content: bytes, markdown: bool) -> list[DocumentBlock]:
+def _config_bool(path: str, env_name: str, default: bool) -> bool:
+    raw = config_value(path, env_name, "true" if default else "false")
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _tea_model_to_map(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "to_map"):
+        mapped = value.to_map()
+        return mapped if isinstance(mapped, dict) else {}
+    return {}
+
+
+def _deep_get(value: Any, *path: str) -> Any:
+    current = value
+    for part in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _docmind_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("Data") if "Data" in payload else payload.get("data")
+    if isinstance(data, dict):
+        return data
+    return payload
+
+
+def _extract_docmind_layouts(payload: Any) -> list[dict[str, Any]]:
+    data = _docmind_data(payload)
+    for key in ("layouts", "Layouts", "layout", "Layout"):
+        layouts = data.get(key)
+        if isinstance(layouts, list):
+            return [item for item in layouts if isinstance(item, dict)]
+    output_format_result = data.get("OutputFormatResult") or data.get("outputFormatResult")
+    if isinstance(output_format_result, list):
+        for item in output_format_result:
+            if not isinstance(item, dict):
+                continue
+            layouts = item.get("layouts") or item.get("Layouts") or item.get("layout") or item.get("Layout")
+            if isinstance(layouts, list):
+                return [layout for layout in layouts if isinstance(layout, dict)]
+    return []
+
+
+def _extract_docmind_markdown(payload: Any) -> str:
+    data = _docmind_data(payload)
+    for key in ("markdownContent", "MarkdownContent", "markdown", "Markdown", "mdContent", "MdContent"):
+        text = _cleanup_text(str(data.get(key) or ""))
+        if text:
+            return text
+    output_format_result = data.get("OutputFormatResult") or data.get("outputFormatResult")
+    if isinstance(output_format_result, list):
+        parts = []
+        for item in output_format_result:
+            if not isinstance(item, dict):
+                continue
+            for key in ("markdownContent", "MarkdownContent", "markdown", "Markdown", "content", "Content"):
+                text = _cleanup_text(str(item.get(key) or ""))
+                if text:
+                    parts.append(text)
+                    break
+        if parts:
+            return "\n\n".join(parts)
+    return ""
+
+
+def _docmind_layout_to_block(layout: dict[str, Any], block_no: int) -> DocumentBlock | None:
+    text = _docmind_layout_text(layout)
+    layout_type = _cleanup_text(str(_first_present(layout, "type", "Type", "subType", "SubType", "layoutType", "LayoutType") or "text")).lower()
+    block_type = _docmind_block_type(layout_type, text)
+    table_html = _docmind_table_html(layout)
+    table_rows = _table_rows_from_html(table_html) if table_html else _docmind_table_rows(layout)
+    if block_type == "TABLE" and table_rows and not table_html:
+        table_html = _table_html(table_rows)
+    if block_type == "TABLE" and not text and table_rows:
+        text = _table_text(table_rows)
+    if block_type in {"IMAGE", "FIGURE"} and not text:
+        text = _cleanup_text(str(_first_present(layout, "caption", "Caption", "imageCaption", "ImageCaption") or ""))
+    if not text and not table_html and not table_rows:
+        return None
+    page_no = _docmind_page_no(layout)
+    bbox = _docmind_bbox(layout)
+    metadata = {
+        "parser": ALIYUN_DOCMIND_PARSER_NAME,
+        "layoutType": layout_type or block_type.lower(),
+        "docmindIndex": _first_present(layout, "index", "Index"),
+        "docmindSubtype": _first_present(layout, "subType", "SubType"),
+        "layoutConfidence": _float_or_none(_first_present(layout, "layoutConf", "LayoutConf", "confidence", "Confidence")),
+        "docmindRawType": _first_present(layout, "type", "Type"),
+    }
+    table_cell_metadata = _docmind_table_cell_metadata(layout, table_rows, page_no)
+    if table_cell_metadata:
+        metadata["tableCellMetadata"] = table_cell_metadata
+    image_caption = text if block_type in {"IMAGE", "FIGURE"} else ""
+    return _block(
+        block_no,
+        block_type,
+        text,
+        page_no=page_no,
+        bbox_json=_bbox_json(bbox) if bbox else "",
+        table_html=table_html,
+        table_rows=table_rows,
+        image_caption=image_caption,
+        metadata={key: value for key, value in metadata.items() if value not in (None, "")},
+    )
+
+
+def _docmind_layout_text(layout: dict[str, Any]) -> str:
+    for key in (
+        "text",
+        "Text",
+        "markdownContent",
+        "MarkdownContent",
+        "content",
+        "Content",
+        "llmResult",
+        "LlmResult",
+    ):
+        value = layout.get(key)
+        if isinstance(value, str) and _cleanup_text(value):
+            if key.lower() == "llmresult" and "<table" in value.lower():
+                continue
+            return _cleanup_text(value)
+    return ""
+
+
+def _docmind_table_html(layout: dict[str, Any]) -> str:
+    for key in ("tableHtml", "TableHtml", "html", "Html", "llmResult", "LlmResult"):
+        value = layout.get(key)
+        if isinstance(value, str) and "<table" in value.lower():
+            return value
+    return ""
+
+
+def _docmind_table_rows(layout: dict[str, Any]) -> list[list[str]]:
+    for key in ("tableRows", "TableRows", "cells", "Cells"):
+        value = layout.get(key)
+        rows = _docmind_rows_from_value(value)
+        if rows:
+            return rows
+    return []
+
+
+def _docmind_rows_from_value(value: Any) -> list[list[str]]:
+    if not isinstance(value, list):
+        return []
+    if value and all(isinstance(row, list) for row in value):
+        return _normalize_table_rows(value)
+    if value and all(isinstance(item, dict) for item in value):
+        max_row = max((_to_int(item.get("rowIndex") or item.get("row") or item.get("rowNo")) or 0 for item in value), default=0)
+        max_col = max((_to_int(item.get("colIndex") or item.get("column") or item.get("columnNo") or item.get("col")) or 0 for item in value), default=0)
+        if max_row <= 0 or max_col <= 0:
+            return []
+        rows = [["" for _ in range(max_col)] for _ in range(max_row)]
+        for item in value:
+            row_no = _to_int(item.get("rowIndex") or item.get("row") or item.get("rowNo")) or 0
+            col_no = _to_int(item.get("colIndex") or item.get("column") or item.get("columnNo") or item.get("col")) or 0
+            if row_no <= 0 or col_no <= 0:
+                continue
+            rows[row_no - 1][col_no - 1] = _cleanup_text(str(item.get("text") or item.get("value") or item.get("content") or ""))
+        return _trim_table_rows(rows)
+    return []
+
+
+def _docmind_table_cell_metadata(layout: dict[str, Any], rows: list[list[str]], page_no: int | None) -> list[dict[str, Any]]:
+    cells = layout.get("cells") or layout.get("Cells") or layout.get("tableCells") or layout.get("TableCells")
+    metadata: list[dict[str, Any]] = []
+    if isinstance(cells, list) and all(isinstance(item, dict) for item in cells):
+        for cell in cells:
+            row_no = _to_int(cell.get("rowIndex") or cell.get("row") or cell.get("rowNo")) or 0
+            column_no = _to_int(cell.get("colIndex") or cell.get("column") or cell.get("columnNo") or cell.get("col")) or 0
+            if row_no <= 0 or column_no <= 0:
+                continue
+            item = {
+                "rowNo": row_no,
+                "columnNo": column_no,
+                "sourceRowNo": row_no,
+                "sourceColumnNo": column_no,
+                "cellCoordinate": f"R{row_no}C{column_no}",
+                "pageNo": page_no,
+                "value": _cleanup_text(str(cell.get("text") or cell.get("value") or cell.get("content") or "")),
+                "rowSpan": _to_int(cell.get("rowSpan") or cell.get("rowspan")),
+                "columnSpan": _to_int(cell.get("colSpan") or cell.get("colspan") or cell.get("columnSpan")),
+            }
+            bbox = _docmind_bbox(cell)
+            if bbox:
+                item["bboxJson"] = _bbox_json(bbox)
+            metadata.append({key: value for key, value in item.items() if value not in (None, "", 0)})
+    if metadata:
+        return metadata
+    for row_index, row in enumerate(rows or [], start=1):
+        for column_index, cell_text in enumerate(row, start=1):
+            metadata.append({
+                "rowNo": row_index,
+                "columnNo": column_index,
+                "sourceRowNo": row_index,
+                "sourceColumnNo": column_index,
+                "cellCoordinate": f"R{row_index}C{column_index}",
+                "pageNo": page_no,
+                "value": cell_text,
+            })
+    return metadata
+
+
+def _docmind_page_no(layout: dict[str, Any]) -> int | None:
+    value = _first_present(layout, "pageNum", "PageNum", "pageNo", "PageNo", "page", "Page")
+    return _to_int(value)
+
+
+def _docmind_bbox(layout: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    for key in ("pos", "Pos", "bbox", "Bbox", "BoundingBox", "boundingBox"):
+        bbox = _coerce_bbox(layout.get(key))
+        if bbox:
+            return bbox
+    return None
+
+
+def _docmind_block_type(layout_type: str, text: str) -> str:
+    normalized = (layout_type or "").lower()
+    if any(item in normalized for item in ("title", "heading", "header1", "header2")):
+        return "TITLE"
+    if "table" in normalized:
+        return "TABLE"
+    if any(item in normalized for item in ("figure", "chart")):
+        return "FIGURE"
+    if "image" in normalized or "picture" in normalized:
+        return "IMAGE"
+    if "formula" in normalized or "equation" in normalized:
+        return "FORMULA"
+    if "code" in normalized:
+        return "CODE"
+    if "footer" in normalized:
+        return "FOOTER"
+    if "header" in normalized:
+        return "HEADER"
+    return _classify_text_block(text)
+
+
+def _first_present(value: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in value and value.get(key) is not None:
+            return value.get(key)
+    return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_plain_text(content: bytes, markdown: bool, parser_name: str = NATIVE_TEXT_PARSER_NAME) -> list[DocumentBlock]:
     text = _decode_text(content)
     blocks = []
     block_no = 1
     for paragraph in _paragraphs(text):
         block_type = "TITLE" if markdown and paragraph.lstrip().startswith("#") else _classify_text_block(paragraph)
         clean_text = re.sub(r"^#{1,6}\s+", "", paragraph).strip()
-        blocks.append(_block(block_no, block_type, clean_text))
+        blocks.append(_block(block_no, block_type, clean_text, metadata={"parser": parser_name}))
         block_no += 1
     return blocks
 
@@ -117,245 +820,19 @@ def _parse_plain_text(content: bytes, markdown: bool) -> list[DocumentBlock]:
 def _parse_html(content: bytes) -> list[DocumentBlock]:
     parser = _HtmlBlockParser()
     parser.feed(_decode_text(content))
+    parser.close()
     return [
-        _block(index + 1, block_type, text)
+        _block(index + 1, block_type, text, metadata={"parser": NATIVE_TEXT_PARSER_NAME})
         for index, (block_type, text) in enumerate(parser.blocks)
         if text.strip()
     ]
-
-
-def _parse_pdf(content: bytes) -> list[DocumentBlock]:
-    try:
-        import fitz
-    except ImportError as exception:
-        raise HTTPException(status_code=500, detail="Python parser 缺少 pymupdf 依赖，请执行 pip install -r requirements.txt。") from exception
-
-    blocks = []
-    with fitz.open(stream=content, filetype="pdf") as document:
-        block_no = 1
-        for page_index, page in enumerate(document, start=1):
-            page_items: list[tuple[float, float, DocumentBlock]] = []
-            table_regions = _extract_pdf_tables(page, page_index, block_no)
-            for table_block in table_regions:
-                bbox = _bbox_from_json(table_block.bbox_json)
-                page_items.append((bbox[1], bbox[0], table_block))
-                block_no += 1
-
-            for raw_block in page.get_text("dict").get("blocks", []):
-                bbox = tuple(float(value) for value in raw_block.get("bbox", (0, 0, 0, 0)))
-                if raw_block.get("type") == 1:
-                    image_block = _pdf_image_block(raw_block, block_no, page_index, bbox)
-                    if image_block is not None:
-                        page_items.append((bbox[1], bbox[0], image_block))
-                        block_no += 1
-                    continue
-                if _bbox_inside_any(bbox, [_bbox_from_json(item.bbox_json) for item in table_regions]):
-                    continue
-                text = _cleanup_text(_pdf_text_block(raw_block))
-                if not text:
-                    continue
-                page_items.append((
-                    bbox[1],
-                    bbox[0],
-                    _block(block_no, _classify_pdf_text_block(text, raw_block), text,
-                           page_no=page_index, bbox_json=_bbox_json(bbox),
-                           metadata={"parser": PARSER_NAME, "layoutType": "text"}),
-                ))
-                block_no += 1
-
-            page_items.sort(key=lambda item: (round(item[0], 1), round(item[1], 1)))
-            blocks.extend(item[2] for item in page_items)
-    return blocks
-
-
-def _extract_pdf_tables(page, page_index: int, block_no: int) -> list[DocumentBlock]:
-    if not hasattr(page, "find_tables"):
-        return []
-    try:
-        tables = page.find_tables()
-    except Exception:
-        return []
-    table_blocks: list[DocumentBlock] = []
-    for table_index, table in enumerate(getattr(tables, "tables", []) or [], start=1):
-        try:
-            rows = _normalize_table_rows(table.extract())
-        except Exception:
-            rows = []
-        if not _table_has_content(rows):
-            continue
-        bbox = tuple(float(value) for value in getattr(table, "bbox", (0, 0, 0, 0)))
-        cell_metadata = _pdf_table_cell_metadata(table, rows, page_index)
-        table_blocks.append(_block(
-            block_no + len(table_blocks),
-            "TABLE",
-            _table_text(rows),
-            page_no=page_index,
-            bbox_json=_bbox_json(bbox),
-            table_html=_table_html(rows),
-            table_rows=rows,
-            metadata={
-                "parser": PARSER_NAME,
-                "layoutType": "table",
-                "tableNoOnPage": table_index,
-                "engine": "pymupdf-find-tables",
-                "tableCellMetadata": cell_metadata,
-            },
-        ))
-    return table_blocks
-
-
-def _pdf_text_block(raw_block: dict) -> str:
-    lines = []
-    for line in raw_block.get("lines", []):
-        spans = []
-        for span in line.get("spans", []):
-            text = _cleanup_text(span.get("text", ""))
-            if text:
-                spans.append(text)
-        if spans:
-            lines.append("".join(spans))
-    return "\n".join(lines)
-
-
-def _classify_pdf_text_block(text: str, raw_block: dict) -> str:
-    max_font_size = 0.0
-    for line in raw_block.get("lines", []):
-        for span in line.get("spans", []):
-            max_font_size = max(max_font_size, float(span.get("size", 0.0) or 0.0))
-    if len(text) <= 100 and max_font_size >= 14:
-        return "TITLE"
-    return _classify_text_block(text)
-
-
-def _pdf_image_block(raw_block: dict, block_no: int, page_index: int, bbox: tuple[float, float, float, float]) -> DocumentBlock | None:
-    image_bytes = raw_block.get("image")
-    if not image_bytes:
-        return None
-    image_ext = str(raw_block.get("ext") or "png").lower()
-    if image_ext not in {"png", "jpg", "jpeg", "webp"}:
-        image_ext = "png"
-    caption = f"第 {page_index} 页图片，位置 {round(bbox[0], 1)},{round(bbox[1], 1)}-{round(bbox[2], 1)},{round(bbox[3], 1)}。"
-    return _block(
-        block_no,
-        "IMAGE",
-        caption,
-        page_no=page_index,
-        bbox_json=_bbox_json(bbox),
-        image_file_name=f"page-{page_index}-image-{block_no}.{image_ext}",
-        image_content_base64=base64.b64encode(image_bytes).decode("ascii"),
-        image_caption=caption,
-        metadata={
-            "parser": PARSER_NAME,
-            "layoutType": "image",
-            "imageExt": image_ext,
-            "width": raw_block.get("width"),
-            "height": raw_block.get("height"),
-        },
-    )
-
-
-def _parse_docx(content: bytes) -> list[DocumentBlock]:
-    try:
-        from docx import Document
-    except ImportError as exception:
-        raise HTTPException(status_code=500, detail="Python parser 缺少 python-docx 依赖，请执行 pip install -r requirements.txt。") from exception
-
-    document = Document(BytesIO(content))
-    blocks = []
-    block_no = 1
-    for paragraph in document.paragraphs:
-        text = _cleanup_text(paragraph.text)
-        if not text:
-            continue
-        style_name = (paragraph.style.name if paragraph.style is not None else "") or ""
-        block_type = "TITLE" if "heading" in style_name.lower() else _classify_text_block(text)
-        blocks.append(_block(block_no, block_type, text))
-        block_no += 1
-
-    for table in document.tables:
-        rows = []
-        for row in table.rows:
-            rows.append([_cleanup_text(cell.text) for cell in row.cells])
-        if not rows:
-            continue
-        table_html = _table_html(rows)
-        text = "\n".join(" | ".join(cell for cell in row if cell) for row in rows)
-        blocks.append(_block(block_no, "TABLE", text, table_html=table_html, table_rows=rows))
-        block_no += 1
-    return blocks
-
-
-def _parse_xlsx(content: bytes) -> list[DocumentBlock]:
-    try:
-        from openpyxl import load_workbook
-    except ImportError as exception:
-        raise HTTPException(status_code=500, detail="Python parser 缺少 openpyxl 依赖，请执行 pip install -r requirements.txt。") from exception
-
-    workbook = load_workbook(BytesIO(content), read_only=False, data_only=True)
-    blocks: list[DocumentBlock] = []
-    block_no = 1
-    for sheet in workbook.worksheets:
-        merged_cells = _xlsx_merged_cell_lookup(sheet)
-        extracted_rows = []
-        for row_no, row in enumerate(sheet.iter_rows(values_only=False), start=1):
-            extracted_row = []
-            for column_no, cell in enumerate(row, start=1):
-                source_row_no = _to_int(getattr(cell, "row", None)) or row_no
-                source_column_no = _to_int(getattr(cell, "column", None)) or column_no
-                merged_cell = merged_cells.get((source_row_no, source_column_no), {})
-                extracted_row.append({
-                    "value": _cell_text(getattr(cell, "value", None)),
-                    "rowNo": source_row_no,
-                    "columnNo": source_column_no,
-                    "excelAddress": getattr(cell, "coordinate", "") or _excel_address(source_row_no, source_column_no),
-                    "sheetName": sheet.title,
-                    **merged_cell,
-                })
-            extracted_rows.append(extracted_row)
-        rows, cell_metadata = _trim_table_rows_with_metadata(extracted_rows)
-        if not _table_has_content(rows):
-            continue
-        rows, cell_metadata, table_title_rows, title_cell_metadata = _split_spreadsheet_title_rows(rows, cell_metadata)
-        if not _table_has_content(rows):
-            continue
-        rows, cell_metadata, table_header_rows, header_cell_metadata = _flatten_spreadsheet_header_rows(rows, cell_metadata)
-        rows, cell_metadata = _fill_spreadsheet_merged_data_values(rows, cell_metadata)
-        title = f"工作表：{sheet.title}"
-        blocks.append(_block(block_no, "TITLE", title, metadata={"parser": PARSER_NAME, "sheetName": sheet.title}))
-        block_no += 1
-        metadata = {
-            "parser": PARSER_NAME,
-            "layoutType": "spreadsheet",
-            "sheetName": sheet.title,
-            "maxRow": sheet.max_row,
-            "maxColumn": sheet.max_column,
-            "tableCellMetadata": cell_metadata,
-        }
-        if table_title_rows:
-            metadata["tableTitleRows"] = table_title_rows
-            metadata["tableTitleCellMetadata"] = title_cell_metadata
-        if table_header_rows:
-            metadata["tableHeaderFlattened"] = True
-            metadata["tableHeaderRows"] = table_header_rows
-            metadata["tableHeaderCellMetadata"] = header_cell_metadata
-        blocks.append(_block(
-            block_no,
-            "TABLE",
-            _table_text_with_titles(table_title_rows, rows),
-            table_html=_table_html(rows),
-            table_rows=rows,
-            metadata=metadata,
-        ))
-        block_no += 1
-    workbook.close()
-    return blocks
 
 
 def _normalize_blocks(blocks: list[DocumentBlock]) -> list[DocumentBlock]:
     normalized = []
     current_section = ""
     current_section_path = ""
-    for index, block in enumerate(blocks, start=1):
+    for block in blocks:
         text = _cleanup_text(block.text)
         if not text and not block.table_html and not block.image_caption:
             continue
@@ -420,16 +897,49 @@ def _nearby_context(blocks: list[DocumentBlock], table_index: int, direction: in
 
 
 def _merge_block_metadata(block: DocumentBlock, extra: dict) -> None:
-    metadata = {}
-    if block.metadata_json:
-        try:
-            metadata = json.loads(block.metadata_json)
-            if not isinstance(metadata, dict):
-                metadata = {"parserMetadata": metadata}
-        except Exception:
-            metadata = {"parserMetadata": block.metadata_json}
+    metadata = _read_metadata(block.metadata_json)
     metadata.update(extra)
     block.metadata_json = json_metadata(metadata)
+
+
+def _stamp_parser_metadata(blocks: list[DocumentBlock], parser) -> None:
+    for index, block in enumerate(blocks, start=1):
+        _merge_block_metadata(block, {
+            "providerName": parser.provider_name,
+            "providerVersion": parser.provider_version,
+            "providerCapabilities": parser.capabilities,
+            "readingOrder": index,
+        })
+
+
+def _response_capabilities(parser, artifacts: list[ParseArtifact]) -> list[str]:
+    capabilities = list(parser.capabilities)
+    artifact_types = {artifact.artifact_type for artifact in artifacts or []}
+    if "ALIYUN_DOCMIND_JSON" in artifact_types:
+        capabilities.extend(["aliyun-docmind", "cloud-document-parser"])
+    return list(dict.fromkeys(capabilities))
+
+
+def _read_metadata(metadata_json: str) -> dict[str, Any]:
+    if not metadata_json:
+        return {}
+    try:
+        metadata = json.loads(metadata_json)
+        if isinstance(metadata, dict):
+            return metadata
+        return {"parserMetadata": metadata}
+    except Exception:
+        return {"parserMetadata": metadata_json}
+
+
+def _read_json_object(json_text: str) -> dict[str, Any]:
+    if not json_text:
+        return {}
+    try:
+        value = json.loads(json_text)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
 
 
 def _clip_text(text: str, max_length: int) -> str:
@@ -480,30 +990,109 @@ def _build_structure_nodes(file_name: str, blocks: list[DocumentBlock], parsed_t
     return nodes
 
 
-def _build_artifacts(file_name: str, parsed_text: str, blocks: list[DocumentBlock]) -> list[ParseArtifact]:
-    base_name = (file_name or "document").rsplit(".", 1)[0]
+def _build_artifacts(file_name: str,
+                     parsed_text: str,
+                     blocks: list[DocumentBlock],
+                     parser,
+                     parser_artifacts: list[ParseArtifact] | None = None) -> list[ParseArtifact]:
+    base_name = _base_name(file_name)
     markdown_bytes = parsed_text.encode("utf-8")
-    blocks_json_bytes = json.dumps(
-        [block.model_dump(by_alias=True) for block in blocks],
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
-    return [
-        _artifact("MARKDOWN", f"{base_name}.md", "text/markdown;charset=UTF-8", markdown_bytes),
-        _artifact("JSON", f"{base_name}.blocks.json", "application/json;charset=UTF-8", blocks_json_bytes),
+    blocks_payload = {
+        "providerName": parser.provider_name,
+        "providerVersion": parser.provider_version,
+        "capabilities": parser.capabilities,
+        "blockCount": len(blocks),
+        "blocks": [block.model_dump(by_alias=True) for block in blocks],
+    }
+    blocks_json_bytes = json.dumps(blocks_payload, ensure_ascii=False, indent=2).encode("utf-8")
+    artifacts = [
+        _artifact(
+            "MARKDOWN",
+            f"{base_name}.md",
+            "text/markdown;charset=UTF-8",
+            markdown_bytes,
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+        ),
+        _artifact(
+            "JSON",
+            f"{base_name}.blocks.json",
+            "application/json;charset=UTF-8",
+            blocks_json_bytes,
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+        ),
     ]
+    layout_payload = _layout_payload(blocks, parser)
+    if layout_payload["blocks"]:
+        artifacts.append(_artifact(
+            "LAYOUT_JSON",
+            f"{base_name}.layout.json",
+            "application/json;charset=UTF-8",
+            json.dumps(layout_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+        ))
+    artifacts.extend(parser_artifacts or [])
+    return artifacts
 
 
-def _artifact(artifact_type: str, file_name: str, content_type: str, content: bytes) -> ParseArtifact:
+def _artifact(artifact_type: str,
+              file_name: str,
+              content_type: str,
+              content: bytes,
+              *,
+              parser_name: str = ALIYUN_DOCMIND_PARSER_NAME,
+              parser_version: str = PARSER_VERSION) -> ParseArtifact:
     return ParseArtifact(
         artifactType=artifact_type,
         fileName=file_name,
         contentType=content_type,
         contentBase64=base64.b64encode(content).decode("ascii"),
         contentHash=hashlib.sha256(content).hexdigest(),
-        parserName=PARSER_NAME,
-        parserVersion=PARSER_VERSION,
+        parserName=parser_name,
+        parserVersion=parser_version,
     )
+
+
+def _layout_payload(blocks: list[DocumentBlock], parser) -> dict[str, Any]:
+    if parser.provider_name == NATIVE_TEXT_PARSER_NAME:
+        return {
+            "providerName": parser.provider_name,
+            "providerVersion": parser.provider_version,
+            "pageCount": 0,
+            "blockCount": 0,
+            "blocks": [],
+        }
+    layout_blocks = []
+    page_numbers = set()
+    for block in blocks:
+        metadata = _read_metadata(block.metadata_json)
+        layout_type = metadata.get("layoutType") or block.block_type.lower()
+        if block.page_no is not None:
+            page_numbers.add(block.page_no)
+        if not block.bbox_json and block.page_no is None and not layout_type:
+            continue
+        layout_blocks.append({
+            "blockNo": block.block_no,
+            "blockType": block.block_type,
+            "layoutType": layout_type,
+            "pageNo": block.page_no,
+            "pageRange": block.page_range,
+            "bbox": _read_json_object(block.bbox_json),
+            "confidence": metadata.get("layoutConfidence"),
+            "readingOrder": metadata.get("readingOrder"),
+            "columnIndex": metadata.get("columnIndex"),
+            "relatedBlockIds": metadata.get("relatedBlockIds"),
+            "text": _clip_text(block.image_caption or block.text, 500),
+        })
+    return {
+        "providerName": parser.provider_name,
+        "providerVersion": parser.provider_version,
+        "pageCount": max(page_numbers) if page_numbers else 0,
+        "blockCount": len(layout_blocks),
+        "blocks": layout_blocks,
+    }
 
 
 def _block(
@@ -532,7 +1121,7 @@ def _block(
         imageFileName=image_file_name,
         imageContentBase64=image_content_base64,
         imageCaption=image_caption,
-        metadataJson=json_metadata(metadata or {"parser": PARSER_NAME}),
+        metadataJson=json_metadata(metadata or {"parser": NATIVE_TEXT_PARSER_NAME}),
     )
 
 
@@ -570,6 +1159,10 @@ def _canonical_path(section_path: str, block_no: int) -> str:
     return f"/{section or 'root'}/{block_no}"
 
 
+def _base_name(file_name: str) -> str:
+    return (file_name or "document").rsplit(".", 1)[0] or "document"
+
+
 def _bbox_json(bbox: tuple[float, float, float, float]) -> str:
     return json_metadata({
         "x0": round(float(bbox[0]), 2),
@@ -577,134 +1170,6 @@ def _bbox_json(bbox: tuple[float, float, float, float]) -> str:
         "x1": round(float(bbox[2]), 2),
         "y1": round(float(bbox[3]), 2),
     })
-
-
-def _bbox_from_json(bbox_json: str) -> tuple[float, float, float, float]:
-    if not bbox_json:
-        return 0.0, 0.0, 0.0, 0.0
-    try:
-        data = json.loads(bbox_json)
-        return (
-            float(data.get("x0", 0.0)),
-            float(data.get("y0", 0.0)),
-            float(data.get("x1", 0.0)),
-            float(data.get("y1", 0.0)),
-        )
-    except Exception:
-        return 0.0, 0.0, 0.0, 0.0
-
-
-def _bbox_inside_any(bbox: tuple[float, float, float, float], regions: list[tuple[float, float, float, float]]) -> bool:
-    x0, y0, x1, y1 = bbox
-    for rx0, ry0, rx1, ry1 in regions:
-        overlap_x = max(0.0, min(x1, rx1) - max(x0, rx0))
-        overlap_y = max(0.0, min(y1, ry1) - max(y0, ry0))
-        overlap_area = overlap_x * overlap_y
-        area = max(1.0, (x1 - x0) * (y1 - y0))
-        if overlap_area / area >= 0.65:
-            return True
-    return False
-
-
-def _normalize_table_rows(rows) -> list[list[str]]:
-    return _trim_table_rows([
-        [_cell_text(cell) for cell in row]
-        for row in (rows or [])
-    ])
-
-
-def _pdf_table_cell_metadata(table, rows: list[list[str]], page_index: int) -> list[dict]:
-    cells = _pdf_table_cells(table)
-    column_count = max((len(row) for row in rows), default=0)
-    metadata: list[dict] = []
-    for row_index, row in enumerate(rows):
-        for column_index, cell_text in enumerate(row):
-            item = {
-                "rowNo": row_index + 1,
-                "columnNo": column_index + 1,
-                "sourceRowNo": row_index + 1,
-                "sourceColumnNo": column_index + 1,
-                "cellCoordinate": f"R{row_index + 1}C{column_index + 1}",
-                "pageNo": page_index,
-                "value": cell_text,
-            }
-            bbox = _pdf_table_cell_bbox(cells, row_index, column_index, column_count)
-            if bbox is not None:
-                item["bboxJson"] = _bbox_json(bbox)
-            metadata.append(item)
-    return metadata
-
-
-def _pdf_table_cells(table) -> list:
-    cells = getattr(table, "cells", None)
-    if not cells:
-        return []
-    if isinstance(cells, list):
-        return cells
-    try:
-        return list(cells)
-    except TypeError:
-        return []
-
-
-def _pdf_table_cell_bbox(cells: list,
-                         row_index: int,
-                         column_index: int,
-                         column_count: int) -> tuple[float, float, float, float] | None:
-    for cell in cells:
-        row_no = _first_int_attr(cell, "row", "row_no", "rowno", "r")
-        column_no = _first_int_attr(cell, "col", "column", "column_no", "colno", "c")
-        if row_no is None or column_no is None:
-            continue
-        if _zero_based(row_no, row_index) and _zero_based(column_no, column_index):
-            bbox = _coerce_bbox(getattr(cell, "bbox", cell))
-            if bbox is not None:
-                return bbox
-    sorted_bboxes = _sorted_cell_bboxes(cells)
-    if sorted_bboxes:
-        linear_index = row_index * max(column_count, 1) + column_index
-        if 0 <= linear_index < len(sorted_bboxes):
-            return sorted_bboxes[linear_index]
-    linear_index = row_index * max(column_count, 1) + column_index
-    if 0 <= linear_index < len(cells):
-        return _coerce_bbox(getattr(cells[linear_index], "bbox", cells[linear_index]))
-    return None
-
-
-def _sorted_cell_bboxes(cells: list) -> list[tuple[float, float, float, float]]:
-    bboxes = []
-    for cell in cells:
-        bbox = _coerce_bbox(getattr(cell, "bbox", cell))
-        if bbox is not None:
-            bboxes.append(bbox)
-    return sorted(bboxes, key=lambda bbox: (round(bbox[1], 1), round(bbox[0], 1)))
-
-
-def _first_int_attr(value, *names: str) -> int | None:
-    if isinstance(value, dict):
-        for name in names:
-            parsed = _to_int(value.get(name))
-            if parsed is not None:
-                return parsed
-        return None
-    for name in names:
-        parsed = _to_int(getattr(value, name, None))
-        if parsed is not None:
-            return parsed
-    return None
-
-
-def _to_int(value) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _zero_based(value: int, expected_zero_based: int) -> bool:
-    return value == expected_zero_based or value == expected_zero_based + 1
 
 
 def _coerce_bbox(value) -> tuple[float, float, float, float] | None:
@@ -715,6 +1180,21 @@ def _coerce_bbox(value) -> tuple[float, float, float, float] | None:
         if all(key in value for key in keys):
             try:
                 return tuple(float(value[key]) for key in keys)
+            except (TypeError, ValueError):
+                return None
+        keys = ("left", "top", "right", "bottom")
+        if all(key in value for key in keys):
+            try:
+                return tuple(float(value[key]) for key in keys)
+            except (TypeError, ValueError):
+                return None
+        if all(key in value for key in ("x", "y", "width", "height")):
+            try:
+                x = float(value["x"])
+                y = float(value["y"])
+                width = float(value["width"])
+                height = float(value["height"])
+                return x, y, x + width, y + height
             except (TypeError, ValueError):
                 return None
         return None
@@ -731,283 +1211,11 @@ def _coerce_bbox(value) -> tuple[float, float, float, float] | None:
     return None
 
 
-def _trim_table_rows_with_metadata(rows: list[list[dict]]) -> tuple[list[list[str]], list[dict]]:
-    cleaned = [
-        [
-            {
-                **cell,
-                "value": _cleanup_text(str(cell.get("value") or "")),
-            }
-            for cell in row
-        ]
-        for row in rows
-    ]
-    cleaned = [row for row in cleaned if any(cell.get("value") for cell in row)]
-    if not cleaned:
-        return [], []
-    max_columns = max(len(row) for row in cleaned)
-    padded = [row + [_empty_cell_metadata() for _ in range(max_columns - len(row))] for row in cleaned]
-    non_empty_columns = [
-        index
-        for index in range(max_columns)
-        if any(row[index].get("value") for row in padded)
-    ]
-    if not non_empty_columns:
-        return [], []
-    first_column = min(non_empty_columns)
-    last_column = max(non_empty_columns)
-    trimmed_rows = [row[first_column:last_column + 1] for row in padded]
-    values = [[cell.get("value", "") for cell in row] for row in trimmed_rows]
-    metadata = []
-    for row_index, row in enumerate(trimmed_rows, start=1):
-        for column_index, cell in enumerate(row, start=1):
-            source_row_no = _to_int(cell.get("rowNo"))
-            source_column_no = _to_int(cell.get("columnNo"))
-            item = {
-                "rowNo": row_index,
-                "columnNo": column_index,
-                "sourceRowNo": source_row_no,
-                "sourceColumnNo": source_column_no,
-                "excelAddress": cell.get("excelAddress") or "",
-                "cellCoordinate": cell.get("excelAddress") or f"R{source_row_no or row_index}C{source_column_no or column_index}",
-                "sheetName": cell.get("sheetName") or "",
-                "value": cell.get("value", ""),
-            }
-            for key in (
-                "mergedCell",
-                "mergedCellAnchor",
-                "mergedCellRange",
-                "mergedCellAnchorAddress",
-                "mergedCellValue",
-                "rowSpan",
-                "columnSpan",
-            ):
-                if key in cell:
-                    item[key] = cell.get(key)
-            metadata.append({key: value for key, value in item.items() if value not in (None, "")})
-    return values, metadata
-
-
-def _xlsx_merged_cell_lookup(sheet) -> dict[tuple[int, int], dict]:
-    merged_cells: dict[tuple[int, int], dict] = {}
-    merged_ranges = getattr(getattr(sheet, "merged_cells", None), "ranges", []) or []
-    for merged_range in merged_ranges:
-        min_row = int(getattr(merged_range, "min_row", 0) or 0)
-        max_row = int(getattr(merged_range, "max_row", 0) or 0)
-        min_col = int(getattr(merged_range, "min_col", 0) or 0)
-        max_col = int(getattr(merged_range, "max_col", 0) or 0)
-        if min_row <= 0 or min_col <= 0 or max_row < min_row or max_col < min_col:
-            continue
-        anchor_address = _excel_address(min_row, min_col)
-        anchor_value = _cell_text(sheet.cell(row=min_row, column=min_col).value)
-        row_span = max_row - min_row + 1
-        column_span = max_col - min_col + 1
-        for row_no in range(min_row, max_row + 1):
-            for column_no in range(min_col, max_col + 1):
-                is_anchor = row_no == min_row and column_no == min_col
-                merged_cells[(row_no, column_no)] = {
-                    "mergedCell": True,
-                    "mergedCellAnchor": is_anchor,
-                    "mergedCellRange": str(getattr(merged_range, "coord", "")),
-                    "mergedCellAnchorAddress": anchor_address,
-                    "mergedCellValue": anchor_value,
-                    "rowSpan": row_span if is_anchor else 1,
-                    "columnSpan": column_span if is_anchor else 1,
-                }
-    return merged_cells
-
-
-def _split_spreadsheet_title_rows(rows: list[list[str]], metadata: list[dict]) -> tuple[list[list[str]], list[dict], list[str], list[dict]]:
-    title_rows: list[str] = []
-    title_metadata: list[dict] = []
-    remaining_rows = rows
-    remaining_metadata = metadata
-    while len(remaining_rows) > 1 and _is_spreadsheet_title_row(remaining_rows[0], remaining_rows[1], remaining_metadata):
-        title_rows.append(" | ".join(cell for cell in remaining_rows[0] if cell).strip())
-        title_metadata.extend([item for item in remaining_metadata if item.get("rowNo") == 1])
-        remaining_rows = remaining_rows[1:]
-        remaining_metadata = _shift_table_cell_metadata_rows(remaining_metadata, 1)
-    return remaining_rows, remaining_metadata, title_rows, title_metadata
-
-
-def _is_spreadsheet_title_row(row: list[str], next_row: list[str], metadata: list[dict]) -> bool:
-    non_blank_cells = [cell for cell in row if _cleanup_text(cell)]
-    next_non_blank_count = sum(1 for cell in next_row if _cleanup_text(cell))
-    if len(non_blank_cells) != 1 or next_non_blank_count < 2:
-        return False
-    first_row_metadata = [item for item in metadata if item.get("rowNo") == 1]
-    if not first_row_metadata:
-        return False
-    anchor = next((item for item in first_row_metadata if item.get("value") == non_blank_cells[0]), first_row_metadata[0])
-    if not anchor.get("mergedCell"):
-        return False
-    return int(anchor.get("columnSpan") or 1) >= min(2, len(row))
-
-
-def _shift_table_cell_metadata_rows(metadata: list[dict], removed_rows: int) -> list[dict]:
-    shifted = []
-    for item in metadata:
-        row_no = _to_int(item.get("rowNo"))
-        if row_no is None or row_no <= removed_rows:
-            continue
-        shifted_item = {**item, "rowNo": row_no - removed_rows}
-        shifted.append(shifted_item)
-    return shifted
-
-
-def _flatten_spreadsheet_header_rows(rows: list[list[str]], metadata: list[dict]) -> tuple[list[list[str]], list[dict], list[list[str]], list[dict]]:
-    if not _is_spreadsheet_multi_level_header(rows, metadata):
-        return rows, metadata, [], []
-    column_count = max((len(row) for row in rows[:2]), default=0)
-    flattened_header: list[str] = []
-    flattened_metadata: list[dict] = []
-    metadata_by_position = _metadata_by_position(metadata)
-    for column_index in range(column_count):
-        column_no = column_index + 1
-        top_value = _effective_header_value(rows, metadata_by_position, 1, column_no)
-        child_value = _effective_header_value(rows, metadata_by_position, 2, column_no)
-        header_name = _join_header_parts(top_value, child_value) or f"列{column_no}"
-        source_metadata = _header_source_metadata(metadata_by_position, rows, column_no)
-        flattened_metadata.append({
-            **source_metadata,
-            "rowNo": 1,
-            "columnNo": column_no,
-            "value": header_name,
-            "flattenedHeader": True,
-            "headerSourceRows": 2,
-        })
-        flattened_header.append(header_name)
-    shifted_data_metadata = []
-    for item in metadata:
-        row_no = _to_int(item.get("rowNo"))
-        if row_no is None or row_no <= 2:
-            continue
-        shifted_data_metadata.append({**item, "rowNo": row_no - 1})
-    return [flattened_header] + rows[2:], flattened_metadata + shifted_data_metadata, rows[:2], [
-        item for item in metadata if _to_int(item.get("rowNo")) in {1, 2}
-    ]
-
-
-def _fill_spreadsheet_merged_data_values(rows: list[list[str]], metadata: list[dict]) -> tuple[list[list[str]], list[dict]]:
-    if len(rows) < 2:
-        return rows, metadata
-    filled_rows = [list(row) for row in rows]
-    metadata_by_position = _metadata_by_position(metadata)
-    filled_positions: set[tuple[int, int]] = set()
-    for row_index in range(1, len(filled_rows)):
-        row_no = row_index + 1
-        for column_index, cell_text in enumerate(filled_rows[row_index]):
-            column_no = column_index + 1
-            if _cleanup_text(cell_text):
-                continue
-            cell_metadata = metadata_by_position.get((row_no, column_no), {})
-            if not cell_metadata.get("mergedCell"):
-                continue
-            merged_value = _cleanup_text(str(cell_metadata.get("mergedCellValue") or ""))
-            if not merged_value:
-                continue
-            filled_rows[row_index][column_index] = merged_value
-            filled_positions.add((row_no, column_no))
-    if not filled_positions:
-        return rows, metadata
-    filled_metadata = []
-    for item in metadata:
-        row_no = _to_int(item.get("rowNo"))
-        column_no = _to_int(item.get("columnNo"))
-        if (row_no, column_no) in filled_positions:
-            item = {
-                **item,
-                "value": filled_rows[row_no - 1][column_no - 1],
-                "mergedValueFilled": True,
-            }
-        filled_metadata.append(item)
-    return filled_rows, filled_metadata
-
-
-def _is_spreadsheet_multi_level_header(rows: list[list[str]], metadata: list[dict]) -> bool:
-    if len(rows) < 3:
-        return False
-    column_count = max((len(row) for row in rows[:2]), default=0)
-    if column_count < 2:
-        return False
-    first_row_metadata = [item for item in metadata if item.get("rowNo") == 1]
-    has_group_header = any(
-        item.get("mergedCell")
-        and _to_int(item.get("columnSpan")) is not None
-        and _to_int(item.get("columnSpan")) > 1
-        and _not_blank(item.get("mergedCellValue") or item.get("value"))
-        for item in first_row_metadata
-    )
-    if not has_group_header:
-        return False
-    return _non_blank_cell_count(rows[1]) >= 2 and _non_blank_cell_count(rows[2]) >= 2
-
-
-def _metadata_by_position(metadata: list[dict]) -> dict[tuple[int, int], dict]:
-    result = {}
-    for item in metadata:
-        row_no = _to_int(item.get("rowNo"))
-        column_no = _to_int(item.get("columnNo"))
-        if row_no is not None and column_no is not None:
-            result[(row_no, column_no)] = item
-    return result
-
-
-def _effective_header_value(rows: list[list[str]], metadata_by_position: dict[tuple[int, int], dict], row_no: int, column_no: int) -> str:
-    row_index = row_no - 1
-    column_index = column_no - 1
-    value = ""
-    if 0 <= row_index < len(rows) and 0 <= column_index < len(rows[row_index]):
-        value = rows[row_index][column_index]
-    value = _cleanup_text(value)
-    if value:
-        return value
-    metadata = metadata_by_position.get((row_no, column_no), {})
-    return _cleanup_text(str(metadata.get("mergedCellValue") or ""))
-
-
-def _header_source_metadata(metadata_by_position: dict[tuple[int, int], dict], rows: list[list[str]], column_no: int) -> dict:
-    child_value = _effective_header_value(rows, metadata_by_position, 2, column_no)
-    top_value = _effective_header_value(rows, metadata_by_position, 1, column_no)
-    source = metadata_by_position.get((2, column_no), {}) if child_value else metadata_by_position.get((1, column_no), {})
-    if not source and top_value:
-        source = metadata_by_position.get((1, column_no), {})
-    allowed = {
-        "sourceRowNo",
-        "sourceColumnNo",
-        "excelAddress",
-        "cellCoordinate",
-        "sheetName",
-        "mergedCell",
-        "mergedCellAnchor",
-        "mergedCellRange",
-        "mergedCellAnchorAddress",
-        "mergedCellValue",
-        "rowSpan",
-        "columnSpan",
-    }
-    return {key: value for key, value in source.items() if key in allowed}
-
-
-def _join_header_parts(*parts: str) -> str:
-    result = []
-    for part in parts:
-        cleaned = _cleanup_text(part)
-        if cleaned and cleaned not in result:
-            result.append(cleaned)
-    return " ".join(result)
-
-
-def _non_blank_cell_count(row: list[str]) -> int:
-    return sum(1 for cell in row if _cleanup_text(cell))
-
-
-def _not_blank(value) -> bool:
-    return bool(_cleanup_text(str(value or "")))
-
-
-def _empty_cell_metadata() -> dict:
-    return {"value": ""}
+def _normalize_table_rows(rows) -> list[list[str]]:
+    return _trim_table_rows([
+        [_cell_text(cell) for cell in row]
+        for row in (rows or [])
+    ])
 
 
 def _trim_table_rows(rows: list[list[str]]) -> list[list[str]]:
@@ -1029,20 +1237,16 @@ def _trim_table_rows(rows: list[list[str]]) -> list[list[str]]:
     return [row[first_column:last_column + 1] for row in padded]
 
 
-def _table_has_content(rows: list[list[str]]) -> bool:
-    return any(any(cell.strip() for cell in row) for row in rows or [])
+def _table_rows_from_html(table_html: str) -> list[list[str]]:
+    if not table_html:
+        return []
+    parser = _TableHtmlParser()
+    parser.feed(table_html)
+    return _trim_table_rows(parser.rows)
 
 
 def _table_text(rows: list[list[str]]) -> str:
     return "\n".join(" | ".join(cell for cell in row if cell) for row in rows if any(row))
-
-
-def _table_text_with_titles(title_rows: list[str], rows: list[list[str]]) -> str:
-    parts = [title for title in title_rows if title]
-    table_text = _table_text(rows)
-    if table_text:
-        parts.append(table_text)
-    return "\n".join(parts)
 
 
 def _cell_text(value) -> str:
@@ -1051,18 +1255,13 @@ def _cell_text(value) -> str:
     return _cleanup_text(str(value))
 
 
-def _excel_address(row_no: int, column_no: int) -> str:
-    return f"{_excel_column_name(column_no)}{row_no}"
-
-
-def _excel_column_name(column_no: int) -> str:
-    if column_no <= 0:
-        return ""
-    name = ""
-    while column_no > 0:
-        column_no, remainder = divmod(column_no - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
+def _to_int(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _decode_text(content: bytes) -> str:
@@ -1142,30 +1341,28 @@ def _table_html(rows: list[list[str]]) -> str:
     return "<table><tbody>" + "".join(body) + "</tbody></table>"
 
 
-class _HtmlBlockParser(HTMLParser):
+class _TableHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.blocks: list[tuple[str, str]] = []
-        self._current_tag = ""
-        self._buffer: list[str] = []
+        self.rows: list[list[str]] = []
+        self._current_row: list[str] | None = None
+        self._cell_buffer: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6", "p", "li"}:
-            self._flush()
-            self._current_tag = tag
+        if tag == "tr":
+            self._current_row = []
+        elif tag in {"td", "th"} and self._current_row is not None:
+            self._cell_buffer = []
 
     def handle_endtag(self, tag: str) -> None:
-        if tag == self._current_tag:
-            self._flush()
+        if tag in {"td", "th"} and self._current_row is not None and self._cell_buffer is not None:
+            self._current_row.append(_cleanup_text("".join(self._cell_buffer)))
+            self._cell_buffer = None
+        elif tag == "tr" and self._current_row is not None:
+            if any(cell for cell in self._current_row):
+                self.rows.append(self._current_row)
+            self._current_row = None
 
     def handle_data(self, data: str) -> None:
-        if self._current_tag:
-            self._buffer.append(data)
-
-    def _flush(self) -> None:
-        text = _cleanup_text("".join(self._buffer))
-        if text:
-            block_type = "TITLE" if self._current_tag.startswith("h") else _classify_text_block(text)
-            self.blocks.append((block_type, text))
-        self._buffer = []
-        self._current_tag = ""
+        if self._cell_buffer is not None:
+            self._cell_buffer.append(data)

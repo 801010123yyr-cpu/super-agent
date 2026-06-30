@@ -30,6 +30,8 @@ public class RagToolsClient {
 
     private final RestClient restClient;
 
+    private final RestClient documentParseRestClient;
+
     private final RestClient graphExtractRestClient;
 
     private final RestClient raptorBuildRestClient;
@@ -42,6 +44,11 @@ public class RagToolsClient {
             properties.getBaseUrl(),
             properties.getConnectTimeoutMs(),
             properties.getReadTimeoutMs()
+        );
+        this.documentParseRestClient = RestClientFactorySupport.create(
+            properties.getBaseUrl(),
+            properties.getConnectTimeoutMs(),
+            properties.getDocumentParseReadTimeoutMs()
         );
         this.graphExtractRestClient = RestClientFactorySupport.create(
             properties.getBaseUrl(),
@@ -74,7 +81,7 @@ public class RagToolsClient {
     public RagToolsDocumentParseResponse parseDocument(RagToolsDocumentParseRequest request) {
         long startedNanos = System.nanoTime();
         try {
-            RagToolsDocumentParseResponse response = restClient.post()
+            RagToolsDocumentParseResponse response = documentParseRestClient.post()
                 .uri("/document/parse")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(request)

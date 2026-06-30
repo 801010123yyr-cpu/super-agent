@@ -105,6 +105,7 @@ app:
     base-url: ${SUPER_AGENT_RAG_TOOLS_BASE_URL:http://127.0.0.1:18080}
     connect-timeout-ms: 3000
     read-timeout-ms: 10000
+    document-parse-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_DOCUMENT_PARSE_READ_TIMEOUT_MS:600000}
     graph-extract-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_GRAPH_EXTRACT_READ_TIMEOUT_MS:30000}
     raptor-build-read-timeout-ms: ${SUPER_AGENT_RAG_TOOLS_RAPTOR_BUILD_READ_TIMEOUT_MS:600000}
   graph-rag:
