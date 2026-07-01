@@ -13,6 +13,7 @@ public enum RedisKeyManage {
     
     USER_INFO_KEY("user:info:%s","用户id","value为UserInfo类型","k"),
     DOCUMENT_INDEX_BUILD_PROGRESS("document:index-build:progress:%s", "文档索引构建任务id", "value为DocumentIndexBuildProgressVo类型", "axing"),
+    DOCUMENT_PARSE_ROUTE_PROGRESS("document:parse-route:progress:%s", "文档解析路由任务id", "value为DocumentParseRouteProgressVo类型", "axing"),
    
    
     ;

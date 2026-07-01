@@ -507,6 +507,13 @@ export const manageApi = {
     })
   },
 
+  queryParseRouteProgress(payload) {
+    return requestApiEnvelope('/manage/document/parse-route/progress/query', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
+  },
+
   queryDocumentChunks(payload) {
     return requestApiEnvelope('/manage/document/chunk/query', {
       method: 'POST',

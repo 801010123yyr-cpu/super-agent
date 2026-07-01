@@ -252,8 +252,8 @@ function changePage(page) {
   loadDocuments(page)
 }
 
-function openDocumentDetail(documentId) {
-  router.push({ name: 'AdminDocumentDetail', params: { documentId: String(documentId) } })
+function openDocumentDetail(documentId, query = {}) {
+  router.push({ name: 'AdminDocumentDetail', params: { documentId: String(documentId) }, query })
 }
 
 function isDeletingDocument(documentId) { return String(deletingDocumentId.value || '') === String(documentId || '') }
@@ -289,7 +289,10 @@ async function submitUpload() {
     clearSelectedFile()
     showNotice(`文档已上传，任务 ${result.taskId} 已进入解析与策略推荐队列。`, 'success')
     await loadDocuments(1)
-    openDocumentDetail(result.documentId)
+    openDocumentDetail(result.documentId, {
+      parseTaskId: String(result.taskId || ''),
+      showParseProgress: '1'
+    })
   } catch (error) {
     console.error('上传文档失败', error); showNotice(normalizeError(error, '上传文档失败'), 'danger')
   } finally {

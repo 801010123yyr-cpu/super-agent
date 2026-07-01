@@ -3,6 +3,16 @@
     <transition name="drawer-fade"><div v-if="logDrawerOpen" class="fixed inset-0 z-50 bg-[rgba(15,23,42,0.3)]" @click="closeLogDrawer"></div></transition>
     <transition name="drawer-fade"><div v-if="chunkDetailDrawerOpen" class="fixed inset-0 z-50 bg-[rgba(15,23,42,0.3)]" @click="closeChunkDetailDrawer"></div></transition>
 
+    <DocumentParseRouteProgressDialog
+      v-model="parseRouteDialogOpen"
+      :document-id="documentId"
+      :task-id="parseRouteDialogTaskId"
+      @completed="handleParseRouteCompleted"
+      @failed="handleParseRouteFailed"
+      @open-strategy="handleOpenParseRouteStrategy"
+      @open-logs="openLogDrawer"
+    />
+
     <transition name="build-mask-fade">
       <div v-if="showBuildBlockingOverlay" class="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(15,23,42,0.6)]">
         <div class="w-[min(520px,90vw)] rounded-xl border border-border bg-card p-6 shadow-xl">
@@ -150,6 +160,7 @@
           </div>
           <div class="rounded-xl border border-border bg-secondary p-4">
             <div class="flex flex-wrap gap-2">
+              <button v-if="shouldShowParseRouteProgressEntry" class="rounded-full border border-primary/[0.16] bg-primary/[0.08] px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/[0.12]" type="button" @click="openParseRouteDialog()">查看解析进度</button>
               <button class="rounded-full border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="scrollToWorkbenchSection('strategy')">查看策略配置</button>
               <button class="rounded-full border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="scrollToWorkbenchSection('execution')">前往确认与构建</button>
               <button class="rounded-full border border-border bg-card px-4 py-2 text-sm font-semibold text-foreground hover:bg-secondary" type="button" @click="scrollToWorkbenchSection('chunk')">检查 Chunk 结果</button>
@@ -756,6 +767,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, XMarkIcon, DocumentTextIcon, ClockIcon, ExclamationCircleIcon } from '@heroicons/vue/24/outline'
 import { APIError, manageApi } from '../../api/api'
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge.vue'
+import DocumentParseRouteProgressDialog from '../../components/admin/DocumentParseRouteProgressDialog.vue'
 import { formatCount, formatDateTime, hasCode, normalizeCode } from '../../utils/manageFormat'
 import {
   STRATEGY_LIBRARY,
@@ -818,6 +830,8 @@ const logDrawerOpen = ref(false)
 const chunkDetailDrawerOpen = ref(false)
 const planPollTimer = ref(null)
 const buildPollTimer = ref(null)
+const parseRouteDialogOpen = ref(false)
+const parseRouteDialogTaskId = ref('')
 const buildProgressLatestLogId = ref(null)
 const buildProgressNoticeStage = ref(null)
 const buildTrackerRef = ref(null)
@@ -1274,6 +1288,16 @@ const hasBuildInFlightStatus = computed(() => {
     || taskStatus === '2'
     || hasCode(documentDetail.value?.indexStatus, 2)
     || (hasCode(documentDetail.value?.latestTaskType, 2) && ['1', '2'].includes(normalizeCode(documentDetail.value?.latestTaskStatus)))
+})
+const hasActiveParseRouteTask = computed(() => {
+  return hasCode(documentDetail.value?.latestTaskType, 1)
+    && ['1', '2'].includes(normalizeCode(documentDetail.value?.latestTaskStatus))
+})
+const shouldShowParseRouteProgressEntry = computed(() => {
+  return hasActiveParseRouteTask.value
+    || hasCode(documentDetail.value?.parseStatus, 1)
+    || hasCode(documentDetail.value?.parseStatus, 2)
+    || (!strategyPlan.value?.planReady && hasCode(documentDetail.value?.strategyStatus, 1))
 })
 const showBuildBlockingOverlay = computed(() => hasBuildInFlightStatus.value)
 
@@ -2416,6 +2440,13 @@ function applyRouteWorkbenchFocus() {
   }
 }
 
+function openInitialParseRouteProgressIfNeeded() {
+  const shouldOpenFromRoute = firstQueryValue(route.query?.showParseProgress) === '1'
+  if (shouldOpenFromRoute || shouldShowParseRouteProgressEntry.value) {
+    openParseRouteDialog(firstQueryValue(route.query?.parseTaskId) || '')
+  }
+}
+
 function changeChunkPage(page) {
   if (page < 1 || page > chunkTotalPages.value || page === chunkCurrentPage.value || chunkLoading.value) {
     return
@@ -2566,6 +2597,46 @@ function openParentBlockDetail(group) {
   openChunkDetail(group.items[0].chunkId, 'parent')
 }
 
+function openParseRouteDialog(taskId = '') {
+  parseRouteDialogTaskId.value = taskId
+    || firstQueryValue(route.query?.parseTaskId)
+    || (hasCode(documentDetail.value?.latestTaskType, 1) ? documentDetail.value?.latestTaskId : '')
+    || ''
+  parseRouteDialogOpen.value = true
+}
+
+async function handleParseRouteCompleted(progress) {
+  try {
+    await Promise.all([
+      loadDocumentDetail(),
+      loadStrategyPlan(),
+      loadTaskLogs()
+    ])
+    if (progress?.planReady) {
+      activeWorkbenchSection.value = 'strategy'
+      showNotice('解析与策略推荐完成，已刷新推荐策略。', 'success')
+    }
+  } catch (error) {
+    console.error('刷新解析完成后的文档详情失败', error)
+  }
+}
+
+async function handleParseRouteFailed(progress) {
+  await Promise.allSettled([
+    loadDocumentDetail(),
+    loadTaskLogs()
+  ])
+  showNotice(progress?.errorMsg || '解析与策略推荐失败，请查看任务日志。', 'danger')
+}
+
+async function handleOpenParseRouteStrategy(progress) {
+  parseRouteDialogOpen.value = false
+  await handleParseRouteCompleted(progress)
+  activeWorkbenchSection.value = 'strategy'
+  await nextTick()
+  strategySectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 function openLogDrawer() {
   logDrawerOpen.value = true
   loadTaskLogs()
@@ -2682,13 +2753,19 @@ watch(() => route.params.documentId, async (value, oldValue) => {
   chunkDetail.value = null
   chunkDetailDrawerOpen.value = false
   chunkDetailFocusMode.value = 'chunk'
+  parseRouteDialogOpen.value = false
+  parseRouteDialogTaskId.value = ''
   await loadAll()
   applyRouteWorkbenchFocus()
+  openInitialParseRouteProgressIfNeeded()
   await nextTick()
 })
 
 watch(() => route.query, async () => {
   applyRouteWorkbenchFocus()
+  if (firstQueryValue(route.query?.showParseProgress) === '1') {
+    openParseRouteDialog(firstQueryValue(route.query?.parseTaskId) || '')
+  }
   if (documentId.value) {
     await loadDocumentRagSnapshot()
   }
@@ -2713,8 +2790,9 @@ watch(documentDetail, (value) => {
 onMounted(async () => {
   await loadAll()
   applyRouteWorkbenchFocus()
+  openInitialParseRouteProgressIfNeeded()
   await nextTick()
-  if (!strategyPlan.value?.planReady && normalizeCode(strategyPlan.value?.parseStatus) !== '4') {
+  if (!parseRouteDialogOpen.value && !strategyPlan.value?.planReady && normalizeCode(strategyPlan.value?.parseStatus) !== '4') {
     startPlanPolling()
   }
 })

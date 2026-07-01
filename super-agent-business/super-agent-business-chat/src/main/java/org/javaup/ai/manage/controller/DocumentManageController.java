@@ -9,6 +9,7 @@ import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseRouteProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentRagSnapshotQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
@@ -25,6 +26,7 @@ import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentDeleteVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentParseRouteProgressVo;
 import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
@@ -111,6 +113,12 @@ public class DocumentManageController {
     @PostMapping("/index/build/progress/query")
     public ApiResponse<DocumentIndexBuildProgressVo> queryIndexBuildProgress(@Valid @RequestBody DocumentIndexBuildProgressQueryDto dto) {
         return ApiResponse.ok(documentManageService.queryIndexBuildProgress(dto));
+    }
+
+    @Operation(summary = "查询文档解析与策略推荐轻量进度")
+    @PostMapping("/parse-route/progress/query")
+    public ApiResponse<DocumentParseRouteProgressVo> queryParseRouteProgress(@Valid @RequestBody DocumentParseRouteProgressQueryDto dto) {
+        return ApiResponse.ok(documentManageService.queryParseRouteProgress(dto));
     }
 
     @Operation(summary = "查询文档 chunk 列表")

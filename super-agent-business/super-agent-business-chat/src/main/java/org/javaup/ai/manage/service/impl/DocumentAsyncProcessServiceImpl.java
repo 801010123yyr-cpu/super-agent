@@ -33,6 +33,7 @@ import org.javaup.ai.manage.service.DocumentAsyncProcessService;
 import org.javaup.ai.manage.service.DocumentIndexBuildProgressCacheService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentParseArtifactService;
+import org.javaup.ai.manage.service.DocumentParseRouteProgressCacheService;
 import org.javaup.ai.manage.service.DocumentParserService;
 import org.javaup.ai.manage.service.DocumentProfileService;
 import org.javaup.ai.manage.service.DocumentStorageService;
@@ -132,6 +133,8 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 
     private final DocumentIndexBuildProgressCacheService progressCacheService;
 
+    private final DocumentParseRouteProgressCacheService parseRouteProgressCacheService;
+
     private final DocumentVectorGateway vectorGateway;
 
     private final ObjectProvider<DocumentKeywordSearchGateway> keywordSearchGatewayProvider;
@@ -184,8 +187,9 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 
             document.setParseStatus(DocumentParseStatusEnum.PARSING.getCode());
             documentMapper.updateById(document);
+            parseRouteProgressCacheService.init(document, task);
 
-            taskLogService.saveLog(taskId, documentId,
+            saveParseRouteLog(taskId, documentId,
                 DocumentTaskStageEnum.CONTENT_PARSE.getCode(),
                 DocumentTaskEventTypeEnum.START.getCode(),
                 DocumentLogLevelEnum.INFO.getCode(),
@@ -193,6 +197,17 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                 null,
                 "开始解析文档内容。",
                 Map.of("objectName", document.getObjectName()));
+
+            saveParseRouteLog(taskId, documentId,
+                DocumentTaskStageEnum.CONTENT_PARSE.getCode(),
+                DocumentTaskEventTypeEnum.START.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "解析方式已确定：" + parseModeDescription(document.getFileType()) + "。",
+                detail("parseMode", parseModeCode(document.getFileType()),
+                    "fileType", document.getFileType(),
+                    "fileName", document.getOriginalFileName()));
 
             long downloadStartedNanos = System.nanoTime();
             byte[] fileBytes = storageService.downloadObject(document.getObjectName());
@@ -210,6 +225,23 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             log.info("文档解析服务调用完成，documentId={}, taskId={}, fileName={}, charCount={}, tokenCount={}, blockCount={}, artifactCount={}, structureCandidateCount={}, costMillis={}",
                 documentId, taskId, document.getOriginalFileName(), analysisResult.getCharCount(), analysisResult.getTokenCount(),
                 blockCount, artifactCount, structureCandidateCount, parserCostMillis);
+            saveParseRouteLog(taskId, documentId,
+                DocumentTaskStageEnum.CONTENT_PARSE.getCode(),
+                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "解析器返回结果，block " + blockCount + " 个，artifact " + artifactCount + " 个，结构候选 "
+                    + structureCandidateCount + " 个。",
+                detail(
+                    "parserProviderName", analysisResult.getParserProviderName(),
+                    "parserProviderVersion", analysisResult.getParserProviderVersion(),
+                    "parserTraceMetadata", analysisResult.getParserTraceMetadata(),
+                    "artifactCount", artifactCount,
+                    "blockCount", blockCount,
+                    "structureCandidateCount", structureCandidateCount,
+                    "parserCostMillis", parserCostMillis
+                ));
 
             long parsedTextUploadStartedNanos = System.nanoTime();
             String parseTextPath = storageService.uploadParsedText(documentId, analysisResult.getParsedText());
@@ -245,8 +277,25 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             long profileCostMillis = elapsedMillis(profileStartedNanos);
             log.info("文档画像生成流程完成，documentId={}, taskId={}, costMillis={}",
                 documentId, taskId, profileCostMillis);
+            saveParseRouteLog(taskId, documentId,
+                DocumentTaskStageEnum.CONTENT_PARSE.getCode(),
+                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "解析产物入库完成，已保存 parsed text、artifact、block、structure 和文档画像。",
+                detail(
+                    "parseTextPath", parseTextPath,
+                    "artifactCount", artifactCount,
+                    "blockCount", blockCount,
+                    "structureNodeCount", structureNodeCount,
+                    "artifactPersistCostMillis", artifactPersistCostMillis,
+                    "structurePersistCostMillis", structurePersistCostMillis,
+                    "navigationCostMillis", navigationCostMillis,
+                    "profileCostMillis", profileCostMillis
+                ));
 
-            taskLogService.saveLog(taskId, documentId,
+            saveParseRouteLog(taskId, documentId,
                 DocumentTaskStageEnum.CONTENT_PARSE.getCode(),
                 DocumentTaskEventTypeEnum.COMPLETE.getCode(),
                 DocumentLogLevelEnum.INFO.getCode(),
@@ -279,6 +328,18 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 
             task.setCurrentStage(DocumentTaskStageEnum.STRATEGY_ROUTE.getCode());
             taskMapper.updateById(task);
+            parseRouteProgressCacheService.update(document, task);
+            saveParseRouteLog(taskId, documentId,
+                DocumentTaskStageEnum.STRATEGY_ROUTE.getCode(),
+                DocumentTaskEventTypeEnum.START.getCode(),
+                DocumentLogLevelEnum.INFO.getCode(),
+                DocumentOperatorTypeEnum.SYSTEM.getCode(),
+                null,
+                "开始分析解析结果并生成推荐策略。",
+                detail("blockCount", blockCount,
+                    "structureNodeCount", structureNodeCount,
+                    "charCount", analysisResult.getCharCount(),
+                    "tokenCount", analysisResult.getTokenCount()));
 
             long strategyRecommendStartedNanos = System.nanoTime();
             DocumentStrategyPlanDraft planDraft = strategyService.recommendStrategy(document, analysisResult);
@@ -355,7 +416,7 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             persistParserTraceMetadata(taskId, analysisResult);
 
             finishTaskSuccess(task, DocumentTaskStageEnum.STRATEGY_ROUTE.getCode(), startTime);
-            taskLogService.saveLog(taskId, documentId,
+            saveParseRouteLog(taskId, documentId,
                 DocumentTaskStageEnum.STRATEGY_ROUTE.getCode(),
                 DocumentTaskEventTypeEnum.RECOMMEND_STRATEGY.getCode(),
                 DocumentLogLevelEnum.INFO.getCode(),
@@ -371,7 +432,9 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
                     "recommendReason", planDraft.getRecommendReason(),
                     "strategyRecommendCostMillis", strategyRecommendCostMillis,
                     "strategyPersistCostMillis", strategyPersistCostMillis,
-                    "costMillis", elapsedMillis(parseRouteStartedNanos)));
+                    "costMillis", elapsedMillis(parseRouteStartedNanos)),
+                plan,
+                listSteps(planId));
             log.info("异步解析文档完成，documentId={}, taskId={}, planId={}, charCount={}, tokenCount={}, blockCount={}, structureNodeCount={}, costMillis={}",
                 documentId, taskId, planId, analysisResult.getCharCount(), analysisResult.getTokenCount(),
                 blockCount, structureNodeCount, elapsedMillis(parseRouteStartedNanos));
@@ -388,7 +451,7 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             documentMapper.updateById(document);
 
             failTask(task, startTime, exception, failedStage);
-            taskLogService.saveLog(taskId, documentId,
+            saveParseRouteLog(taskId, documentId,
                 failedStage,
                 DocumentTaskEventTypeEnum.FAILED.getCode(),
                 DocumentLogLevelEnum.ERROR.getCode(),
@@ -1034,6 +1097,37 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
         progressCacheService.update(document, task, taskLog);
     }
 
+    private void saveParseRouteLog(Long taskId,
+                                   Long documentId,
+                                   Integer stageType,
+                                   Integer eventType,
+                                   Integer logLevel,
+                                   Integer operatorType,
+                                   Long operatorId,
+                                   String content,
+                                   Object detail) {
+        saveParseRouteLog(taskId, documentId, stageType, eventType, logLevel, operatorType, operatorId,
+            content, detail, null, List.of());
+    }
+
+    private void saveParseRouteLog(Long taskId,
+                                   Long documentId,
+                                   Integer stageType,
+                                   Integer eventType,
+                                   Integer logLevel,
+                                   Integer operatorType,
+                                   Long operatorId,
+                                   String content,
+                                   Object detail,
+                                   SuperAgentDocumentStrategyPlan plan,
+                                   List<SuperAgentDocumentStrategyStep> steps) {
+        SuperAgentDocumentTaskLog taskLog = taskLogService.saveLog(taskId, documentId, stageType, eventType, logLevel,
+            operatorType, operatorId, content, detail);
+        SuperAgentDocument document = documentMapper.selectById(documentId);
+        SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+        parseRouteProgressCacheService.update(document, task, plan, steps, taskLog);
+    }
+
     private ParentChildEntityBundle buildParentChildEntities(Long documentId,
                                                              Long taskId,
                                                              Long planId,
@@ -1400,6 +1494,28 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             detailMap.put(String.valueOf(keyValues[index]), keyValues[index + 1]);
         }
         return detailMap;
+    }
+
+    private String parseModeCode(Integer fileTypeCode) {
+        DocumentFileTypeEnum fileType = fileTypeCode == null ? null : DocumentFileTypeEnum.getRc(fileTypeCode);
+        if (fileType == DocumentFileTypeEnum.TXT || fileType == DocumentFileTypeEnum.MD || fileType == DocumentFileTypeEnum.HTML) {
+            return "LIGHT_TEXT";
+        }
+        if (fileType == null) {
+            return "UNKNOWN";
+        }
+        return "ALIYUN_DOCMIND";
+    }
+
+    private String parseModeDescription(Integer fileTypeCode) {
+        String parseMode = parseModeCode(fileTypeCode);
+        if ("LIGHT_TEXT".equals(parseMode)) {
+            return "轻量文本解析";
+        }
+        if ("ALIYUN_DOCMIND".equals(parseMode)) {
+            return "阿里云 Document Mind OCR/Layout";
+        }
+        return "未知解析模式";
     }
 
     private void persistParserTraceMetadata(Long taskId, DocumentAnalysisResult analysisResult) {

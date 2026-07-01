@@ -5,6 +5,7 @@ import com.baidu.fsg.uid.UidGenerator;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
@@ -24,6 +25,7 @@ import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseRouteProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyStepItemDto;
@@ -45,6 +47,7 @@ import org.javaup.ai.manage.service.DocumentIndexBuildProgressCacheService;
 import org.javaup.ai.manage.service.DocumentManageService;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentParseArtifactService;
+import org.javaup.ai.manage.service.DocumentParseRouteProgressCacheService;
 import org.javaup.ai.manage.service.DocumentStorageService;
 import org.javaup.ai.manage.service.DocumentStructureGraphProjectionService;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
@@ -65,6 +68,7 @@ import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentParentBlockItemVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentParseRouteProgressVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPipelineVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
@@ -159,6 +163,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
 
     private final DocumentIndexBuildProgressCacheService progressCacheService;
 
+    private final DocumentParseRouteProgressCacheService parseRouteProgressCacheService;
+
     private final DocumentVectorGateway vectorGateway;
 
     private final ObjectProvider<DocumentKeywordSearchGateway> keywordSearchGatewayProvider;
@@ -180,6 +186,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     private final UidGenerator uidGenerator;
 
     private final DocumentManageProperties properties;
+
+    private final ObjectMapper objectMapper;
 
     @Override
     public DocumentUploadVo upload(MultipartFile file, DocumentUploadDto dto) {
@@ -246,7 +254,7 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             documentMapper.insert(document);
             taskMapper.insert(task);
 
-            taskLogService.saveLog(taskId, documentId,
+            SuperAgentDocumentTaskLog uploadLog = taskLogService.saveLog(taskId, documentId,
                 DocumentTaskStageEnum.FILE_UPLOAD.getCode(),
                 DocumentTaskEventTypeEnum.COMPLETE.getCode(),
                 DocumentLogLevelEnum.INFO.getCode(),
@@ -254,6 +262,7 @@ public class DocumentManageServiceImpl implements DocumentManageService {
                 operatorId,
                 "文件上传完成，已进入解析与策略推荐队列。",
                 Map.of("originalFileName", originalFileName, "fileSize", fileBytes.length));
+            parseRouteProgressCacheService.update(document, task, uploadLog);
 
             return new DocumentUploadVo(documentId, taskId, document.getDocumentName(),
                 document.getParseStatus(), document.getStrategyStatus(), document.getIndexStatus());
@@ -793,6 +802,44 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     }
 
     @Override
+    public DocumentParseRouteProgressVo queryParseRouteProgress(DocumentParseRouteProgressQueryDto dto) {
+        DocumentParseRouteProgressVo cachedByTaskId = cachedParseRouteProgress(dto);
+        if (cachedByTaskId != null) {
+            return cachedByTaskId;
+        }
+
+        SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
+        SuperAgentDocumentTask task = dto.getTaskId() == null
+            ? getLatestTask(document.getId(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode())
+            : taskMapper.selectById(dto.getTaskId());
+        if (task != null && (!Objects.equals(task.getDocumentId(), document.getId())
+            || !Objects.equals(task.getStatus(), BusinessStatus.YES.getCode())
+            || !Objects.equals(task.getTaskType(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode()))) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_NOT_FOUND.getCode(), "解析路由任务不存在。");
+        }
+        DocumentParseRouteProgressVo cachedProgress = cachedParseRouteProgress(document, task, dto);
+        if (cachedProgress != null) {
+            return cachedProgress;
+        }
+
+        int logLimit = resolveProgressLogLimit(dto.getLogLimit());
+        List<DocumentTaskLogVo> logs = task == null ? List.of() : listProgressLogs(task.getId(), dto.getSinceLogId(), logLimit);
+        Long totalLogCount = task == null ? 0L : countTaskLogs(task.getId());
+        SuperAgentDocumentStrategyPlan plan = currentPlan(document);
+        List<SuperAgentDocumentStrategyStep> steps = plan == null ? List.of() : listStepByPlanId(plan.getId());
+
+        return DocumentParseRouteProgressAssembler.build(
+            document,
+            task,
+            plan,
+            steps,
+            logs,
+            totalLogCount,
+            objectMapper
+        );
+    }
+
+    @Override
     public DocumentChunkQueryVo queryDocumentChunks(DocumentChunkQueryDto dto) {
         SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
         int pageNo = dto.getPageNo() == null || dto.getPageNo() <= 0 ? 1 : dto.getPageNo();
@@ -1063,6 +1110,54 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         return filtered.subList(filtered.size() - logLimit, filtered.size());
     }
 
+    private DocumentParseRouteProgressVo cachedParseRouteProgress(DocumentParseRouteProgressQueryDto dto) {
+        if (dto == null || dto.getTaskId() == null) {
+            return null;
+        }
+        DocumentParseRouteProgressVo cached = parseRouteProgressCacheService.get(dto.getTaskId());
+        if (cached == null
+            || !Objects.equals(cached.getDocumentId(), dto.getDocumentId())
+            || !Objects.equals(cached.getTaskType(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode())) {
+            return null;
+        }
+        return cachedParseRouteProgress(cached, dto);
+    }
+
+    private DocumentParseRouteProgressVo cachedParseRouteProgress(SuperAgentDocument document,
+                                                                  SuperAgentDocumentTask task,
+                                                                  DocumentParseRouteProgressQueryDto dto) {
+        if (document == null || task == null || task.getId() == null) {
+            return null;
+        }
+        DocumentParseRouteProgressVo cached = parseRouteProgressCacheService.get(task.getId());
+        if (cached == null
+            || !Objects.equals(cached.getDocumentId(), document.getId())
+            || !Objects.equals(cached.getTaskType(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode())) {
+            return null;
+        }
+        return cachedParseRouteProgress(cached, dto);
+    }
+
+    private DocumentParseRouteProgressVo cachedParseRouteProgress(DocumentParseRouteProgressVo cached,
+                                                                  DocumentParseRouteProgressQueryDto dto) {
+        List<DocumentTaskLogVo> filteredLogs = DocumentParseRouteProgressAssembler.filterLogs(
+            cached.getLogs(), dto.getSinceLogId(), resolveProgressLogLimit(dto.getLogLimit())
+        );
+        Long latestLogId = cached.getLatestLogId();
+        if (latestLogId == null) {
+            latestLogId = DocumentParseRouteProgressAssembler.latestLogId(filteredLogs);
+            if (latestLogId == null) {
+                latestLogId = dto.getSinceLogId();
+            }
+        }
+        DocumentParseRouteProgressVo result = new DocumentParseRouteProgressVo();
+        org.springframework.beans.BeanUtils.copyProperties(cached, result);
+        result.setLogs(filteredLogs);
+        result.setLatestLogId(latestLogId);
+        result.setElapsedMillis(DocumentParseRouteProgressAssembler.cachedElapsedMillis(cached));
+        return result;
+    }
+
     private Long countTaskLogs(Long taskId) {
         if (taskId == null) {
             return 0L;
@@ -1077,6 +1172,17 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             ? 60 : properties.getIndexBuild().getProgressLogLimit();
         int limit = requestedLimit == null || requestedLimit <= 0 ? configured : requestedLimit;
         return Math.max(1, Math.min(limit, 200));
+    }
+
+    private SuperAgentDocumentStrategyPlan currentPlan(SuperAgentDocument document) {
+        if (document == null || document.getCurrentPlanId() == null) {
+            return null;
+        }
+        SuperAgentDocumentStrategyPlan plan = planMapper.selectById(document.getCurrentPlanId());
+        if (plan == null || !Objects.equals(plan.getStatus(), BusinessStatus.YES.getCode())) {
+            return null;
+        }
+        return plan;
     }
 
     private Long resolveElapsedMillis(SuperAgentDocumentTask task) {
