@@ -120,7 +120,7 @@
               <ArrowDownTrayIcon class="h-4 w-4" />
               {{ artifactDownloadLoading ? '下载中' : '下载' }}
             </button>
-            <button class="grid h-9 w-9 place-items-center rounded-md border border-border bg-card text-foreground hover:bg-secondary" type="button" @click="closeArtifactPreviewDrawer"><XMarkIcon class="h-4 w-4" /></button>
+            <button class="grid h-9 w-9 place-items-center rounded-md border border-border bg-card text-foreground hover:bg-secondary" type="button" aria-label="关闭解析产物预览" @click="closeArtifactPreviewDrawer"><XMarkIcon class="h-4 w-4" /></button>
           </div>
         </div>
         <div v-if="artifactContentLoading" class="flex-1 py-8 text-center text-sm text-muted-foreground">正在加载解析产物...</div>
@@ -650,6 +650,420 @@
               </div>
             </section>
 
+            <section v-if="pageOverlays.length" ref="pageOverlaySectionRef" class="rounded-lg border border-border bg-card p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">页面定位</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">按 PAGE_IMAGE 页面底图查看 block 和 table 的 bbox 覆盖层，支持从样例卡片反向定位。</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ pageOverlays.length }} 页</span>
+                  <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ pageOverlayTotalCount }} 个 overlay</span>
+                  <button v-if="selectedPageOverlay?.pageImageArtifactId" class="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="artifactContentLoading" @click="openPageOverlayArtifact(selectedPageOverlay)">
+                    <EyeIcon class="h-4 w-4" />
+                    查看页面图片
+                  </button>
+                </div>
+              </div>
+
+              <div class="grid gap-3 xl:grid-cols-[190px_minmax(0,1fr)_300px]">
+                <aside class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-3">
+                    <strong class="mb-2 block text-xs text-foreground">页码</strong>
+                    <div class="grid max-h-56 gap-1.5 overflow-y-auto pr-1">
+                      <button v-for="page in pageOverlays" :key="`page-overlay-tab-${page.pageNo}`"
+                        class="flex items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors"
+                        :class="normalizeCode(selectedPageOverlayNo) === normalizeCode(page.pageNo) ? 'border-primary bg-primary/[0.08] text-primary' : 'border-border bg-card text-foreground hover:border-primary/30'"
+                        type="button"
+                        @click="selectPageOverlay(page.pageNo)">
+                        <span class="font-semibold">第 {{ displayPageOverlayNo(page) }} 页</span>
+                        <span class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{{ asArray(page.overlays).length }}</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <strong class="mb-2 block text-xs text-foreground">类型筛选</strong>
+                    <div class="flex flex-wrap gap-1.5">
+                      <button v-for="option in PAGE_OVERLAY_TYPE_OPTIONS" :key="`page-overlay-type-${option.type}`"
+                        class="inline-flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-[11px] font-semibold transition-colors"
+                        :class="pageOverlayTypeButtonClass(option.type)"
+                        type="button"
+                        @click="togglePageOverlayType(option.type)">
+                        <span class="h-2 w-2 rounded-full" :class="pageOverlayTypeDotClass(option.type)"></span>
+                        {{ option.label }}
+                        <span class="font-normal opacity-75">{{ pageOverlayTypeCount(option.type) }}</span>
+                      </button>
+                    </div>
+                  </div>
+                </aside>
+
+                <div class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>当前第 {{ displayPageOverlayNo(selectedPageOverlay) }} 页</span>
+                      <span>{{ filteredPageOverlayRegions.length }} / {{ asArray(selectedPageOverlay?.overlays).length }} 个 overlay</span>
+                      <span v-if="selectedPageOverlay?.pageWidth && selectedPageOverlay?.pageHeight">{{ formatDecimal(selectedPageOverlay.pageWidth) }} x {{ formatDecimal(selectedPageOverlay.pageHeight) }}</span>
+                    </div>
+                    <span v-if="selectedOverlayRegion" class="rounded-full bg-primary/[0.08] px-2.5 py-1 text-[11px] font-semibold text-primary">{{ selectedOverlayRegion.label || selectedOverlayRegion.overlayId }}</span>
+                  </div>
+                  <div v-if="pageOverlayImageLoading" class="grid min-h-[360px] place-items-center rounded-md border border-dashed border-border bg-card text-sm text-muted-foreground">正在读取页面底图...</div>
+                  <div v-else-if="pageOverlayImageSrc" class="max-h-[72vh] overflow-auto rounded-md border border-border bg-card p-3">
+                    <div class="relative mx-auto w-full max-w-[860px] overflow-hidden rounded border border-border bg-white shadow-sm" :style="{ aspectRatio: pageOverlayAspectRatio }">
+                      <img class="absolute inset-0 h-full w-full object-fill" :src="pageOverlayImageSrc" :alt="`第 ${displayPageOverlayNo(selectedPageOverlay)} 页页面图像`" />
+                      <button v-for="region in filteredPageOverlayRegions" :key="region.overlayId"
+                        class="absolute rounded-[2px] border-2 outline-none transition-colors focus:ring-2 focus:ring-ring/40"
+                        :class="pageOverlayRegionClass(region)"
+                        :style="pageOverlayRegionStyle(region)"
+                        type="button"
+                        :title="pageOverlayRegionTitle(region)"
+                        :aria-label="pageOverlayRegionTitle(region)"
+                        @click="selectOverlayRegion(region)">
+                      </button>
+                    </div>
+                  </div>
+                  <div v-else class="grid min-h-[360px] place-items-center rounded-md border border-dashed border-border bg-card px-4 text-center text-sm text-muted-foreground">当前页没有可加载的 PAGE_IMAGE 底图，overlay 元数据仍可在右侧查看。</div>
+                </div>
+
+                <aside class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">当前页 overlay</strong>
+                    <span class="text-[11px] text-muted-foreground">{{ filteredPageOverlayRegions.length }} 条</span>
+                  </div>
+                  <div v-if="!filteredPageOverlayRegions.length" class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前筛选条件下没有 overlay。</div>
+                  <div v-else class="grid max-h-[72vh] gap-2 overflow-y-auto pr-1">
+                    <button v-for="region in filteredPageOverlayRegions" :key="`page-overlay-row-${region.overlayId}`"
+                      class="rounded-md border p-2.5 text-left transition-colors"
+                      :class="selectedOverlayId === region.overlayId ? 'border-primary bg-primary/[0.08]' : 'border-border bg-card hover:border-primary/30'"
+                      type="button"
+                      @click="selectOverlayRegion(region)">
+                      <div class="mb-1 flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <strong class="block truncate text-xs text-foreground">{{ region.label || region.overlayId }}</strong>
+                          <span class="text-[11px] text-muted-foreground">{{ region.sectionPath || region.source || '-' }}</span>
+                        </div>
+                        <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="pageOverlayTypeBadgeClass(region.type)">{{ pageOverlayTypeLabel(region.type) }}</span>
+                      </div>
+                      <p class="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{{ region.textPreview || region.bboxJson || '暂无预览' }}</p>
+                    </button>
+                  </div>
+                </aside>
+              </div>
+            </section>
+
+            <section v-if="artifactGraphNodes.length" class="rounded-lg border border-border bg-card p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">RAG 产物联动图</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">从解析块、父块、子块一路看到表格、KG evidence 和 RAPTOR 摘要来源。</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span v-for="metric in artifactGraphMetrics" :key="`artifact-graph-metric-${metric.label}`" class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ metric.label }} {{ metric.value }}</span>
+                </div>
+              </div>
+              <div class="grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
+                <div class="grid gap-3">
+                  <article v-for="group in artifactGraphNodeGroups" :key="`artifact-graph-group-${group.type}`" class="rounded-md border border-border bg-secondary p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <div class="flex items-center gap-2">
+                        <span class="h-2.5 w-2.5 rounded-full" :class="group.tone"></span>
+                        <strong class="text-xs text-foreground">{{ group.label }}</strong>
+                      </div>
+                      <span class="text-[11px] text-muted-foreground">{{ formatCount(group.items.length) }} / {{ formatCount(artifactGraphTypeCount(group.type)) }}</span>
+                    </div>
+                    <div class="grid gap-2" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr))">
+                      <button v-for="node in group.items" :key="`artifact-graph-node-${node.nodeId}`"
+                        class="min-h-[92px] rounded-md border p-2.5 text-left transition-colors"
+                        :class="normalizeCode(selectedArtifactGraphNode?.nodeId) === normalizeCode(node.nodeId) ? 'border-primary bg-primary/[0.08]' : 'border-border bg-card hover:border-primary/30'"
+                        type="button"
+                        @click="selectArtifactGraphNode(node)">
+                        <div class="mb-1 flex items-start justify-between gap-2">
+                          <strong class="line-clamp-1 text-xs text-foreground">{{ node.label || node.nodeId }}</strong>
+                          <span class="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ artifactGraphNodeTypeLabel(node.nodeType) }}</span>
+                        </div>
+                        <p class="line-clamp-1 text-[11px] text-muted-foreground">{{ node.subtitle || node.sectionPath || '-' }}</p>
+                        <p class="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{{ node.textPreview || node.pageRange || '暂无预览' }}</p>
+                      </button>
+                    </div>
+                  </article>
+                </div>
+                <aside class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-3 flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <strong class="block truncate text-sm text-foreground">{{ selectedArtifactGraphNode?.label || '未选择节点' }}</strong>
+                      <p class="mt-0.5 text-xs text-muted-foreground">{{ artifactGraphNodeTypeLabel(selectedArtifactGraphNode?.nodeType) }} · {{ selectedArtifactGraphNode?.sectionPath || selectedArtifactGraphNode?.subtitle || '-' }}</p>
+                    </div>
+                    <button v-if="selectedArtifactGraphNode?.overlayId" class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="focusPageOverlay(selectedArtifactGraphNode.overlayId, selectedArtifactGraphNode.pageNo)">
+                      <MagnifyingGlassIcon class="h-3.5 w-3.5" />
+                      定位
+                    </button>
+                  </div>
+                  <div v-if="selectedArtifactGraphNode" class="mb-3 grid gap-1.5 rounded-md border border-border bg-card p-3 text-xs">
+                    <p class="text-muted-foreground">节点 ID：<span class="text-foreground">{{ selectedArtifactGraphNode.nodeId }}</span></p>
+                    <p class="text-muted-foreground">来源 ID：<span class="text-foreground">{{ selectedArtifactGraphNode.sourceId || '-' }}</span></p>
+                    <p class="text-muted-foreground">页码范围：<span class="text-foreground">{{ selectedArtifactGraphNode.pageRange || valueOrDash(selectedArtifactGraphNode.pageNo) }}</span></p>
+                    <p class="line-clamp-4 text-muted-foreground">预览：<span class="text-foreground">{{ selectedArtifactGraphNode.textPreview || '-' }}</span></p>
+                  </div>
+                  <div>
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <strong class="text-xs text-foreground">相邻关系</strong>
+                      <span class="text-[11px] text-muted-foreground">{{ formatCount(selectedArtifactGraphEdges.length) }} 条</span>
+                    </div>
+                    <div v-if="selectedArtifactGraphNeighbors.length" class="grid max-h-[420px] gap-2 overflow-y-auto pr-1">
+                      <button v-for="item in selectedArtifactGraphNeighbors" :key="`artifact-neighbor-${item.edge.edgeId}`" class="rounded-md border border-border bg-card p-2.5 text-left hover:border-primary/30" type="button" @click="selectArtifactGraphNode(item.node)">
+                        <div class="mb-1 flex items-center justify-between gap-2">
+                          <strong class="line-clamp-1 text-xs text-foreground">{{ item.node.label }}</strong>
+                          <span class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{{ item.direction === 'out' ? '下游' : '上游' }}</span>
+                        </div>
+                        <p class="line-clamp-1 text-[11px] text-muted-foreground">{{ item.edge.label || item.edge.edgeType }} · {{ artifactGraphNodeTypeLabel(item.node.nodeType) }}</p>
+                      </button>
+                    </div>
+                    <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前节点没有相邻关系样例。</p>
+                  </div>
+                </aside>
+              </div>
+            </section>
+
+            <section v-if="kgGraphNodes.length || kgGraphEdges.length || kgGraphEvidences.length" class="rounded-lg border border-border bg-card p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">GraphRAG 图谱</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">展示当前文档 KG 实体、关系、社区和证据；没有关系时仍保留实体与 evidence。</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span v-for="metric in kgGraphMetrics" :key="`kg-graph-metric-${metric.label}`" class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ metric.label }} {{ metric.value }}</span>
+                </div>
+              </div>
+              <div class="mb-3 flex flex-wrap gap-2">
+                <select v-model="selectedKgEntityType" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in kgEntityTypeOptions" :key="`kg-type-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+                <select v-model="selectedKgCommunityFilter" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in kgCommunityOptions" :key="`kg-community-filter-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+                <select v-model="selectedKgQualityLevel" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in kgQualityLevelOptions" :key="`kg-quality-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+              </div>
+              <div class="grid gap-3 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+                <div class="grid gap-3">
+                  <div class="rounded-md border border-border bg-secondary p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <strong class="text-xs text-foreground">实体节点</strong>
+                      <span class="text-[11px] text-muted-foreground">{{ formatCount(filteredKgGraphNodes.length) }} / {{ formatCount(kgGraphNodes.length) }}</span>
+                    </div>
+                    <div v-if="filteredKgGraphNodes.length" class="grid max-h-[430px] gap-2 overflow-y-auto pr-1" style="grid-template-columns:repeat(auto-fill,minmax(210px,1fr))">
+                      <button v-for="node in filteredKgGraphNodes" :key="`kg-node-${node.nodeId}`"
+                        class="rounded-md border p-2.5 text-left transition-colors"
+                        :class="normalizeCode(selectedKgGraphNode?.nodeId) === normalizeCode(node.nodeId) && !selectedKgGraphEdge ? 'border-primary bg-primary/[0.08]' : 'border-border bg-card hover:border-primary/30'"
+                        type="button"
+                        @click="selectKgGraphNode(node)">
+                        <div class="mb-1 flex items-start justify-between gap-2">
+                          <strong class="line-clamp-1 text-xs text-foreground">{{ node.name || node.nodeId }}</strong>
+                          <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="kgQualityClass(node.qualityLevel)">{{ kgQualityLabel(node.qualityLevel) }}</span>
+                        </div>
+                        <p class="line-clamp-1 text-[11px] text-muted-foreground">{{ node.entityType || '未分类实体' }} · evidence {{ formatCount(node.evidenceCount) }}</p>
+                        <p class="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">{{ node.description || '暂无描述' }}</p>
+                      </button>
+                    </div>
+                    <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前筛选条件下没有实体。</p>
+                  </div>
+                  <div class="rounded-md border border-border bg-secondary p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <strong class="text-xs text-foreground">关系边</strong>
+                      <span class="text-[11px] text-muted-foreground">{{ formatCount(filteredKgGraphEdges.length) }} / {{ formatCount(kgGraphEdges.length) }}</span>
+                    </div>
+                    <div v-if="filteredKgGraphEdges.length" class="grid gap-2">
+                      <button v-for="edge in filteredKgGraphEdges.slice(0, 20)" :key="`kg-edge-${edge.edgeId}`"
+                        class="rounded-md border p-2.5 text-left transition-colors"
+                        :class="normalizeCode(selectedKgGraphEdge?.edgeId) === normalizeCode(edge.edgeId) ? 'border-primary bg-primary/[0.08]' : 'border-border bg-card hover:border-primary/30'"
+                        type="button"
+                        @click="selectKgGraphEdge(edge)">
+                        <div class="mb-1 flex items-center justify-between gap-2">
+                          <strong class="line-clamp-1 text-xs text-foreground">{{ kgEntityName(edge.sourceEntityId) }} -> {{ kgEntityName(edge.targetEntityId) }}</strong>
+                          <span class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{{ edge.relationType || 'relation' }}</span>
+                        </div>
+                        <p class="line-clamp-1 text-[11px] text-muted-foreground">权重 {{ edge.weight || '-' }} · evidence {{ formatCount(edge.evidenceCount) }} · {{ kgQualityLabel(edge.qualityLevel) }}</p>
+                      </button>
+                    </div>
+                    <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前没有真实关系边；实体和 evidence 仍可用于排查抽取结果。</p>
+                  </div>
+                </div>
+                <aside class="grid gap-3">
+                  <div class="rounded-md border border-border bg-secondary p-3">
+                    <div class="mb-2 flex items-start justify-between gap-2">
+                      <div class="min-w-0">
+                        <strong class="block truncate text-sm text-foreground">{{ selectedKgGraphEdge ? '关系证据' : (selectedKgGraphNode?.name || '实体证据') }}</strong>
+                        <p class="mt-0.5 text-xs text-muted-foreground">
+                          <template v-if="selectedKgGraphEdge">{{ kgEntityName(selectedKgGraphEdge.sourceEntityId) }} -> {{ kgEntityName(selectedKgGraphEdge.targetEntityId) }} · {{ selectedKgGraphEdge.relationType || 'relation' }}</template>
+                          <template v-else>{{ selectedKgGraphNode?.entityType || '-' }} · {{ kgQualityLabel(selectedKgGraphNode?.qualityLevel) }}</template>
+                        </p>
+                      </div>
+                      <span class="shrink-0 rounded-full bg-card px-2 py-0.5 text-[11px] text-muted-foreground">{{ formatCount(selectedKgGraphEvidences.length) }} evidence</span>
+                    </div>
+                    <div v-if="selectedKgGraphEvidences.length" class="grid max-h-[430px] gap-2 overflow-y-auto pr-1">
+                      <article v-for="evidence in selectedKgGraphEvidences" :key="`kg-evidence-${evidence.evidenceId}`" class="rounded-md border border-border bg-card p-2.5">
+                        <div class="mb-1 flex items-start justify-between gap-2">
+                          <strong class="text-xs text-foreground">Evidence #{{ evidence.evidenceId || '-' }}</strong>
+                          <div class="flex shrink-0 gap-1">
+                            <button v-if="evidence.chunkId" class="rounded border border-border bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-card" type="button" @click="openChunkDetail(evidence.chunkId)">Chunk</button>
+                            <button v-if="evidence.bboxJson" class="rounded border border-border bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground hover:bg-card" type="button" @click="focusKgEvidenceOverlay(evidence)">定位</button>
+                          </div>
+                        </div>
+                        <p class="line-clamp-3 text-[11px] leading-4 text-muted-foreground">{{ evidence.quoteText || '暂无 quoteText' }}</p>
+                        <p class="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{{ compactList([evidence.sectionPath, evidence.pageRange, evidence.sourceType, evidence.grounded === true ? 'grounded' : '']).join(' · ') }}</p>
+                      </article>
+                    </div>
+                    <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前选择没有 evidence 样例。</p>
+                  </div>
+                  <div class="rounded-md border border-border bg-secondary p-3">
+                    <div class="mb-2 flex items-center justify-between gap-2">
+                      <strong class="text-xs text-foreground">Community report</strong>
+                      <span class="text-[11px] text-muted-foreground">{{ formatCount(kgGraphCommunities.length) }} 个</span>
+                    </div>
+                    <div v-if="kgGraphCommunities.length" class="grid gap-2">
+                      <button v-for="community in kgGraphCommunities.slice(0, 8)" :key="`kg-community-${community.communityId}`"
+                        class="rounded-md border p-2.5 text-left transition-colors"
+                        :class="normalizeCode(selectedKgGraphCommunity?.communityId) === normalizeCode(community.communityId) ? 'border-primary bg-primary/[0.08]' : 'border-border bg-card hover:border-primary/30'"
+                        type="button"
+                        @click="selectKgGraphCommunity(community)">
+                        <div class="mb-1 flex items-start justify-between gap-2">
+                          <strong class="line-clamp-1 text-xs text-foreground">{{ community.title || `社区 #${valueOrDash(community.communityNo)}` }}</strong>
+                          <span class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">rank {{ community.rankScore || '-' }}</span>
+                        </div>
+                        <p class="line-clamp-2 text-[11px] text-muted-foreground">{{ community.summary || '暂无社区摘要' }}</p>
+                        <p class="mt-1 text-[11px] text-muted-foreground">实体 {{ formatCount(community.entityCount) }} · 关系 {{ formatCount(community.relationCount) }} · 证据 {{ formatCount(community.evidenceCount) }}</p>
+                      </button>
+                    </div>
+                    <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前文档还没有 community report。</p>
+                  </div>
+                </aside>
+              </div>
+            </section>
+
+            <section v-if="raptorTreeNodes.length" class="rounded-lg border border-border bg-card p-4">
+              <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+                <div>
+                  <h3 class="text-sm font-semibold text-foreground">RAPTOR 摘要树</h3>
+                  <p class="mt-0.5 text-xs text-muted-foreground">按层级查看摘要节点，选中节点后下钻到 source chunks 和 ParentBlock。</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <span v-for="metric in raptorTreeMetrics" :key="`raptor-tree-metric-${metric.label}`" class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ metric.label }} {{ metric.value }}</span>
+                </div>
+              </div>
+              <div class="mb-3 flex flex-wrap gap-2">
+                <select v-model="selectedRaptorQualityLevel" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in raptorQualityLevelOptions" :key="`raptor-filter-quality-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+                <select v-model="selectedRaptorSummaryStatus" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in raptorSummaryStatusOptions" :key="`raptor-filter-status-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+                <select v-model="selectedRaptorSummaryStrategy" class="h-9 rounded-md border border-border bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+                  <option v-for="option in raptorSummaryStrategyOptions" :key="`raptor-filter-strategy-${option.value}`" :value="option.value">{{ option.label }}</option>
+                </select>
+              </div>
+              <div class="grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(330px,0.95fr)]">
+                <div class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <strong class="text-xs text-foreground">层级树</strong>
+                    <span class="text-[11px] text-muted-foreground">{{ formatCount(filteredRaptorTreeNodes.length) }} / {{ formatCount(raptorTreeNodes.length) }}</span>
+                  </div>
+                  <div v-if="raptorTreeLevelGroups.length" class="grid max-h-[620px] gap-3 overflow-y-auto pr-1">
+                    <article v-for="group in raptorTreeLevelGroups" :key="`raptor-level-group-${group.label}`" class="rounded-md border border-border bg-card p-3">
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <strong class="text-xs text-foreground">{{ group.label }}</strong>
+                        <span class="text-[11px] text-muted-foreground">{{ formatCount(group.items.length) }} 节点</span>
+                      </div>
+                      <div class="grid gap-2">
+                        <button v-for="node in group.items" :key="`raptor-tree-node-${node.nodeId}`"
+                          class="rounded-md border p-2.5 text-left transition-colors"
+                          :class="normalizeCode(selectedRaptorTreeNode?.nodeId) === normalizeCode(node.nodeId) ? 'border-primary bg-primary/[0.08]' : 'border-border bg-secondary hover:border-primary/30'"
+                          type="button"
+                          @click="selectRaptorTreeNode(node)">
+                          <div class="mb-1 flex items-start justify-between gap-2">
+                            <strong class="line-clamp-1 text-xs text-foreground">{{ node.title || `RAPTOR N#${valueOrDash(node.nodeNo)}` }}</strong>
+                            <span class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="raptorNodeQualityClass(node.qualityLevel)">{{ raptorNodeQualityLabel(node.qualityLevel) || valueOrDash(node.qualityLevel) }}</span>
+                          </div>
+                          <p class="line-clamp-2 text-[11px] leading-4 text-muted-foreground">{{ node.summary || '暂无摘要' }}</p>
+                          <p class="mt-1 text-[11px] text-muted-foreground">{{ raptorScopeLabel(node.scopeType) }} · source chunk {{ formatCount(node.sourceChunkCount) }} · child {{ formatCount(node.childNodeCount) }}</p>
+                        </button>
+                      </div>
+                    </article>
+                  </div>
+                  <p v-else class="rounded-md border border-dashed border-border bg-card py-5 text-center text-xs text-muted-foreground">当前筛选条件下没有 RAPTOR 节点。</p>
+                </div>
+                <aside class="rounded-md border border-border bg-secondary p-3">
+                  <div class="mb-3 flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <strong class="block truncate text-sm text-foreground">{{ selectedRaptorTreeNode?.title || '未选择摘要节点' }}</strong>
+                      <p class="mt-0.5 text-xs text-muted-foreground">{{ selectedRaptorTreeNode ? `${raptorScopeLabel(selectedRaptorTreeNode.scopeType)} · L${valueOrDash(selectedRaptorTreeNode.nodeLevel)} · N#${valueOrDash(selectedRaptorTreeNode.nodeNo)}` : '-' }}</p>
+                    </div>
+                    <span v-if="selectedRaptorTreeNode" class="shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="raptorNodeQualityClass(selectedRaptorTreeNode.qualityLevel)">{{ raptorNodeQualityLabel(selectedRaptorTreeNode.qualityLevel) || valueOrDash(selectedRaptorTreeNode.qualityLevel) }}</span>
+                  </div>
+                  <div v-if="selectedRaptorTreeNode" class="grid gap-3">
+                    <div class="rounded-md border border-border bg-card p-3">
+                      <div class="mb-2 flex items-center justify-between gap-2 text-xs">
+                        <span class="text-muted-foreground">摘要质量</span>
+                        <strong class="text-foreground">{{ formatPercent(selectedRaptorTreeNode.qualityScore) }}</strong>
+                      </div>
+                      <div class="mb-2 h-1.5 overflow-hidden rounded-full bg-secondary">
+                        <div class="h-full rounded-full" :class="raptorNodeQualityBarClass(selectedRaptorTreeNode.qualityLevel)" :style="{ width: qualityBarWidth(selectedRaptorTreeNode.qualityScore) }"></div>
+                      </div>
+                      <p v-if="selectedRaptorTreeNode.qualityRisk" class="text-[11px] leading-4 text-muted-foreground">{{ selectedRaptorTreeNode.qualityRisk }}</p>
+                      <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span v-for="chip in raptorTreeNodeChips(selectedRaptorTreeNode)" :key="`selected-raptor-chip-${chip}`" class="rounded-full bg-secondary px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
+                      </div>
+                    </div>
+                    <div class="rounded-md border border-border bg-card p-3">
+                      <strong class="mb-1 block text-xs text-foreground">摘要内容</strong>
+                      <p class="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{{ selectedRaptorTreeNode.summary || '暂无摘要' }}</p>
+                      <p v-if="selectedRaptorTreeNode.treePath" class="mt-2 line-clamp-2 text-[11px] text-muted-foreground">树路径：{{ selectedRaptorTreeNode.treePath }}</p>
+                    </div>
+                    <div class="grid gap-2 md:grid-cols-2">
+                      <div class="rounded-md border border-border bg-card p-3">
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                          <strong class="text-xs text-foreground">Source chunks</strong>
+                          <span class="text-[11px] text-muted-foreground">{{ formatCount(asArray(selectedRaptorTreeNode.sourceChunks).length) }}</span>
+                        </div>
+                        <div v-if="asArray(selectedRaptorTreeNode.sourceChunks).length" class="grid max-h-56 gap-2 overflow-y-auto pr-1">
+                          <button v-for="chunk in asArray(selectedRaptorTreeNode.sourceChunks)" :key="`raptor-tree-source-chunk-${chunk.chunkId}`" class="rounded-md border border-border bg-secondary p-2 text-left hover:border-primary/30" type="button" @click="openChunkDetail(chunk.chunkId)">
+                            <span class="block text-xs font-semibold text-foreground">C#{{ valueOrDash(chunk.chunkNo) }} · {{ chunk.sectionPath || '未识别章节' }}</span>
+                            <span class="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{{ chunk.textPreview || '暂无原文预览' }}</span>
+                          </button>
+                        </div>
+                        <p v-else class="text-xs text-muted-foreground">暂无 source chunk 样例。</p>
+                      </div>
+                      <div class="rounded-md border border-border bg-card p-3">
+                        <div class="mb-2 flex items-center justify-between gap-2">
+                          <strong class="text-xs text-foreground">Source parents</strong>
+                          <span class="text-[11px] text-muted-foreground">{{ formatCount(asArray(selectedRaptorTreeNode.sourceParentBlocks).length) }}</span>
+                        </div>
+                        <div v-if="asArray(selectedRaptorTreeNode.sourceParentBlocks).length" class="grid max-h-56 gap-2 overflow-y-auto pr-1">
+                          <article v-for="parent in asArray(selectedRaptorTreeNode.sourceParentBlocks)" :key="`raptor-tree-source-parent-${parent.parentBlockId}`" class="rounded-md border border-border bg-secondary p-2">
+                            <span class="block text-xs font-semibold text-foreground">P#{{ valueOrDash(parent.parentNo) }} · {{ parent.sectionPath || '未识别章节' }}</span>
+                            <span class="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{{ parent.textPreview || '暂无父块预览' }}</span>
+                          </article>
+                        </div>
+                        <p v-else class="text-xs text-muted-foreground">暂无 source parent 样例。</p>
+                      </div>
+                    </div>
+                    <div class="rounded-md border border-border bg-card p-3">
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <strong class="text-xs text-foreground">下级摘要节点</strong>
+                        <span class="text-[11px] text-muted-foreground">{{ formatCount(selectedRaptorTreeChildren.length) }}</span>
+                      </div>
+                      <div v-if="selectedRaptorTreeChildren.length" class="grid gap-2">
+                        <button v-for="child in selectedRaptorTreeChildren" :key="`raptor-tree-child-${child.nodeId}`" class="rounded-md border border-border bg-secondary p-2 text-left hover:border-primary/30" type="button" @click="selectRaptorTreeNode(child)">
+                          <span class="block text-xs font-semibold text-foreground">L{{ valueOrDash(child.nodeLevel) }} · {{ child.title || `N#${valueOrDash(child.nodeNo)}` }}</span>
+                          <span class="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{{ child.summary || '-' }}</span>
+                        </button>
+                      </div>
+                      <p v-else class="text-xs text-muted-foreground">当前节点没有下级摘要节点，或下级节点被筛选条件隐藏。</p>
+                    </div>
+                  </div>
+                </aside>
+              </div>
+            </section>
+
             <section v-if="raptorQualityReport" class="rounded-lg border p-4" :class="raptorQualityPanelClass(raptorQualityReport.qualityLevel)">
               <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
                 <div>
@@ -749,6 +1163,10 @@
                       <p class="mt-0.5 text-xs text-muted-foreground">{{ record.subtitle }}</p>
                     </div>
                     <div class="flex flex-wrap gap-1.5">
+                      <button v-if="record.canLocate" class="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click.stop="focusPageOverlay(record.overlayId, record.pageNo)">
+                        <MagnifyingGlassIcon class="h-3.5 w-3.5" />
+                        定位
+                      </button>
                       <span v-for="chip in record.chips.filter(Boolean).slice(0,4)" :key="`${section.key}-${index}-chip-${chip}`" class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
                     </div>
                   </div>
@@ -873,9 +1291,15 @@
               </div>
               <div v-else class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
                 <article v-for="(record, index) in section.records" :key="`${section.key}-${index}`" class="grid gap-2 rounded-lg border border-border bg-secondary p-3">
-                  <div>
-                    <strong class="block text-[13px] text-foreground">{{ record.title }}</strong>
-                    <p class="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{{ record.subtitle }}</p>
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <strong class="block truncate text-[13px] text-foreground">{{ record.title }}</strong>
+                      <p class="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{{ record.subtitle }}</p>
+                    </div>
+                    <button v-if="record.canLocate" class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click.stop="focusPageOverlay(record.overlayId, record.pageNo)">
+                      <MagnifyingGlassIcon class="h-3.5 w-3.5" />
+                      定位
+                    </button>
                   </div>
                   <div v-if="record.chips?.length" class="flex flex-wrap gap-1.5">
                     <span v-for="chip in record.chips.filter(Boolean).slice(0,4)" :key="`${section.key}-${index}-chip-${chip}`" class="rounded-full bg-card px-2 py-0.5 text-[11px] text-foreground">{{ chip }}</span>
@@ -940,6 +1364,14 @@ const DEFAULT_CHUNK_PAGE_SIZE = 20
 const CHUNK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 const WORKBENCH_SECTION_KEYS = ['overview', 'strategy', 'execution', 'chunk', 'rag', 'tasks']
 const ARTIFACT_PREVIEW_LIMIT = 12000
+const PAGE_OVERLAY_TYPE_OPTIONS = [
+  { type: 'TITLE', label: '标题' },
+  { type: 'TEXT', label: '正文' },
+  { type: 'TABLE', label: '表格' },
+  { type: 'FIGURE', label: '图示' },
+  { type: 'IMAGE', label: '图片' }
+]
+const DEFAULT_PAGE_OVERLAY_TYPES = PAGE_OVERLAY_TYPE_OPTIONS.map((item) => item.type)
 
 const strategyLibrary = STRATEGY_LIBRARY
 const strategyPipelineLibrary = STRATEGY_PIPELINE_LIBRARY
@@ -968,6 +1400,7 @@ const buildTaskSnapshot = ref(null)
 const ragSnapshot = ref(null)
 const parseArtifactQuery = ref(null)
 const artifactContent = ref(null)
+const pageOverlayImageContent = ref(null)
 const chunkQuery = ref(null)
 const chunkDetail = ref(null)
 const chunkDisplayMode = ref('grouped')
@@ -985,11 +1418,27 @@ const ragSnapshotLoading = ref(false)
 const parseArtifactsLoading = ref(false)
 const artifactContentLoading = ref(false)
 const artifactDownloadLoading = ref(false)
+const pageOverlayImageLoading = ref(false)
 const logDrawerOpen = ref(false)
 const chunkDetailDrawerOpen = ref(false)
 const artifactPreviewDrawerOpen = ref(false)
 const artifactPreviewCollapsed = ref(false)
 const artifactSearchKeyword = ref('')
+const selectedPageOverlayNo = ref(null)
+const selectedOverlayTypes = ref([...DEFAULT_PAGE_OVERLAY_TYPES])
+const selectedOverlayId = ref('')
+const selectedArtifactGraphNodeId = ref('')
+const selectedKgGraphNodeId = ref('')
+const selectedKgGraphEdgeId = ref('')
+const selectedKgGraphCommunityId = ref('')
+const selectedKgEntityType = ref('ALL')
+const selectedKgQualityLevel = ref('ALL')
+const selectedKgCommunityFilter = ref('ALL')
+const selectedRaptorTreeNodeId = ref('')
+const selectedRaptorQualityLevel = ref('ALL')
+const selectedRaptorSummaryStatus = ref('ALL')
+const selectedRaptorSummaryStrategy = ref('ALL')
+const pageOverlayImageRequestSeq = ref(0)
 const planPollTimer = ref(null)
 const buildPollTimer = ref(null)
 const parseRouteDialogOpen = ref(false)
@@ -1003,6 +1452,7 @@ const strategySectionRef = ref(null)
 const executionSectionRef = ref(null)
 const chunkSectionRef = ref(null)
 const ragSectionRef = ref(null)
+const pageOverlaySectionRef = ref(null)
 const taskSectionRef = ref(null)
 const chunkDetailFocusMode = ref('chunk')
 const activeWorkbenchSection = ref('overview')
@@ -1142,6 +1592,50 @@ const artifactImageSrc = computed(() => {
   const contentType = String(artifactPreviewItem.value?.contentType || 'image/png').split(';')[0] || 'image/png'
   return `data:${contentType};base64,${imageBase64}`
 })
+const pageOverlays = computed(() => asArray(ragSnapshot.value?.pageOverlays))
+const pageOverlayTotalCount = computed(() => {
+  return pageOverlays.value.reduce((sum, page) => sum + asArray(page?.overlays).length, 0)
+})
+const selectedPageOverlay = computed(() => {
+  if (!pageOverlays.value.length) {
+    return null
+  }
+  const selectedKey = normalizeCode(selectedPageOverlayNo.value)
+  return pageOverlays.value.find((page) => normalizeCode(page.pageNo) === selectedKey) || pageOverlays.value[0]
+})
+const selectedPageOverlayTypeSet = computed(() => new Set(selectedOverlayTypes.value.map((item) => normalizeCode(item).toUpperCase()).filter(Boolean)))
+const filteredPageOverlayRegions = computed(() => {
+  const typeSet = selectedPageOverlayTypeSet.value
+  return asArray(selectedPageOverlay.value?.overlays)
+    .filter((region) => typeSet.has(normalizeCode(region?.type).toUpperCase()))
+})
+const selectedOverlayRegion = computed(() => {
+  const selectedId = normalizeCode(selectedOverlayId.value)
+  if (!selectedId) {
+    return null
+  }
+  return asArray(selectedPageOverlay.value?.overlays).find((region) => normalizeCode(region?.overlayId) === selectedId) || null
+})
+const pageOverlayImageSrc = computed(() => {
+  const directUrl = String(pageOverlayImageContent.value?.dataUrl || '')
+  if (directUrl) {
+    return directUrl
+  }
+  const imageBase64 = String(pageOverlayImageContent.value?.imageBase64 || '')
+  if (!imageBase64) {
+    return ''
+  }
+  const contentType = String(pageOverlayImageContent.value?.artifact?.contentType || 'image/png').split(';')[0] || 'image/png'
+  return `data:${contentType};base64,${imageBase64}`
+})
+const pageOverlayAspectRatio = computed(() => {
+  const width = Number(selectedPageOverlay.value?.pageWidth || 0)
+  const height = Number(selectedPageOverlay.value?.pageHeight || 0)
+  if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+    return `${width} / ${height}`
+  }
+  return '1 / 1.414'
+})
 const parserTraceWarnings = computed(() => asArray(parserTrace.value?.warnings).slice(0, 5))
 const parserTraceBlockTypes = computed(() => {
   const counts = parserTrace.value?.blockTypeCounts || {}
@@ -1217,6 +1711,174 @@ const parserTraceCoverage = computed(() => {
       hint: `${formatCount(trace.tableCellBboxCount)}/${formatCount(trace.tableCellCount)}`
     }
   ]
+})
+const artifactGraph = computed(() => ragSnapshot.value?.artifactGraph || null)
+const artifactGraphMetrics = computed(() => asArray(artifactGraph.value?.metrics))
+const artifactGraphNodes = computed(() => asArray(artifactGraph.value?.nodes))
+const artifactGraphEdges = computed(() => asArray(artifactGraph.value?.edges))
+const artifactGraphNodeGroups = computed(() => {
+  const groups = new Map()
+  artifactGraphNodes.value.forEach((node) => {
+    const type = normalizeGraphCode(node?.nodeType, 'UNKNOWN')
+    if (!groups.has(type)) {
+      groups.set(type, {
+        type,
+        label: artifactGraphNodeTypeLabel(type),
+        tone: artifactGraphNodeTypeClass(type),
+        items: []
+      })
+    }
+    groups.get(type).items.push(node)
+  })
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    items: group.items.slice(0, 24)
+  }))
+})
+const selectedArtifactGraphNode = computed(() => {
+  const selectedId = normalizeCode(selectedArtifactGraphNodeId.value)
+  return artifactGraphNodes.value.find((node) => normalizeCode(node?.nodeId) === selectedId)
+    || artifactGraphNodes.value[0]
+    || null
+})
+const selectedArtifactGraphEdges = computed(() => {
+  const selectedId = normalizeCode(selectedArtifactGraphNode.value?.nodeId)
+  if (!selectedId) {
+    return []
+  }
+  return artifactGraphEdges.value
+    .filter((edge) => normalizeCode(edge?.sourceNodeId) === selectedId || normalizeCode(edge?.targetNodeId) === selectedId)
+    .slice(0, 80)
+})
+const selectedArtifactGraphNeighbors = computed(() => {
+  const nodeById = new Map(artifactGraphNodes.value.map((node) => [normalizeCode(node?.nodeId), node]))
+  const selectedId = normalizeCode(selectedArtifactGraphNode.value?.nodeId)
+  return selectedArtifactGraphEdges.value
+    .map((edge) => {
+      const sourceId = normalizeCode(edge?.sourceNodeId)
+      const targetId = normalizeCode(edge?.targetNodeId)
+      const neighborId = sourceId === selectedId ? targetId : sourceId
+      return {
+        edge,
+        node: nodeById.get(neighborId),
+        direction: sourceId === selectedId ? 'out' : 'in'
+      }
+    })
+    .filter((item) => item.node)
+})
+const kgGraph = computed(() => ragSnapshot.value?.kgGraph || null)
+const kgGraphMetrics = computed(() => asArray(kgGraph.value?.metrics))
+const kgGraphNodes = computed(() => asArray(kgGraph.value?.nodes))
+const kgGraphEdges = computed(() => asArray(kgGraph.value?.edges))
+const kgGraphCommunities = computed(() => asArray(kgGraph.value?.communities))
+const kgGraphEvidences = computed(() => asArray(kgGraph.value?.evidences))
+const kgEntityTypeOptions = computed(() => uniqueOptions(kgGraphNodes.value.map((node) => node?.entityType), '全部类型'))
+const kgQualityLevelOptions = computed(() => uniqueOptions(kgGraphNodes.value.map((node) => node?.qualityLevel), '全部质量'))
+const kgCommunityOptions = computed(() => {
+  const communityOptions = kgGraphCommunities.value.map((community) => ({
+    value: normalizeCode(community?.communityId),
+    label: community?.title || `社区 ${valueOrDash(community?.communityNo)}`
+  })).filter((item) => item.value)
+  return [{ value: 'ALL', label: '全部社区' }, { value: 'NONE', label: '未归属社区' }, ...communityOptions]
+})
+const filteredKgGraphNodes = computed(() => {
+  return kgGraphNodes.value.filter((node) => {
+    const typeMatched = selectedKgEntityType.value === 'ALL' || normalizeCode(node?.entityType) === selectedKgEntityType.value
+    const qualityMatched = selectedKgQualityLevel.value === 'ALL' || normalizeCode(node?.qualityLevel) === selectedKgQualityLevel.value
+    const communityId = normalizeCode(node?.communityId)
+    const communityMatched = selectedKgCommunityFilter.value === 'ALL'
+      || (selectedKgCommunityFilter.value === 'NONE' ? !communityId : communityId === selectedKgCommunityFilter.value)
+    return typeMatched && qualityMatched && communityMatched
+  })
+})
+const filteredKgGraphNodeIds = computed(() => new Set(filteredKgGraphNodes.value.map((node) => normalizeCode(node?.nodeId)).filter(Boolean)))
+const filteredKgGraphEdges = computed(() => {
+  const nodeIds = filteredKgGraphNodeIds.value
+  return kgGraphEdges.value.filter((edge) => nodeIds.has(normalizeCode(edge?.sourceNodeId)) && nodeIds.has(normalizeCode(edge?.targetNodeId)))
+})
+const selectedKgGraphNode = computed(() => {
+  const selectedId = normalizeCode(selectedKgGraphNodeId.value)
+  return kgGraphNodes.value.find((node) => normalizeCode(node?.nodeId) === selectedId)
+    || filteredKgGraphNodes.value[0]
+    || kgGraphNodes.value[0]
+    || null
+})
+const selectedKgGraphEdge = computed(() => {
+  const selectedId = normalizeCode(selectedKgGraphEdgeId.value)
+  return kgGraphEdges.value.find((edge) => normalizeCode(edge?.edgeId) === selectedId) || null
+})
+const selectedKgGraphCommunity = computed(() => {
+  const selectedId = normalizeCode(selectedKgGraphCommunityId.value)
+  return kgGraphCommunities.value.find((community) => normalizeCode(community?.communityId) === selectedId)
+    || kgGraphCommunities.value[0]
+    || null
+})
+const selectedKgGraphEvidences = computed(() => {
+  if (selectedKgGraphEdge.value?.relationId != null) {
+    const relationId = normalizeCode(selectedKgGraphEdge.value.relationId)
+    return kgGraphEvidences.value.filter((evidence) => normalizeCode(evidence?.relationId) === relationId).slice(0, 20)
+  }
+  const entityId = normalizeCode(selectedKgGraphNode.value?.entityId)
+  if (!entityId) {
+    return kgGraphEvidences.value.slice(0, 20)
+  }
+  return kgGraphEvidences.value.filter((evidence) => normalizeCode(evidence?.entityId) === entityId).slice(0, 20)
+})
+const raptorTree = computed(() => ragSnapshot.value?.raptorTree || null)
+const raptorTreeMetrics = computed(() => asArray(raptorTree.value?.metrics))
+const raptorTreeNodes = computed(() => asArray(raptorTree.value?.nodes))
+const raptorTreeEdges = computed(() => asArray(raptorTree.value?.edges))
+const raptorQualityLevelOptions = computed(() => uniqueOptions(raptorTreeNodes.value.map((node) => node?.qualityLevel), '全部质量'))
+const raptorSummaryStatusOptions = computed(() => uniqueOptions(raptorTreeNodes.value.map((node) => node?.llmSummaryStatus), '全部状态'))
+const raptorSummaryStrategyOptions = computed(() => uniqueOptions(raptorTreeNodes.value.map((node) => node?.summaryStrategy), '全部策略'))
+const filteredRaptorTreeNodes = computed(() => {
+  return raptorTreeNodes.value.filter((node) => {
+    const qualityMatched = selectedRaptorQualityLevel.value === 'ALL' || normalizeCode(node?.qualityLevel) === selectedRaptorQualityLevel.value
+    const statusMatched = selectedRaptorSummaryStatus.value === 'ALL' || normalizeCode(node?.llmSummaryStatus) === selectedRaptorSummaryStatus.value
+    const strategyMatched = selectedRaptorSummaryStrategy.value === 'ALL' || normalizeCode(node?.summaryStrategy) === selectedRaptorSummaryStrategy.value
+    return qualityMatched && statusMatched && strategyMatched
+  })
+})
+const filteredRaptorNodeIds = computed(() => new Set(filteredRaptorTreeNodes.value.map((node) => normalizeCode(node?.nodeId)).filter(Boolean)))
+const raptorTreeLevelGroups = computed(() => {
+  const groups = new Map()
+  filteredRaptorTreeNodes.value.forEach((node) => {
+    const levelKey = valueOrDash(node?.nodeLevel)
+    if (!groups.has(levelKey)) {
+      groups.set(levelKey, {
+        level: node?.nodeLevel,
+        label: `L${levelKey}`,
+        items: []
+      })
+    }
+    groups.get(levelKey).items.push(node)
+  })
+  return Array.from(groups.values())
+    .sort((left, right) => Number(right.level ?? -1) - Number(left.level ?? -1))
+    .map((group) => ({
+      ...group,
+      items: group.items
+        .slice()
+        .sort((left, right) => Number(left.nodeNo || 0) - Number(right.nodeNo || 0))
+    }))
+})
+const selectedRaptorTreeNode = computed(() => {
+  const selectedId = normalizeCode(selectedRaptorTreeNodeId.value)
+  return raptorTreeNodes.value.find((node) => normalizeCode(node?.nodeId) === selectedId)
+    || filteredRaptorTreeNodes.value[0]
+    || raptorTreeNodes.value[0]
+    || null
+})
+const selectedRaptorTreeChildren = computed(() => {
+  const selectedId = normalizeCode(selectedRaptorTreeNode.value?.nodeId)
+  if (!selectedId) {
+    return []
+  }
+  const nodeIds = filteredRaptorNodeIds.value
+  return raptorTreeEdges.value
+    .filter((edge) => normalizeCode(edge?.sourceNodeId) === selectedId && nodeIds.has(normalizeCode(edge?.targetNodeId)))
+    .map((edge) => raptorTreeNodes.value.find((node) => normalizeCode(node?.nodeId) === normalizeCode(edge?.targetNodeId)))
+    .filter(Boolean)
 })
 const raptorQualityReport = computed(() => ragSnapshot.value?.raptorQuality || null)
 const raptorQualityStats = computed(() => {
@@ -1301,9 +1963,12 @@ const ragArtifactSections = computed(() => {
       caption: 'Python rag-tools 解析后交给 Java 入库的原始结构块。',
       emptyText: '当前没有解析块样例。',
       records: asArray(snapshot.parseBlocks).map((item) => ({
+        overlayId: item.blockId ? `block-${item.blockId}` : '',
+        pageNo: item.pageNo,
+        canLocate: Boolean(item.blockId && item.bboxJson && hasPageOverlayRegion(`block-${item.blockId}`, item.pageNo)),
         title: `Block #${item.blockNo || '-'}`,
         subtitle: item.sectionPath || '未识别章节',
-        chips: [item.blockType || 'block', item.pageRange || (item.pageNo ? `第 ${item.pageNo} 页` : '')],
+        chips: [item.blockType || 'block', item.pageRange || (item.pageNo != null ? `第 ${item.pageNo} 页` : '')],
         meta: compactList([item.bboxJson ? '有 bbox' : '', item.blockId ? `ID ${item.blockId}` : '']),
         body: item.textPreview || '暂无文本预览'
       }))
@@ -1355,10 +2020,13 @@ const ragArtifactSections = computed(() => {
       records: asArray(snapshot.tables).map((item) => ({
         tableId: item.tableId,
         tableNo: item.tableNo,
+        overlayId: item.tableId ? `table-${item.tableId}` : '',
+        pageNo: item.pageNo,
+        canLocate: Boolean(item.tableId && item.bboxJson && hasPageOverlayRegion(`table-${item.tableId}`, item.pageNo)),
         title: `表格 T#${item.tableNo || '-'}`,
         subtitle: item.title || item.sectionPath || '未命名表格',
         chips: [`${formatCount(item.rowCount)} 行`, `${formatCount(item.columnCount)} 列`, item.pageRange || ''],
-        meta: compactList([item.tableId ? `ID ${item.tableId}` : '', item.pageNo ? `第 ${item.pageNo} 页` : '', item.bboxJson ? '有表格 bbox' : '']),
+        meta: compactList([item.tableId ? `ID ${item.tableId}` : '', item.pageNo != null ? `第 ${item.pageNo} 页` : '', item.bboxJson ? '有表格 bbox' : '']),
         body: asArray(item.columns).map((column) => column.columnName || column.normalizedName).filter(Boolean).join(' / ') || '暂无列信息',
         columns: asArray(item.columns),
         rows: normalizeTableRows(item),
@@ -2089,6 +2757,23 @@ function compactList(values) {
     .filter(Boolean)
 }
 
+function normalizeGraphCode(value, fallback = '') {
+  const normalized = normalizeCode(value).toUpperCase()
+  return normalized || fallback
+}
+
+function uniqueOptions(values, allLabel) {
+  const uniqueValues = Array.from(new Set(
+    asArray(values)
+      .map((value) => normalizeCode(value))
+      .filter(Boolean)
+  ))
+  return [
+    { value: 'ALL', label: allLabel },
+    ...uniqueValues.map((value) => ({ value, label: value }))
+  ]
+}
+
 function valueOrDash(value) {
   const text = String(value ?? '').trim()
   return text || '-'
@@ -2269,6 +2954,116 @@ function raptorNodeQualityBarClass(level) {
   return 'bg-primary'
 }
 
+function artifactGraphNodeTypeLabel(type) {
+  const normalized = normalizeGraphCode(type)
+  const labelMap = {
+    DOCUMENT: 'Document',
+    PARSE_BLOCK: 'ParseBlock',
+    PARENT_BLOCK: 'ParentBlock',
+    CHILD_CHUNK: 'ChildChunk',
+    TABLE: 'Table',
+    KG_EVIDENCE: 'KG evidence',
+    RAPTOR_NODE: 'RAPTOR'
+  }
+  return labelMap[normalized] || normalized || '节点'
+}
+
+function artifactGraphNodeTypeClass(type) {
+  const normalized = normalizeGraphCode(type)
+  if (normalized === 'DOCUMENT') return 'bg-primary'
+  if (normalized === 'PARSE_BLOCK') return 'bg-[#2563eb]'
+  if (normalized === 'PARENT_BLOCK') return 'bg-[#0f766e]'
+  if (normalized === 'CHILD_CHUNK') return 'bg-[#7c3aed]'
+  if (normalized === 'TABLE') return 'bg-[#c2410c]'
+  if (normalized === 'KG_EVIDENCE') return 'bg-[#be123c]'
+  if (normalized === 'RAPTOR_NODE') return 'bg-[#0369a1]'
+  return 'bg-muted-foreground'
+}
+
+function artifactGraphTypeCount(type) {
+  const normalized = normalizeGraphCode(type)
+  return artifactGraphNodes.value.filter((node) => normalizeGraphCode(node?.nodeType) === normalized).length
+}
+
+function selectArtifactGraphNode(node) {
+  selectedArtifactGraphNodeId.value = node?.nodeId || ''
+}
+
+function selectKgGraphNode(node) {
+  selectedKgGraphNodeId.value = node?.nodeId || ''
+  selectedKgGraphEdgeId.value = ''
+  if (node?.communityId != null) {
+    selectedKgGraphCommunityId.value = String(node.communityId)
+  }
+}
+
+function selectKgGraphEdge(edge) {
+  selectedKgGraphEdgeId.value = edge?.edgeId || ''
+  if (edge?.sourceNodeId) {
+    selectedKgGraphNodeId.value = edge.sourceNodeId
+  }
+}
+
+function selectKgGraphCommunity(community) {
+  selectedKgGraphCommunityId.value = community?.communityId == null ? '' : String(community.communityId)
+  selectedKgCommunityFilter.value = selectedKgGraphCommunityId.value || 'ALL'
+}
+
+function kgEntityName(entityId) {
+  const targetId = normalizeCode(entityId)
+  const node = kgGraphNodes.value.find((item) => normalizeCode(item?.entityId) === targetId)
+  return node?.name || targetId || '-'
+}
+
+function kgQualityLabel(level) {
+  const normalized = normalizeGraphCode(level)
+  if (normalized === 'STRONG') return '强'
+  if (normalized === 'WATCH') return '观察'
+  if (normalized === 'WEAK') return '弱'
+  if (normalized === 'ISOLATED') return '孤立'
+  return normalized || '-'
+}
+
+function kgQualityClass(level) {
+  const normalized = normalizeGraphCode(level)
+  if (normalized === 'STRONG') return 'bg-[var(--color-success)]/[0.10] text-[var(--color-success)]'
+  if (normalized === 'WATCH' || normalized === 'ISOLATED') return 'bg-amber-500/[0.12] text-amber-700'
+  if (normalized === 'WEAK') return 'bg-destructive/[0.10] text-destructive'
+  return 'bg-secondary text-muted-foreground'
+}
+
+function focusKgEvidenceOverlay(evidence) {
+  if (!evidence?.bboxJson) {
+    showNotice('当前 evidence 没有 bbox，不能跳到页面定位。', 'warning')
+    return
+  }
+  showNotice('KG evidence 已有 bbox 元数据，但当前页面 overlay 只展示 block/table 真实区域；请通过 Chunk 查看原文来源。', 'info')
+}
+
+function selectRaptorTreeNode(node) {
+  selectedRaptorTreeNodeId.value = node?.nodeId || ''
+}
+
+function raptorScopeLabel(scopeType) {
+  const normalized = normalizeGraphCode(scopeType)
+  if (normalized === 'DOCUMENT') return '文档级'
+  if (normalized === 'DATASET') return '知识域级'
+  if (!normalized) return '未标记 scope'
+  return normalized
+}
+
+function raptorTreeNodeChips(node) {
+  return compactList([
+    raptorScopeLabel(node?.scopeType),
+    node?.scopeKey || '',
+    node?.summaryStrategy || '',
+    node?.llmSummaryStatus || '',
+    `source chunk ${formatCount(node?.sourceChunkCount)}`,
+    `source parent ${formatCount(node?.sourceParentBlockCount)}`,
+    `child ${formatCount(node?.childNodeCount)}`
+  ]).slice(0, 8)
+}
+
 function raptorLevelClass(level) {
   const normalized = Number(level)
   if (normalized >= 3) return 'bg-primary/[0.10] text-primary'
@@ -2287,6 +3082,268 @@ function ragStageClass(statusText) {
   if (String(statusText || '').includes('已生成')) return 'border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04]'
   if (String(statusText || '').includes('观测')) return 'border-primary/20 bg-primary/[0.04]'
   return 'border-border bg-card'
+}
+
+function displayPageOverlayNo(page) {
+  const displayNo = String(page?.displayPageNo ?? '').trim()
+  if (displayNo) {
+    return displayNo
+  }
+  const pageNo = page?.pageNo
+  return pageNo == null ? '-' : String(pageNo)
+}
+
+function hasPageOverlayRegion(overlayId, pageNo) {
+  const targetId = normalizeCode(overlayId)
+  if (!targetId) {
+    return false
+  }
+  const targetPageNo = normalizeCode(pageNo)
+  return pageOverlays.value.some((page) => {
+    const pageMatched = !targetPageNo || normalizeCode(page?.pageNo) === targetPageNo
+    return pageMatched && asArray(page?.overlays).some((region) => normalizeCode(region?.overlayId) === targetId)
+  })
+}
+
+function pageOverlayTypeLabel(type) {
+  const normalized = normalizeCode(type).toUpperCase()
+  return PAGE_OVERLAY_TYPE_OPTIONS.find((item) => item.type === normalized)?.label || normalized || '区域'
+}
+
+function pageOverlayTypeCount(type) {
+  const normalized = normalizeCode(type).toUpperCase()
+  return asArray(selectedPageOverlay.value?.overlays)
+    .filter((region) => normalizeCode(region?.type).toUpperCase() === normalized)
+    .length
+}
+
+function pageOverlayTypeButtonClass(type) {
+  const active = selectedPageOverlayTypeSet.value.has(normalizeCode(type).toUpperCase())
+  return active
+    ? 'border-primary bg-primary/[0.08] text-primary'
+    : 'border-border bg-card text-muted-foreground hover:border-primary/30 hover:text-foreground'
+}
+
+function pageOverlayTypeDotClass(type) {
+  const normalized = normalizeCode(type).toUpperCase()
+  if (normalized === 'TITLE') return 'bg-[#2563eb]'
+  if (normalized === 'TABLE') return 'bg-[#0f766e]'
+  if (normalized === 'FIGURE') return 'bg-[#9333ea]'
+  if (normalized === 'IMAGE') return 'bg-[#c2410c]'
+  return 'bg-[#64748b]'
+}
+
+function pageOverlayTypeBadgeClass(type) {
+  const normalized = normalizeCode(type).toUpperCase()
+  if (normalized === 'TITLE') return 'bg-[#2563eb]/10 text-[#1d4ed8]'
+  if (normalized === 'TABLE') return 'bg-[#0f766e]/10 text-[#0f766e]'
+  if (normalized === 'FIGURE') return 'bg-[#9333ea]/10 text-[#7e22ce]'
+  if (normalized === 'IMAGE') return 'bg-[#c2410c]/10 text-[#9a3412]'
+  return 'bg-foreground/[0.06] text-muted-foreground'
+}
+
+function pageOverlayRegionClass(region) {
+  const selected = normalizeCode(region?.overlayId) === normalizeCode(selectedOverlayId.value)
+  const normalized = normalizeCode(region?.type).toUpperCase()
+  const base = selected ? 'z-10 bg-white/10 ring-2 ring-primary/50' : 'bg-transparent hover:bg-white/10'
+  if (normalized === 'TITLE') return `${base} border-[#2563eb]`
+  if (normalized === 'TABLE') return `${base} border-[#0f766e]`
+  if (normalized === 'FIGURE') return `${base} border-[#9333ea]`
+  if (normalized === 'IMAGE') return `${base} border-[#c2410c]`
+  return `${base} border-[#64748b]`
+}
+
+function pageOverlayRegionStyle(region) {
+  const left = clampPercent(region?.leftRatio)
+  const top = clampPercent(region?.topRatio)
+  const width = clampPercent(region?.widthRatio)
+  const height = clampPercent(region?.heightRatio)
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${Math.max(0.25, Math.min(width, 100 - left))}%`,
+    height: `${Math.max(0.25, Math.min(height, 100 - top))}%`
+  }
+}
+
+function pageOverlayRegionTitle(region) {
+  return compactList([
+    pageOverlayTypeLabel(region?.type),
+    region?.label,
+    region?.sectionPath,
+    region?.textPreview
+  ]).join(' · ')
+}
+
+function clampPercent(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    return 0
+  }
+  return Math.max(0, Math.min(100, number * 100))
+}
+
+function syncPageOverlaySelection() {
+  if (!pageOverlays.value.length) {
+    selectedPageOverlayNo.value = null
+    selectedOverlayId.value = ''
+    pageOverlayImageContent.value = null
+    return
+  }
+  const hasSelectedPage = pageOverlays.value.some((page) => normalizeCode(page.pageNo) === normalizeCode(selectedPageOverlayNo.value))
+  if (!hasSelectedPage) {
+    selectedPageOverlayNo.value = pageOverlays.value[0]?.pageNo ?? null
+  }
+  const hasSelectedOverlay = selectedOverlayId.value
+    && asArray(selectedPageOverlay.value?.overlays).some((region) => normalizeCode(region.overlayId) === normalizeCode(selectedOverlayId.value))
+  if (!hasSelectedOverlay) {
+    selectedOverlayId.value = ''
+  }
+}
+
+function syncRagVisualSelections() {
+  if (!artifactGraphNodes.value.some((node) => normalizeCode(node?.nodeId) === normalizeCode(selectedArtifactGraphNodeId.value))) {
+    selectedArtifactGraphNodeId.value = artifactGraphNodes.value[0]?.nodeId || ''
+  }
+  if (!kgEntityTypeOptions.value.some((option) => option.value === selectedKgEntityType.value)) {
+    selectedKgEntityType.value = 'ALL'
+  }
+  if (!kgQualityLevelOptions.value.some((option) => option.value === selectedKgQualityLevel.value)) {
+    selectedKgQualityLevel.value = 'ALL'
+  }
+  if (!kgCommunityOptions.value.some((option) => option.value === selectedKgCommunityFilter.value)) {
+    selectedKgCommunityFilter.value = 'ALL'
+  }
+  if (!kgGraphNodes.value.some((node) => normalizeCode(node?.nodeId) === normalizeCode(selectedKgGraphNodeId.value))) {
+    selectedKgGraphNodeId.value = filteredKgGraphNodes.value[0]?.nodeId || kgGraphNodes.value[0]?.nodeId || ''
+  }
+  if (!kgGraphEdges.value.some((edge) => normalizeCode(edge?.edgeId) === normalizeCode(selectedKgGraphEdgeId.value))) {
+    selectedKgGraphEdgeId.value = ''
+  }
+  if (!kgGraphCommunities.value.some((community) => normalizeCode(community?.communityId) === normalizeCode(selectedKgGraphCommunityId.value))) {
+    selectedKgGraphCommunityId.value = kgGraphCommunities.value[0]?.communityId == null ? '' : String(kgGraphCommunities.value[0].communityId)
+  }
+  if (!raptorQualityLevelOptions.value.some((option) => option.value === selectedRaptorQualityLevel.value)) {
+    selectedRaptorQualityLevel.value = 'ALL'
+  }
+  if (!raptorSummaryStatusOptions.value.some((option) => option.value === selectedRaptorSummaryStatus.value)) {
+    selectedRaptorSummaryStatus.value = 'ALL'
+  }
+  if (!raptorSummaryStrategyOptions.value.some((option) => option.value === selectedRaptorSummaryStrategy.value)) {
+    selectedRaptorSummaryStrategy.value = 'ALL'
+  }
+  if (!raptorTreeNodes.value.some((node) => normalizeCode(node?.nodeId) === normalizeCode(selectedRaptorTreeNodeId.value))) {
+    selectedRaptorTreeNodeId.value = filteredRaptorTreeNodes.value[0]?.nodeId || raptorTreeNodes.value[0]?.nodeId || ''
+  }
+}
+
+function selectPageOverlay(pageNo) {
+  if (normalizeCode(selectedPageOverlayNo.value) === normalizeCode(pageNo)) {
+    return
+  }
+  selectedPageOverlayNo.value = pageNo ?? null
+  selectedOverlayId.value = ''
+}
+
+function selectOverlayRegion(region) {
+  selectedOverlayId.value = region?.overlayId || ''
+}
+
+function togglePageOverlayType(type) {
+  const normalized = normalizeCode(type).toUpperCase()
+  if (!normalized) {
+    return
+  }
+  const nextSet = new Set(selectedOverlayTypes.value.map((item) => normalizeCode(item).toUpperCase()).filter(Boolean))
+  if (nextSet.has(normalized)) {
+    nextSet.delete(normalized)
+  } else {
+    nextSet.add(normalized)
+  }
+  selectedOverlayTypes.value = Array.from(nextSet)
+}
+
+function findPageOverlayRegion(overlayId, pageNo) {
+  const targetId = normalizeCode(overlayId)
+  const targetPageNo = normalizeCode(pageNo)
+  for (const page of pageOverlays.value) {
+    const pageMatched = !targetPageNo || normalizeCode(page?.pageNo) === targetPageNo
+    if (!pageMatched) {
+      continue
+    }
+    const region = asArray(page?.overlays).find((item) => normalizeCode(item?.overlayId) === targetId)
+    if (region) {
+      return { page, region }
+    }
+  }
+  return null
+}
+
+async function focusPageOverlay(overlayId, pageNo) {
+  const target = findPageOverlayRegion(overlayId, pageNo)
+  if (!target) {
+    showNotice('当前快照里没有找到对应页面 overlay，请刷新快照或确认解析产物已生成。', 'warning')
+    return
+  }
+  activeWorkbenchSection.value = 'rag'
+  selectedPageOverlayNo.value = target.page.pageNo
+  selectedOverlayId.value = target.region.overlayId || ''
+  const targetType = normalizeCode(target.region.type).toUpperCase()
+  if (targetType && !selectedPageOverlayTypeSet.value.has(targetType)) {
+    selectedOverlayTypes.value = [...selectedOverlayTypes.value, targetType]
+  }
+  await nextTick()
+  pageOverlaySectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+async function loadSelectedPageOverlayImage() {
+  const requestSeq = pageOverlayImageRequestSeq.value + 1
+  pageOverlayImageRequestSeq.value = requestSeq
+  const page = selectedPageOverlay.value
+  pageOverlayImageContent.value = null
+  if (!page?.pageImageArtifactId || !documentId.value) {
+    pageOverlayImageLoading.value = false
+    return
+  }
+  const requestArtifactId = normalizeCode(page.pageImageArtifactId)
+  pageOverlayImageLoading.value = true
+  try {
+    const data = await manageApi.queryParseArtifactContent({
+      documentId: documentId.value,
+      taskId: ragSnapshot.value?.parseTaskId || parseArtifactQuery.value?.taskId || undefined,
+      artifactId: page.pageImageArtifactId
+    })
+    if (pageOverlayImageRequestSeq.value === requestSeq && normalizeCode(selectedPageOverlay.value?.pageImageArtifactId) === requestArtifactId) {
+      pageOverlayImageContent.value = data
+    }
+  } catch (error) {
+    console.error('读取页面定位底图失败', error)
+    showNotice(normalizeError(error, '读取页面定位底图失败'), 'warning')
+    if (pageOverlayImageRequestSeq.value === requestSeq && normalizeCode(selectedPageOverlay.value?.pageImageArtifactId) === requestArtifactId) {
+      pageOverlayImageContent.value = null
+    }
+  } finally {
+    if (pageOverlayImageRequestSeq.value === requestSeq && normalizeCode(selectedPageOverlay.value?.pageImageArtifactId) === requestArtifactId) {
+      pageOverlayImageLoading.value = false
+    }
+  }
+}
+
+async function openPageOverlayArtifact(page) {
+  const artifactId = page?.pageImageArtifactId
+  if (!artifactId) {
+    return
+  }
+  await openParseArtifact({
+    artifactId,
+    taskId: ragSnapshot.value?.parseTaskId || parseArtifactQuery.value?.taskId,
+    artifactType: 'PAGE_IMAGE',
+    artifactTypeName: '页面图片',
+    fileName: page.pageImageObjectName ? page.pageImageObjectName.split('/').pop() : `page-${displayPageOverlayNo(page)}.png`,
+    objectName: page.pageImageObjectName,
+    viewable: true,
+    contentType: 'image/png'
+  })
 }
 
 function normalizeMatchText(value) {
@@ -2708,9 +3765,13 @@ async function loadDocumentRagSnapshot() {
   ragSnapshotLoading.value = true
   try {
     ragSnapshot.value = await manageApi.queryDocumentRagSnapshot(documentId.value, buildRagSnapshotHighlightPayload())
+    syncPageOverlaySelection()
+    syncRagVisualSelections()
   } catch (error) {
     console.error('读取 RAG 学习快照失败', error)
     ragSnapshot.value = null
+    syncPageOverlaySelection()
+    syncRagVisualSelections()
   } finally {
     ragSnapshotLoading.value = false
   }
@@ -3004,7 +4065,8 @@ async function handleParseRouteCompleted(progress) {
       loadDocumentDetail(),
       loadStrategyPlan(),
       loadTaskLogs(),
-      loadParseArtifacts()
+      loadParseArtifacts(),
+      loadDocumentRagSnapshot()
     ])
     if (progress?.planReady) {
       activeWorkbenchSection.value = 'strategy'
@@ -3152,6 +4214,22 @@ watch(() => route.params.documentId, async (value, oldValue) => {
   chunkDetailFocusMode.value = 'chunk'
   artifactSearchKeyword.value = ''
   artifactPreviewCollapsed.value = false
+  selectedPageOverlayNo.value = null
+  selectedOverlayId.value = ''
+  selectedOverlayTypes.value = [...DEFAULT_PAGE_OVERLAY_TYPES]
+  selectedArtifactGraphNodeId.value = ''
+  selectedKgGraphNodeId.value = ''
+  selectedKgGraphEdgeId.value = ''
+  selectedKgGraphCommunityId.value = ''
+  selectedKgEntityType.value = 'ALL'
+  selectedKgQualityLevel.value = 'ALL'
+  selectedKgCommunityFilter.value = 'ALL'
+  selectedRaptorTreeNodeId.value = ''
+  selectedRaptorQualityLevel.value = 'ALL'
+  selectedRaptorSummaryStatus.value = 'ALL'
+  selectedRaptorSummaryStrategy.value = 'ALL'
+  pageOverlayImageContent.value = null
+  pageOverlayImageLoading.value = false
   parseRouteDialogOpen.value = false
   parseRouteDialogTaskId.value = ''
   await loadAll()
@@ -3169,6 +4247,10 @@ watch(() => route.query, async () => {
     await loadDocumentRagSnapshot()
   }
 }, { deep: true })
+
+watch(() => selectedPageOverlay.value?.pageImageArtifactId, () => {
+  loadSelectedPageOverlayImage()
+})
 
 watch(documentDetail, (value) => {
   if (!value) {

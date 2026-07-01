@@ -45,13 +45,21 @@ public class DocumentRagSnapshotVo {
 
     private List<TableItem> tables;
 
+    private List<PageOverlayItem> pageOverlays;
+
+    private ArtifactGraphItem artifactGraph;
+
     private List<KgEntityItem> kgEntities;
 
     private List<KgRelationItem> kgRelations;
 
     private List<KgCommunityItem> kgCommunities;
 
+    private KgGraphItem kgGraph;
+
     private List<RaptorNodeItem> raptorNodes;
+
+    private RaptorTreeItem raptorTree;
 
     private RaptorQualityReport raptorQuality;
 
@@ -330,6 +338,130 @@ public class DocumentRagSnapshotVo {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class PageOverlayItem {
+
+        private Integer pageNo;
+
+        private String displayPageNo;
+
+        private Long pageImageArtifactId;
+
+        private String pageImageObjectName;
+
+        private Double pageWidth;
+
+        private Double pageHeight;
+
+        private List<PageOverlayRegionItem> overlays;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PageOverlayRegionItem {
+
+        private String overlayId;
+
+        private String sourceType;
+
+        private String type;
+
+        private Long sourceId;
+
+        private Integer sourceNo;
+
+        private String label;
+
+        private Integer pageNo;
+
+        private String bboxJson;
+
+        private Double x;
+
+        private Double y;
+
+        private Double width;
+
+        private Double height;
+
+        private Double leftRatio;
+
+        private Double topRatio;
+
+        private Double widthRatio;
+
+        private Double heightRatio;
+
+        private String sectionPath;
+
+        private String textPreview;
+
+        private String source;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ArtifactGraphItem {
+
+        private List<MetricItem> metrics;
+
+        private List<ArtifactGraphNodeItem> nodes;
+
+        private List<ArtifactGraphEdgeItem> edges;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ArtifactGraphNodeItem {
+
+        private String nodeId;
+
+        private String nodeType;
+
+        private Long sourceId;
+
+        private Integer sourceNo;
+
+        private String label;
+
+        private String subtitle;
+
+        private String sectionPath;
+
+        private String pageRange;
+
+        private Integer pageNo;
+
+        private String overlayId;
+
+        private String textPreview;
+
+        private String tone;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ArtifactGraphEdgeItem {
+
+        private String edgeId;
+
+        private String sourceNodeId;
+
+        private String targetNodeId;
+
+        private String edgeType;
+
+        private String label;
+
+        private String detail;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class KgEntityItem {
 
         private Long entityId;
@@ -382,6 +514,140 @@ public class DocumentRagSnapshotVo {
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
+    public static class KgGraphItem {
+
+        private List<MetricItem> metrics;
+
+        private List<KgGraphNodeItem> nodes;
+
+        private List<KgGraphEdgeItem> edges;
+
+        private List<KgGraphCommunityItem> communities;
+
+        private List<KgGraphEvidenceItem> evidences;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class KgGraphNodeItem {
+
+        private String nodeId;
+
+        private Long entityId;
+
+        private String name;
+
+        private String entityType;
+
+        private String description;
+
+        private Long communityId;
+
+        private Double pagerank;
+
+        private Integer rankPosition;
+
+        private Integer degree;
+
+        private Integer inDegree;
+
+        private Integer outDegree;
+
+        private Double weightedDegree;
+
+        private Double confidence;
+
+        private Integer evidenceCount;
+
+        private Integer chunkCount;
+
+        private String qualityLevel;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class KgGraphEdgeItem {
+
+        private String edgeId;
+
+        private Long relationId;
+
+        private String sourceNodeId;
+
+        private String targetNodeId;
+
+        private Long sourceEntityId;
+
+        private Long targetEntityId;
+
+        private String relationType;
+
+        private String description;
+
+        private String weight;
+
+        private Integer evidenceCount;
+
+        private String qualityLevel;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class KgGraphCommunityItem {
+
+        private Long communityId;
+
+        private Integer communityNo;
+
+        private String title;
+
+        private String summary;
+
+        private Integer entityCount;
+
+        private Integer relationCount;
+
+        private Integer evidenceCount;
+
+        private String rankScore;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class KgGraphEvidenceItem {
+
+        private Long evidenceId;
+
+        private Long entityId;
+
+        private Long relationId;
+
+        private Long chunkId;
+
+        private Long parentBlockId;
+
+        private Integer pageNo;
+
+        private String pageRange;
+
+        private String bboxJson;
+
+        private String sectionPath;
+
+        private String quoteText;
+
+        private String sourceType;
+
+        private Boolean grounded;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
     public static class RaptorNodeItem {
 
         private Long nodeId;
@@ -424,6 +690,10 @@ public class DocumentRagSnapshotVo {
 
         private String questions;
 
+        private String scopeType;
+
+        private String scopeKey;
+
         private Double qualityScore;
 
         private String qualityLevel;
@@ -459,6 +729,86 @@ public class DocumentRagSnapshotVo {
         private List<RaptorSourceChunkItem> sourceChunks;
 
         private List<RaptorSourceParentBlockItem> sourceParentBlocks;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RaptorTreeItem {
+
+        private List<MetricItem> metrics;
+
+        private List<RaptorTreeNodeItem> roots;
+
+        private List<RaptorTreeNodeItem> nodes;
+
+        private List<RaptorTreeEdgeItem> edges;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RaptorTreeNodeItem {
+
+        private String nodeId;
+
+        private Long raptorNodeId;
+
+        private Long parentNodeId;
+
+        private String parentTreeNodeId;
+
+        private Integer nodeLevel;
+
+        private Integer nodeNo;
+
+        private String title;
+
+        private String summary;
+
+        private Double qualityScore;
+
+        private String qualityLevel;
+
+        private String qualityRisk;
+
+        private String scopeType;
+
+        private String scopeKey;
+
+        private String summaryStrategy;
+
+        private String llmSummaryStatus;
+
+        private Integer treeDepth;
+
+        private String treePath;
+
+        private Integer sourceChunkCount;
+
+        private Integer sourceParentBlockCount;
+
+        private Integer childNodeCount;
+
+        private List<RaptorSourceChunkItem> sourceChunks;
+
+        private List<RaptorSourceParentBlockItem> sourceParentBlocks;
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RaptorTreeEdgeItem {
+
+        private String edgeId;
+
+        private String sourceNodeId;
+
+        private String targetNodeId;
+
+        private String edgeType;
+
+        private String label;
     }
 
     @Data

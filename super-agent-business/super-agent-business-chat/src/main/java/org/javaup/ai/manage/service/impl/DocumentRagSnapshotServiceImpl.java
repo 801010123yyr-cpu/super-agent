@@ -10,6 +10,7 @@ import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
+import org.javaup.ai.manage.data.SuperAgentDocumentParseArtifact;
 import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
 import org.javaup.ai.manage.data.SuperAgentDocumentTable;
 import org.javaup.ai.manage.data.SuperAgentDocumentTableCell;
@@ -19,6 +20,7 @@ import org.javaup.ai.manage.data.SuperAgentDocumentTask;
 import org.javaup.ai.manage.data.SuperAgentDocumentTaskLog;
 import org.javaup.ai.manage.data.SuperAgentKgCommunity;
 import org.javaup.ai.manage.data.SuperAgentKgEntity;
+import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
 import org.javaup.ai.manage.dto.DocumentRagSnapshotQueryDto;
@@ -26,6 +28,7 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentBlockMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentParentBlockMapper;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentParseArtifactMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentStructureNodeMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTableCellMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTableColumnMapper;
@@ -35,12 +38,14 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskLogMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentTaskMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCommunityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
 import org.javaup.ai.manage.model.graph.GraphRagQualityReport;
 import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 import org.javaup.ai.manage.service.GraphRagQualityService;
 import org.javaup.ai.manage.service.DocumentRagSnapshotService;
+import org.javaup.ai.manage.service.DocumentStorageService;
 import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogVo;
@@ -55,6 +60,9 @@ import org.javaup.enums.DocumentVectorStatusEnum;
 import org.javaup.exception.SuperAgentFrameException;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -66,6 +74,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -104,6 +114,30 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private static final int PREVIEW_LENGTH = 180;
 
+    private static final int ARTIFACT_GRAPH_PARSE_BLOCK_LIMIT = 60;
+
+    private static final int ARTIFACT_GRAPH_PARENT_LIMIT = 60;
+
+    private static final int ARTIFACT_GRAPH_CHUNK_LIMIT = 90;
+
+    private static final int ARTIFACT_GRAPH_TABLE_LIMIT = 30;
+
+    private static final int ARTIFACT_GRAPH_KG_EVIDENCE_LIMIT = 90;
+
+    private static final int ARTIFACT_GRAPH_RAPTOR_LIMIT = 60;
+
+    private static final int KG_GRAPH_ENTITY_LIMIT = 80;
+
+    private static final int KG_GRAPH_RELATION_LIMIT = 120;
+
+    private static final int KG_GRAPH_COMMUNITY_LIMIT = 40;
+
+    private static final int KG_GRAPH_EVIDENCE_LIMIT = 160;
+
+    private static final Set<String> PAGE_OVERLAY_BLOCK_TYPES = Set.of("TITLE", "TEXT", "TABLE", "FIGURE", "IMAGE");
+
+    private static final Pattern PAGE_IMAGE_OBJECT_NAME_PATTERN = Pattern.compile("(?i)(?:^|[./_-])page-(\\d+)\\.png$");
+
     private final SuperAgentDocumentMapper documentMapper;
 
     private final SuperAgentDocumentTaskMapper taskMapper;
@@ -111,6 +145,8 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
     private final SuperAgentDocumentTaskLogMapper taskLogMapper;
 
     private final SuperAgentDocumentBlockMapper blockMapper;
+
+    private final SuperAgentDocumentParseArtifactMapper parseArtifactMapper;
 
     private final SuperAgentDocumentStructureNodeMapper structureNodeMapper;
 
@@ -132,11 +168,15 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private final SuperAgentKgCommunityMapper kgCommunityMapper;
 
+    private final SuperAgentKgEvidenceMapper kgEvidenceMapper;
+
     private final SuperAgentRaptorNodeMapper raptorNodeMapper;
 
     private final GraphRagQualityService graphRagQualityService;
 
     private final RaptorQualityService raptorQualityService;
+
+    private final DocumentStorageService storageService;
 
     private final ChatRagProperties chatRagProperties;
 
@@ -154,13 +194,23 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         long parentBlockCount = indexTaskId == null ? 0L : countParentBlocks(document.getId(), indexTaskId);
         long chunkCount = indexTaskId == null ? 0L : countChunks(document.getId(), indexTaskId);
         long vectorReadyCount = indexTaskId == null ? 0L : countVectorReadyChunks(document.getId(), indexTaskId);
-        long tableCount = indexTaskId == null ? 0L : countTables(document.getId(), indexTaskId);
+        long tableCount = parseTaskId == null ? 0L : countTables(document.getId(), parseTaskId);
         long kgEntityCount = indexTaskId == null ? 0L : countKgEntities(document.getId(), indexTaskId);
         long kgRelationCount = indexTaskId == null ? 0L : countKgRelations(document.getId(), indexTaskId);
         long kgCommunityCount = indexTaskId == null ? 0L : countKgCommunities(document.getId(), indexTaskId);
         long raptorNodeCount = indexTaskId == null ? 0L : countRaptorNodes(document.getId(), indexTaskId);
         GraphRagQualityReport graphRagQuality = graphRagQualityService.evaluate(document.getId(), indexTaskId);
         RaptorQualityReport raptorQuality = raptorQualityService.evaluate(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.ParseBlockItem> parseBlocks = listParseBlocks(document.getId(), parseTaskId);
+        List<DocumentRagSnapshotVo.StructureNodeItem> structureNodes = listStructureNodes(document.getId(), parseTaskId);
+        List<DocumentRagSnapshotVo.ParentBlockItem> parentBlocks = listParentBlocks(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.ChunkItem> chunks = listChunks(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.TableItem> tables = listTables(document.getId(), parseTaskId, tableHighlightFocus(dto));
+        List<DocumentRagSnapshotVo.PageOverlayItem> pageOverlays = listPageOverlays(document.getId(), parseTaskId);
+        List<DocumentRagSnapshotVo.KgEntityItem> kgEntities = listKgEntities(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.KgRelationItem> kgRelations = listKgRelations(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.KgCommunityItem> kgCommunities = listKgCommunities(document.getId(), indexTaskId);
+        List<DocumentRagSnapshotVo.RaptorNodeItem> raptorNodes = listRaptorNodes(document.getId(), indexTaskId);
 
         return new DocumentRagSnapshotVo(
             document.getId(),
@@ -173,15 +223,19 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             buildPipelineStages(parseBlockCount, structureNodeCount, parentBlockCount, chunkCount, tableCount,
                 kgEntityCount, kgRelationCount, kgCommunityCount, raptorNodeCount),
             buildParserTrace(parseTaskId),
-            listParseBlocks(document.getId(), parseTaskId),
-            listStructureNodes(document.getId(), parseTaskId),
-            listParentBlocks(document.getId(), indexTaskId),
-            listChunks(document.getId(), indexTaskId),
-            listTables(document.getId(), indexTaskId, tableHighlightFocus(dto)),
-            listKgEntities(document.getId(), indexTaskId),
-            listKgRelations(document.getId(), indexTaskId),
-            listKgCommunities(document.getId(), indexTaskId),
-            listRaptorNodes(document.getId(), indexTaskId),
+            parseBlocks,
+            structureNodes,
+            parentBlocks,
+            chunks,
+            tables,
+            pageOverlays,
+            buildArtifactGraph(document.getId(), parseTaskId, indexTaskId),
+            kgEntities,
+            kgRelations,
+            kgCommunities,
+            buildKgGraph(document.getId(), indexTaskId),
+            raptorNodes,
+            buildRaptorTree(raptorNodes),
             raptorQuality,
             listBuildLogs(indexTaskId),
             "对话运行时的检索通道、RRF 融合、rerank 分数和 citation repair 结果在“对话观测”页面查看；本文档页只展示索引构建后的文档侧 RAG 产物。"
@@ -566,6 +620,659 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         );
     }
 
+    private List<DocumentRagSnapshotVo.PageOverlayItem> listPageOverlays(Long documentId, Long parseTaskId) {
+        if (parseTaskId == null) {
+            return List.of();
+        }
+
+        List<SuperAgentDocumentBlock> blocks = blockMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentBlock>()
+            .eq(SuperAgentDocumentBlock::getDocumentId, documentId)
+            .eq(SuperAgentDocumentBlock::getTaskId, parseTaskId)
+            .eq(SuperAgentDocumentBlock::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentDocumentBlock::getPageNo, SuperAgentDocumentBlock::getBlockNo, SuperAgentDocumentBlock::getId));
+        List<SuperAgentDocumentTable> tables = tableMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentTable>()
+            .eq(SuperAgentDocumentTable::getDocumentId, documentId)
+            .eq(SuperAgentDocumentTable::getTaskId, parseTaskId)
+            .eq(SuperAgentDocumentTable::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentDocumentTable::getPageNo, SuperAgentDocumentTable::getTableNo, SuperAgentDocumentTable::getId));
+        List<SuperAgentDocumentParseArtifact> pageImages = parseArtifactMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentParseArtifact>()
+            .eq(SuperAgentDocumentParseArtifact::getDocumentId, documentId)
+            .eq(SuperAgentDocumentParseArtifact::getTaskId, parseTaskId)
+            .eq(SuperAgentDocumentParseArtifact::getArtifactType, "PAGE_IMAGE")
+            .eq(SuperAgentDocumentParseArtifact::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentDocumentParseArtifact::getId));
+
+        Set<Integer> rawPageNumbers = new LinkedHashSet<>();
+        blocks.stream().map(SuperAgentDocumentBlock::getPageNo).filter(Objects::nonNull).forEach(rawPageNumbers::add);
+        tables.stream().map(SuperAgentDocumentTable::getPageNo).filter(Objects::nonNull).forEach(rawPageNumbers::add);
+        boolean zeroBasedPageNo = rawPageNumbers.contains(0);
+
+        Map<Integer, PageOverlayAccumulator> pageMap = new LinkedHashMap<>();
+        for (SuperAgentDocumentParseArtifact imageArtifact : pageImages) {
+            Integer pageNo = pageNoFromPageImageObject(imageArtifact.getObjectName(), zeroBasedPageNo);
+            if (pageNo == null) {
+                continue;
+            }
+            PageOverlayAccumulator page = pageAccumulator(pageMap, pageNo);
+            page.pageImageArtifactId = imageArtifact.getId();
+            page.pageImageObjectName = imageArtifact.getObjectName();
+            PageDimension dimension = readPageImageDimension(imageArtifact.getObjectName());
+            if (dimension != null) {
+                page.pageWidth = dimension.width();
+                page.pageHeight = dimension.height();
+            }
+        }
+
+        for (SuperAgentDocumentBlock block : blocks) {
+            if (block.getPageNo() == null || StrUtil.isBlank(block.getBboxJson())) {
+                continue;
+            }
+            String blockType = StrUtil.blankToDefault(block.getBlockType(), "BLOCK").trim().toUpperCase();
+            if (!PAGE_OVERLAY_BLOCK_TYPES.contains(blockType)) {
+                continue;
+            }
+            BBox bbox = readBbox(block.getBboxJson());
+            if (bbox == null) {
+                continue;
+            }
+            PageOverlayAccumulator page = pageAccumulator(pageMap, block.getPageNo());
+            page.observe(bbox);
+            page.regions.add(region(
+                "block-" + block.getId(),
+                "BLOCK",
+                blockType,
+                block.getId(),
+                block.getBlockNo(),
+                "Block #" + valueOrDash(block.getBlockNo()),
+                block.getPageNo(),
+                block.getBboxJson(),
+                bbox,
+                block.getSectionPath(),
+                preview(firstNotBlank(block.getText(), block.getTableHtml(), block.getImageCaption())),
+                "document_block"
+            ));
+        }
+
+        for (SuperAgentDocumentTable table : tables) {
+            if (table.getPageNo() == null || StrUtil.isBlank(table.getBboxJson())) {
+                continue;
+            }
+            BBox bbox = readBbox(table.getBboxJson());
+            if (bbox == null) {
+                continue;
+            }
+            PageOverlayAccumulator page = pageAccumulator(pageMap, table.getPageNo());
+            page.observe(bbox);
+            page.regions.add(region(
+                "table-" + table.getId(),
+                "TABLE",
+                "TABLE",
+                table.getId(),
+                table.getTableNo(),
+                "表格 T#" + valueOrDash(table.getTableNo()),
+                table.getPageNo(),
+                table.getBboxJson(),
+                bbox,
+                table.getSectionPath(),
+                preview(firstNotBlank(table.getTitle(), table.getTableHtml())),
+                "document_table"
+            ));
+        }
+
+        return pageMap.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .map(entry -> entry.getValue().toItem(entry.getKey(), zeroBasedPageNo))
+            .toList();
+    }
+
+    private PageOverlayAccumulator pageAccumulator(Map<Integer, PageOverlayAccumulator> pageMap, Integer pageNo) {
+        return pageMap.computeIfAbsent(pageNo, ignored -> new PageOverlayAccumulator());
+    }
+
+    private DocumentRagSnapshotVo.PageOverlayRegionItem region(String overlayId,
+                                                               String sourceType,
+                                                               String type,
+                                                               Long sourceId,
+                                                               Integer sourceNo,
+                                                               String label,
+                                                               Integer pageNo,
+                                                               String bboxJson,
+                                                               BBox bbox,
+                                                               String sectionPath,
+                                                               String textPreview,
+                                                               String source) {
+        return new DocumentRagSnapshotVo.PageOverlayRegionItem(
+            overlayId,
+            sourceType,
+            type,
+            sourceId,
+            sourceNo,
+            label,
+            pageNo,
+            bboxJson,
+            bbox.x(),
+            bbox.y(),
+            bbox.width(),
+            bbox.height(),
+            null,
+            null,
+            null,
+            null,
+            sectionPath,
+            textPreview,
+            source
+        );
+    }
+
+    private DocumentRagSnapshotVo.ArtifactGraphItem buildArtifactGraph(Long documentId,
+                                                                       Long parseTaskId,
+                                                                       Long indexTaskId) {
+        Map<String, DocumentRagSnapshotVo.ArtifactGraphNodeItem> nodeMap = new LinkedHashMap<>();
+        Map<String, DocumentRagSnapshotVo.ArtifactGraphEdgeItem> edgeMap = new LinkedHashMap<>();
+        nodeMap.put("document-" + documentId, artifactNode(
+            "document-" + documentId,
+            "DOCUMENT",
+            documentId,
+            null,
+            "Document",
+            "文档根节点",
+            "",
+            "",
+            null,
+            "",
+            "",
+            "success"
+        ));
+
+        List<SuperAgentDocumentBlock> blocks = parseTaskId == null ? List.of()
+            : blockMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentBlock>()
+                .eq(SuperAgentDocumentBlock::getDocumentId, documentId)
+                .eq(SuperAgentDocumentBlock::getTaskId, parseTaskId)
+                .eq(SuperAgentDocumentBlock::getStatus, BusinessStatus.YES.getCode())
+                .orderByAsc(SuperAgentDocumentBlock::getBlockNo, SuperAgentDocumentBlock::getId)
+                .last("limit " + ARTIFACT_GRAPH_PARSE_BLOCK_LIMIT));
+        for (SuperAgentDocumentBlock block : blocks) {
+            String nodeId = blockNodeId(block.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "PARSE_BLOCK",
+                block.getId(),
+                block.getBlockNo(),
+                "Block #" + valueOrDash(block.getBlockNo()),
+                StrUtil.blankToDefault(block.getBlockType(), "block"),
+                block.getSectionPath(),
+                block.getPageRange(),
+                block.getPageNo(),
+                block.getBboxJson() == null ? "" : "block-" + block.getId(),
+                preview(firstNotBlank(block.getText(), block.getTableHtml(), block.getImageCaption())),
+                "neutral"
+            ));
+            addArtifactEdge(edgeMap, "document-" + documentId, nodeId, "document-block", "解析块", "");
+        }
+
+        List<SuperAgentDocumentParentBlock> parents = indexTaskId == null ? List.of()
+            : parentBlockMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentParentBlock>()
+                .eq(SuperAgentDocumentParentBlock::getDocumentId, documentId)
+                .eq(SuperAgentDocumentParentBlock::getTaskId, indexTaskId)
+                .eq(SuperAgentDocumentParentBlock::getStatus, BusinessStatus.YES.getCode())
+                .orderByAsc(SuperAgentDocumentParentBlock::getParentNo, SuperAgentDocumentParentBlock::getId)
+                .last("limit " + ARTIFACT_GRAPH_PARENT_LIMIT));
+        for (SuperAgentDocumentParentBlock parent : parents) {
+            String nodeId = parentNodeId(parent.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "PARENT_BLOCK",
+                parent.getId(),
+                parent.getParentNo(),
+                "Parent P#" + valueOrDash(parent.getParentNo()),
+                "回答上下文",
+                parent.getSectionPath(),
+                parent.getPageRange(),
+                null,
+                "",
+                preview(parent.getParentText()),
+                "success"
+            ));
+            for (Long blockId : readLongList(parent.getSourceBlockIds())) {
+                addArtifactEdge(edgeMap, blockNodeId(blockId), nodeId, "block-parent", "组成父块", parent.getSectionPath());
+            }
+        }
+
+        List<SuperAgentDocumentChunk> chunks = indexTaskId == null ? List.of()
+            : chunkMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentChunk>()
+                .eq(SuperAgentDocumentChunk::getDocumentId, documentId)
+                .eq(SuperAgentDocumentChunk::getTaskId, indexTaskId)
+                .eq(SuperAgentDocumentChunk::getStatus, BusinessStatus.YES.getCode())
+                .orderByAsc(SuperAgentDocumentChunk::getChunkNo, SuperAgentDocumentChunk::getId)
+                .last("limit " + ARTIFACT_GRAPH_CHUNK_LIMIT));
+        for (SuperAgentDocumentChunk chunk : chunks) {
+            String nodeId = chunkNodeId(chunk.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "CHILD_CHUNK",
+                chunk.getId(),
+                chunk.getChunkNo(),
+                "Chunk C#" + valueOrDash(chunk.getChunkNo()),
+                StrUtil.blankToDefault(chunk.getChunkType(), "召回单元"),
+                chunk.getSectionPath(),
+                chunk.getPageRange(),
+                chunk.getPageNo(),
+                "",
+                preview(firstNotBlank(chunk.getChunkText(), chunk.getContentWithWeight())),
+                Objects.equals(chunk.getVectorStatus(), DocumentVectorStatusEnum.VECTOR_SUCCESS.getCode()) ? "success" : "warning"
+            ));
+            if (chunk.getParentBlockId() != null) {
+                addArtifactEdge(edgeMap, parentNodeId(chunk.getParentBlockId()), nodeId, "parent-chunk", "切成子块", "");
+            }
+            for (Long blockId : readLongList(chunk.getSourceBlockIds())) {
+                addArtifactEdge(edgeMap, blockNodeId(blockId), nodeId, "block-chunk", "来源 block", "");
+            }
+        }
+
+        List<SuperAgentDocumentTable> tables = parseTaskId == null ? List.of()
+            : tableMapper.selectList(new LambdaQueryWrapper<SuperAgentDocumentTable>()
+                .eq(SuperAgentDocumentTable::getDocumentId, documentId)
+                .eq(SuperAgentDocumentTable::getTaskId, parseTaskId)
+                .eq(SuperAgentDocumentTable::getStatus, BusinessStatus.YES.getCode())
+                .orderByAsc(SuperAgentDocumentTable::getTableNo, SuperAgentDocumentTable::getId)
+                .last("limit " + ARTIFACT_GRAPH_TABLE_LIMIT));
+        for (SuperAgentDocumentTable table : tables) {
+            String nodeId = tableNodeId(table.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "TABLE",
+                table.getId(),
+                table.getTableNo(),
+                "Table T#" + valueOrDash(table.getTableNo()),
+                table.getTitle(),
+                table.getSectionPath(),
+                table.getPageRange(),
+                table.getPageNo(),
+                table.getBboxJson() == null ? "" : "table-" + table.getId(),
+                preview(firstNotBlank(table.getTitle(), table.getTableHtml())),
+                "success"
+            ));
+            if (table.getBlockId() != null) {
+                addArtifactEdge(edgeMap, blockNodeId(table.getBlockId()), nodeId, "block-table", "抽取表格", "");
+            }
+        }
+
+        List<SuperAgentKgEvidence> evidences = listKgEvidenceRecords(documentId, indexTaskId, ARTIFACT_GRAPH_KG_EVIDENCE_LIMIT);
+        for (SuperAgentKgEvidence evidence : evidences) {
+            String nodeId = kgEvidenceNodeId(evidence.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "KG_EVIDENCE",
+                evidence.getId(),
+                null,
+                "KG Evidence #" + valueOrDash(evidence.getId()),
+                evidence.getEntityId() != null ? "entity evidence" : "relation evidence",
+                evidence.getSectionPath(),
+                evidence.getPageRange(),
+                evidence.getPageNo(),
+                "",
+                preview(evidence.getQuoteText()),
+                evidence.getChunkId() != null ? "success" : "warning"
+            ));
+            if (evidence.getChunkId() != null) {
+                addArtifactEdge(edgeMap, chunkNodeId(evidence.getChunkId()), nodeId, "chunk-kg", "支撑 KG", "");
+            }
+            if (evidence.getParentBlockId() != null) {
+                addArtifactEdge(edgeMap, parentNodeId(evidence.getParentBlockId()), nodeId, "parent-kg", "KG 来源父块", "");
+            }
+        }
+
+        List<SuperAgentRaptorNode> raptorNodes = indexTaskId == null ? List.of()
+            : raptorNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentRaptorNode>()
+                .eq(SuperAgentRaptorNode::getDocumentId, documentId)
+                .eq(SuperAgentRaptorNode::getTaskId, indexTaskId)
+                .eq(SuperAgentRaptorNode::getStatus, BusinessStatus.YES.getCode())
+                .orderByDesc(SuperAgentRaptorNode::getNodeLevel)
+                .orderByAsc(SuperAgentRaptorNode::getNodeNo, SuperAgentRaptorNode::getId)
+                .last("limit " + ARTIFACT_GRAPH_RAPTOR_LIMIT));
+        for (SuperAgentRaptorNode node : raptorNodes) {
+            String nodeId = raptorNodeId(node.getId());
+            nodeMap.put(nodeId, artifactNode(
+                nodeId,
+                "RAPTOR_NODE",
+                node.getId(),
+                node.getNodeNo(),
+                "RAPTOR N#" + valueOrDash(node.getNodeNo()),
+                "L" + valueOrDash(node.getNodeLevel()),
+                node.getSectionPath(),
+                node.getPageRange(),
+                null,
+                "",
+                preview(node.getSummary()),
+                "neutral"
+            ));
+            if (node.getParentNodeId() != null) {
+                addArtifactEdge(edgeMap, raptorNodeId(node.getParentNodeId()), nodeId, "raptor-child", "摘要下钻", "");
+            }
+            for (Long chunkId : readLongList(node.getSourceChunkIdsJson())) {
+                addArtifactEdge(edgeMap, chunkNodeId(chunkId), nodeId, "chunk-raptor", "摘要来源", "");
+            }
+            for (Long parentId : readLongList(node.getSourceParentBlockIdsJson())) {
+                addArtifactEdge(edgeMap, parentNodeId(parentId), nodeId, "parent-raptor", "摘要来源", "");
+            }
+        }
+
+        return new DocumentRagSnapshotVo.ArtifactGraphItem(
+            List.of(
+                new DocumentRagSnapshotVo.MetricItem("节点", String.valueOf(nodeMap.size()), "文档侧 RAG 产物节点", tone(nodeMap.size())),
+                new DocumentRagSnapshotVo.MetricItem("关系", String.valueOf(edgeMap.size()), "block、parent、chunk、KG、RAPTOR 的来源关系", tone(edgeMap.size())),
+                new DocumentRagSnapshotVo.MetricItem("KG evidence", String.valueOf(evidences.size()), "GraphRAG 证据回到 chunk/parent 的样例数", tone(evidences.size())),
+                new DocumentRagSnapshotVo.MetricItem("RAPTOR", String.valueOf(raptorNodes.size()), "摘要节点和 source chunk/source parent 的样例数", tone(raptorNodes.size()))
+            ),
+            new ArrayList<>(nodeMap.values()),
+            new ArrayList<>(edgeMap.values())
+        );
+    }
+
+    private DocumentRagSnapshotVo.ArtifactGraphNodeItem artifactNode(String nodeId,
+                                                                     String nodeType,
+                                                                     Long sourceId,
+                                                                     Integer sourceNo,
+                                                                     String label,
+                                                                     String subtitle,
+                                                                     String sectionPath,
+                                                                     String pageRange,
+                                                                     Integer pageNo,
+                                                                     String overlayId,
+                                                                     String textPreview,
+                                                                     String tone) {
+        return new DocumentRagSnapshotVo.ArtifactGraphNodeItem(
+            nodeId,
+            nodeType,
+            sourceId,
+            sourceNo,
+            StrUtil.blankToDefault(label, nodeId),
+            StrUtil.blankToDefault(subtitle, ""),
+            StrUtil.blankToDefault(sectionPath, ""),
+            StrUtil.blankToDefault(pageRange, ""),
+            pageNo,
+            StrUtil.blankToDefault(overlayId, ""),
+            StrUtil.blankToDefault(textPreview, ""),
+            StrUtil.blankToDefault(tone, "neutral")
+        );
+    }
+
+    private void addArtifactEdge(Map<String, DocumentRagSnapshotVo.ArtifactGraphEdgeItem> edgeMap,
+                                 String sourceNodeId,
+                                 String targetNodeId,
+                                 String edgeType,
+                                 String label,
+                                 String detail) {
+        if (StrUtil.isBlank(sourceNodeId) || StrUtil.isBlank(targetNodeId) || Objects.equals(sourceNodeId, targetNodeId)) {
+            return;
+        }
+        String edgeId = edgeType + ":" + sourceNodeId + "->" + targetNodeId;
+        edgeMap.putIfAbsent(edgeId, new DocumentRagSnapshotVo.ArtifactGraphEdgeItem(
+            edgeId,
+            sourceNodeId,
+            targetNodeId,
+            edgeType,
+            label,
+            StrUtil.blankToDefault(detail, "")
+        ));
+    }
+
+    private DocumentRagSnapshotVo.KgGraphItem buildKgGraph(Long documentId, Long indexTaskId) {
+        if (indexTaskId == null) {
+            return new DocumentRagSnapshotVo.KgGraphItem(List.of(), List.of(), List.of(), List.of(), List.of());
+        }
+        List<SuperAgentKgEntity> entities = kgEntityMapper.selectList(new LambdaQueryWrapper<SuperAgentKgEntity>()
+            .eq(SuperAgentKgEntity::getDocumentId, documentId)
+            .eq(SuperAgentKgEntity::getTaskId, indexTaskId)
+            .eq(SuperAgentKgEntity::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentKgEntity::getEntityType, SuperAgentKgEntity::getName, SuperAgentKgEntity::getId)
+            .last("limit " + KG_GRAPH_ENTITY_LIMIT));
+        List<SuperAgentKgRelation> relations = kgRelationMapper.selectList(new LambdaQueryWrapper<SuperAgentKgRelation>()
+            .eq(SuperAgentKgRelation::getDocumentId, documentId)
+            .eq(SuperAgentKgRelation::getTaskId, indexTaskId)
+            .eq(SuperAgentKgRelation::getStatus, BusinessStatus.YES.getCode())
+            .orderByDesc(SuperAgentKgRelation::getWeight)
+            .orderByAsc(SuperAgentKgRelation::getId)
+            .last("limit " + KG_GRAPH_RELATION_LIMIT));
+        List<SuperAgentKgCommunity> communities = kgCommunityMapper.selectList(new LambdaQueryWrapper<SuperAgentKgCommunity>()
+            .eq(SuperAgentKgCommunity::getDocumentId, documentId)
+            .eq(SuperAgentKgCommunity::getTaskId, indexTaskId)
+            .eq(SuperAgentKgCommunity::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentKgCommunity::getCommunityNo, SuperAgentKgCommunity::getId)
+            .last("limit " + KG_GRAPH_COMMUNITY_LIMIT));
+        List<SuperAgentKgEvidence> evidences = listKgEvidenceRecords(documentId, indexTaskId, KG_GRAPH_EVIDENCE_LIMIT);
+        Map<Long, Integer> evidenceCountByEntityId = evidences.stream()
+            .filter(evidence -> evidence.getEntityId() != null)
+            .collect(Collectors.groupingBy(SuperAgentKgEvidence::getEntityId, LinkedHashMap::new, Collectors.collectingAndThen(Collectors.counting(), Long::intValue)));
+        Map<Long, Integer> evidenceCountByRelationId = evidences.stream()
+            .filter(evidence -> evidence.getRelationId() != null)
+            .collect(Collectors.groupingBy(SuperAgentKgEvidence::getRelationId, LinkedHashMap::new, Collectors.collectingAndThen(Collectors.counting(), Long::intValue)));
+        Map<Long, Integer> chunkCountByEntityId = evidences.stream()
+            .filter(evidence -> evidence.getEntityId() != null && evidence.getChunkId() != null)
+            .collect(Collectors.groupingBy(SuperAgentKgEvidence::getEntityId, LinkedHashMap::new,
+                Collectors.collectingAndThen(Collectors.mapping(SuperAgentKgEvidence::getChunkId, Collectors.toSet()), Set::size)));
+        Map<Long, Long> communityIdByEntityId = communities.stream()
+            .flatMap(community -> readLongList(community.getEntityIdsJson()).stream()
+                .map(entityId -> Map.entry(entityId, community.getId())))
+            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
+        Map<Long, SuperAgentKgEntity> entityMap = entities.stream()
+            .collect(Collectors.toMap(SuperAgentKgEntity::getId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+
+        List<DocumentRagSnapshotVo.KgGraphNodeItem> nodes = entities.stream()
+            .map(entity -> {
+                Map<String, Object> metadata = readMap(entity.getMetadataJson());
+                Integer degree = integerValue(metadata.get("degree"));
+                return new DocumentRagSnapshotVo.KgGraphNodeItem(
+                    kgEntityNodeId(entity.getId()),
+                    entity.getId(),
+                    StrUtil.blankToDefault(entity.getName(), entity.getEntityKey()),
+                    entity.getEntityType(),
+                    preview(entity.getDescription()),
+                    communityIdByEntityId.get(entity.getId()),
+                    doubleValue(metadata.get("pagerank")),
+                    integerValue(metadata.get("rankPosition")),
+                    degree,
+                    integerValue(metadata.get("inDegree")),
+                    integerValue(metadata.get("outDegree")),
+                    doubleValue(metadata.get("weightedDegree")),
+                    doubleValue(metadata.get("confidence")),
+                    evidenceCountByEntityId.getOrDefault(entity.getId(), 0),
+                    chunkCountByEntityId.getOrDefault(entity.getId(), 0),
+                    kgNodeQualityLevel(degree, evidenceCountByEntityId.getOrDefault(entity.getId(), 0))
+                );
+            })
+            .toList();
+
+        List<DocumentRagSnapshotVo.KgGraphEdgeItem> edges = relations.stream()
+            .filter(relation -> entityMap.containsKey(relation.getSourceEntityId()) && entityMap.containsKey(relation.getTargetEntityId()))
+            .map(relation -> new DocumentRagSnapshotVo.KgGraphEdgeItem(
+                kgRelationEdgeId(relation.getId()),
+                relation.getId(),
+                kgEntityNodeId(relation.getSourceEntityId()),
+                kgEntityNodeId(relation.getTargetEntityId()),
+                relation.getSourceEntityId(),
+                relation.getTargetEntityId(),
+                relation.getRelationType(),
+                preview(relation.getDescription()),
+                decimalText(relation.getWeight()),
+                evidenceCountByRelationId.getOrDefault(relation.getId(), 0),
+                kgRelationQualityLevel(relation, evidenceCountByRelationId.getOrDefault(relation.getId(), 0))
+            ))
+            .toList();
+
+        List<DocumentRagSnapshotVo.KgGraphCommunityItem> communityItems = communities.stream()
+            .map(community -> {
+                Map<String, Object> metadata = readMap(community.getMetadataJson());
+                List<Long> communityEntityIds = readLongList(community.getEntityIdsJson());
+                List<Long> communityRelationIds = readLongList(community.getRelationIdsJson());
+                List<Long> communityEvidenceIds = readLongList(community.getEvidenceIdsJson());
+                return new DocumentRagSnapshotVo.KgGraphCommunityItem(
+                    community.getId(),
+                    community.getCommunityNo(),
+                    StrUtil.blankToDefault(community.getTitle(), "社区 #" + valueOrDash(community.getCommunityNo())),
+                    preview(community.getSummary()),
+                    communityEntityIds.size(),
+                    communityRelationIds.size(),
+                    communityEvidenceIds.size(),
+                    decimalText(bigDecimalValue(firstPresent(metadata.get("rankScore"), metadata.get("globalRankScore"))))
+                );
+            })
+            .toList();
+
+        List<DocumentRagSnapshotVo.KgGraphEvidenceItem> evidenceItems = evidences.stream()
+            .map(evidence -> {
+                Map<String, Object> metadata = readMap(evidence.getMetadataJson());
+                Map<String, Object> sourceMetadata = objectMap(metadata.get("sourceMetadata"));
+                return new DocumentRagSnapshotVo.KgGraphEvidenceItem(
+                    evidence.getId(),
+                    evidence.getEntityId(),
+                    evidence.getRelationId(),
+                    evidence.getChunkId(),
+                    evidence.getParentBlockId(),
+                    evidence.getPageNo(),
+                    evidence.getPageRange(),
+                    evidence.getBboxJson(),
+                    evidence.getSectionPath(),
+                    preview(evidence.getQuoteText()),
+                    stringValue(firstPresent(metadata.get("sourceType"), sourceMetadata.get("sourceType"))),
+                    booleanValue(sourceMetadata.get("grounded"))
+                );
+            })
+            .toList();
+
+        return new DocumentRagSnapshotVo.KgGraphItem(
+            List.of(
+                new DocumentRagSnapshotVo.MetricItem("实体", String.valueOf(nodes.size()), "当前快照载入的 GraphRAG 实体", tone(nodes.size())),
+                new DocumentRagSnapshotVo.MetricItem("关系", String.valueOf(edges.size()), "实体之间的关系边；没有关系时不伪造", tone(edges.size())),
+                new DocumentRagSnapshotVo.MetricItem("社区", String.valueOf(communityItems.size()), "community report 和实体集合", tone(communityItems.size())),
+                new DocumentRagSnapshotVo.MetricItem("证据", String.valueOf(evidenceItems.size()), "可回到 chunk/parent/page 的 KG evidence", tone(evidenceItems.size()))
+            ),
+            nodes,
+            edges,
+            communityItems,
+            evidenceItems
+        );
+    }
+
+    private List<SuperAgentKgEvidence> listKgEvidenceRecords(Long documentId, Long indexTaskId, int limit) {
+        if (indexTaskId == null) {
+            return List.of();
+        }
+        return kgEvidenceMapper.selectList(new LambdaQueryWrapper<SuperAgentKgEvidence>()
+            .eq(SuperAgentKgEvidence::getDocumentId, documentId)
+            .eq(SuperAgentKgEvidence::getTaskId, indexTaskId)
+            .eq(SuperAgentKgEvidence::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentKgEvidence::getId)
+            .last("limit " + limit));
+    }
+
+    private String kgNodeQualityLevel(Integer degree, Integer evidenceCount) {
+        int safeEvidenceCount = evidenceCount == null ? 0 : evidenceCount;
+        int safeDegree = degree == null ? 0 : degree;
+        if (safeEvidenceCount <= 0) {
+            return "WEAK";
+        }
+        if (safeDegree <= 0) {
+            return "ISOLATED";
+        }
+        if (safeEvidenceCount >= 2 && safeDegree >= 2) {
+            return "STRONG";
+        }
+        return "WATCH";
+    }
+
+    private String kgRelationQualityLevel(SuperAgentKgRelation relation, Integer evidenceCount) {
+        int safeEvidenceCount = evidenceCount == null ? 0 : evidenceCount;
+        if (safeEvidenceCount <= 0) {
+            return "WEAK";
+        }
+        BigDecimal weight = relation == null ? null : relation.getWeight();
+        if (weight != null && weight.compareTo(BigDecimal.valueOf(0.75D)) >= 0 && safeEvidenceCount >= 2) {
+            return "STRONG";
+        }
+        return "WATCH";
+    }
+
+    private Integer pageNoFromPageImageObject(String objectName, boolean zeroBasedPageNo) {
+        if (StrUtil.isBlank(objectName)) {
+            return null;
+        }
+        Matcher matcher = PAGE_IMAGE_OBJECT_NAME_PATTERN.matcher(objectName);
+        if (!matcher.find()) {
+            return null;
+        }
+        try {
+            int displayPageNo = Integer.parseInt(matcher.group(1));
+            return zeroBasedPageNo ? Math.max(0, displayPageNo - 1) : displayPageNo;
+        }
+        catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private PageDimension readPageImageDimension(String objectName) {
+        if (StrUtil.isBlank(objectName)) {
+            return null;
+        }
+        try {
+            byte[] bytes = storageService.downloadObject(objectName);
+            if (bytes == null || bytes.length == 0) {
+                return null;
+            }
+            BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+            if (image == null) {
+                return null;
+            }
+            return new PageDimension((double) image.getWidth(), (double) image.getHeight());
+        }
+        catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private BBox readBbox(String bboxJson) {
+        Map<String, Object> values = readMap(bboxJson);
+        if (values.isEmpty()) {
+            return null;
+        }
+        Double x0 = firstNumber(values, "x0", "left", "x", "minX");
+        Double y0 = firstNumber(values, "y0", "top", "y", "minY");
+        Double x1 = firstNumber(values, "x1", "right", "maxX");
+        Double y1 = firstNumber(values, "y1", "bottom", "maxY");
+        Double width = firstNumber(values, "width", "w");
+        Double height = firstNumber(values, "height", "h");
+        if (x0 == null || y0 == null) {
+            return null;
+        }
+        if (x1 == null && width != null) {
+            x1 = x0 + width;
+        }
+        if (y1 == null && height != null) {
+            y1 = y0 + height;
+        }
+        if (x1 == null || y1 == null) {
+            return null;
+        }
+        double left = Math.min(x0, x1);
+        double top = Math.min(y0, y1);
+        double boxWidth = Math.abs(x1 - x0);
+        double boxHeight = Math.abs(y1 - y0);
+        if (boxWidth <= 0D || boxHeight <= 0D) {
+            return null;
+        }
+        return new BBox(left, top, boxWidth, boxHeight);
+    }
+
+    private Double firstNumber(Map<String, Object> values, String... keys) {
+        for (String key : keys) {
+            Double value = doubleValue(values.get(key));
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     private TableHighlightFocus tableHighlightFocus(DocumentRagSnapshotQueryDto dto) {
         return new TableHighlightFocus(
             dto.getHighlightTableId(),
@@ -791,6 +1498,8 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             node.getPageRange(),
             node.getKeywords(),
             node.getQuestions(),
+            node.getScopeType(),
+            node.getScopeKey(),
             qualityScore,
             raptorNodeQualityLevel(qualityScore),
             raptorNodeQualityRisk(qualityScore),
@@ -809,6 +1518,83 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             raptorTreePath(node, nodeMap),
             sourceChunkItems(sourceChunkIds, chunkMap),
             sourceParentBlockItems(sourceParentBlockIds, parentBlockMap)
+        );
+    }
+
+    private DocumentRagSnapshotVo.RaptorTreeItem buildRaptorTree(List<DocumentRagSnapshotVo.RaptorNodeItem> raptorNodes) {
+        if (raptorNodes == null || raptorNodes.isEmpty()) {
+            return new DocumentRagSnapshotVo.RaptorTreeItem(List.of(), List.of(), List.of(), List.of());
+        }
+        Map<Long, DocumentRagSnapshotVo.RaptorNodeItem> nodeById = raptorNodes.stream()
+            .filter(node -> node.getNodeId() != null)
+            .collect(Collectors.toMap(DocumentRagSnapshotVo.RaptorNodeItem::getNodeId, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        List<DocumentRagSnapshotVo.RaptorTreeNodeItem> treeNodes = raptorNodes.stream()
+            .map(node -> new DocumentRagSnapshotVo.RaptorTreeNodeItem(
+                raptorNodeId(node.getNodeId()),
+                node.getNodeId(),
+                node.getParentNodeId(),
+                node.getParentNodeId() == null ? "" : raptorNodeId(node.getParentNodeId()),
+                node.getNodeLevel(),
+                node.getNodeNo(),
+                StrUtil.blankToDefault(node.getTitle(), "RAPTOR N#" + valueOrDash(node.getNodeNo())),
+                node.getSummary(),
+                node.getQualityScore(),
+                node.getQualityLevel(),
+                node.getQualityRisk(),
+                node.getScopeType(),
+                node.getScopeKey(),
+                node.getSummaryStrategy(),
+                node.getLlmSummaryStatus(),
+                node.getTreeDepth(),
+                node.getTreePath(),
+                node.getSourceChunkCount(),
+                node.getSourceParentBlockCount(),
+                node.getChildNodeCount(),
+                node.getSourceChunks(),
+                node.getSourceParentBlocks()
+            ))
+            .toList();
+        List<DocumentRagSnapshotVo.RaptorTreeEdgeItem> edges = raptorNodes.stream()
+            .filter(node -> node.getNodeId() != null
+                && node.getParentNodeId() != null
+                && nodeById.containsKey(node.getParentNodeId()))
+            .map(node -> new DocumentRagSnapshotVo.RaptorTreeEdgeItem(
+                "raptor:" + node.getParentNodeId() + "->" + node.getNodeId(),
+                raptorNodeId(node.getParentNodeId()),
+                raptorNodeId(node.getNodeId()),
+                "parent-child",
+                "摘要下钻"
+            ))
+            .toList();
+        Set<Long> nodeIds = nodeById.keySet();
+        List<DocumentRagSnapshotVo.RaptorTreeNodeItem> roots = treeNodes.stream()
+            .filter(node -> node.getParentNodeId() == null || !nodeIds.contains(node.getParentNodeId()))
+            .sorted(Comparator.comparing(DocumentRagSnapshotVo.RaptorTreeNodeItem::getNodeLevel,
+                    Comparator.nullsLast(Comparator.reverseOrder()))
+                .thenComparing(DocumentRagSnapshotVo.RaptorTreeNodeItem::getNodeNo,
+                    Comparator.nullsLast(Integer::compareTo))
+                .thenComparing(DocumentRagSnapshotVo.RaptorTreeNodeItem::getRaptorNodeId,
+                    Comparator.nullsLast(Long::compareTo)))
+            .toList();
+        long documentScopeCount = raptorNodes.stream()
+            .filter(node -> "DOCUMENT".equalsIgnoreCase(StrUtil.blankToDefault(node.getScopeType(), "")))
+            .count();
+        long datasetScopeCount = raptorNodes.stream()
+            .filter(node -> "DATASET".equalsIgnoreCase(StrUtil.blankToDefault(node.getScopeType(), "")))
+            .count();
+        long lowQualityCount = raptorNodes.stream()
+            .filter(node -> Set.of("BLOCKED", "LOW", "WATCH").contains(StrUtil.blankToDefault(node.getQualityLevel(), "")))
+            .count();
+        return new DocumentRagSnapshotVo.RaptorTreeItem(
+            List.of(
+                new DocumentRagSnapshotVo.MetricItem("节点", String.valueOf(treeNodes.size()), "当前快照载入的 RAPTOR 摘要节点", tone(treeNodes.size())),
+                new DocumentRagSnapshotVo.MetricItem("树边", String.valueOf(edges.size()), "真实 parentNodeId 形成的摘要下钻关系", tone(edges.size())),
+                new DocumentRagSnapshotVo.MetricItem("文档/知识域", documentScopeCount + "/" + datasetScopeCount, "DOCUMENT scope 和 DATASET scope 节点数量", treeNodes.isEmpty() ? "neutral" : "success"),
+                new DocumentRagSnapshotVo.MetricItem("需关注质量", String.valueOf(lowQualityCount), "BLOCKED/LOW/WATCH 节点不会被隐藏", lowQualityCount > 0L ? "warning" : "success")
+            ),
+            roots,
+            treeNodes,
+            edges
         );
     }
 
@@ -1107,6 +1893,11 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         return Math.round(normalized * 100D) + "%";
     }
 
+    private String valueOrDash(Object value) {
+        String text = value == null ? "" : String.valueOf(value);
+        return StrUtil.blankToDefault(text, "-");
+    }
+
     private long safeLong(Long value) {
         return value == null ? 0L : value;
     }
@@ -1133,6 +1924,38 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
 
     private String entityName(SuperAgentKgEntity entity) {
         return entity == null ? "" : StrUtil.blankToDefault(entity.getName(), entity.getEntityKey());
+    }
+
+    private String blockNodeId(Long blockId) {
+        return blockId == null ? "" : "block-" + blockId;
+    }
+
+    private String parentNodeId(Long parentBlockId) {
+        return parentBlockId == null ? "" : "parent-" + parentBlockId;
+    }
+
+    private String chunkNodeId(Long chunkId) {
+        return chunkId == null ? "" : "chunk-" + chunkId;
+    }
+
+    private String tableNodeId(Long tableId) {
+        return tableId == null ? "" : "table-" + tableId;
+    }
+
+    private String kgEvidenceNodeId(Long evidenceId) {
+        return evidenceId == null ? "" : "kg-evidence-" + evidenceId;
+    }
+
+    private String raptorNodeId(Long nodeId) {
+        return nodeId == null ? "" : "raptor-" + nodeId;
+    }
+
+    private String kgEntityNodeId(Long entityId) {
+        return entityId == null ? "" : "kg-entity-" + entityId;
+    }
+
+    private String kgRelationEdgeId(Long relationId) {
+        return relationId == null ? "" : "kg-relation-" + relationId;
     }
 
     private String decimalText(BigDecimal value) {
@@ -1208,6 +2031,24 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
         return value == null ? "" : String.valueOf(value);
     }
 
+    private BigDecimal bigDecimalValue(Object value) {
+        if (value instanceof BigDecimal decimal) {
+            return decimal;
+        }
+        if (value instanceof Number number) {
+            return BigDecimal.valueOf(number.doubleValue());
+        }
+        if (value instanceof String text && StrUtil.isNotBlank(text)) {
+            try {
+                return new BigDecimal(text.trim());
+            }
+            catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     private Double doubleValue(Object value) {
         if (value instanceof Number number) {
             return number.doubleValue();
@@ -1268,5 +2109,103 @@ public class DocumentRagSnapshotServiceImpl implements DocumentRagSnapshotServic
             return value.getMsg();
         }
         return "";
+    }
+
+    private record BBox(double x, double y, double width, double height) {
+
+        private double right() {
+            return x + width;
+        }
+
+        private double bottom() {
+            return y + height;
+        }
+    }
+
+    private record PageDimension(double width, double height) {
+    }
+
+    private static class PageOverlayAccumulator {
+
+        private Long pageImageArtifactId;
+
+        private String pageImageObjectName;
+
+        private Double pageWidth;
+
+        private Double pageHeight;
+
+        private double maxRight;
+
+        private double maxBottom;
+
+        private final List<DocumentRagSnapshotVo.PageOverlayRegionItem> regions = new ArrayList<>();
+
+        private void observe(BBox bbox) {
+            if (bbox == null) {
+                return;
+            }
+            maxRight = Math.max(maxRight, bbox.right());
+            maxBottom = Math.max(maxBottom, bbox.bottom());
+        }
+
+        private DocumentRagSnapshotVo.PageOverlayItem toItem(Integer pageNo, boolean zeroBasedPageNo) {
+            double effectiveWidth = positiveOrDefault(pageWidth, Math.max(1D, maxRight));
+            double effectiveHeight = positiveOrDefault(pageHeight, Math.max(1D, maxBottom));
+            List<DocumentRagSnapshotVo.PageOverlayRegionItem> normalizedRegions = regions.stream()
+                .sorted(Comparator.comparing(DocumentRagSnapshotVo.PageOverlayRegionItem::getY,
+                        Comparator.nullsLast(Double::compareTo))
+                    .thenComparing(DocumentRagSnapshotVo.PageOverlayRegionItem::getX,
+                        Comparator.nullsLast(Double::compareTo))
+                    .thenComparing(DocumentRagSnapshotVo.PageOverlayRegionItem::getOverlayId,
+                        Comparator.nullsLast(String::compareTo)))
+                .map(region -> normalizeRegion(region, effectiveWidth, effectiveHeight))
+                .toList();
+            return new DocumentRagSnapshotVo.PageOverlayItem(
+                pageNo,
+                displayPageNo(pageNo, zeroBasedPageNo),
+                pageImageArtifactId,
+                pageImageObjectName,
+                effectiveWidth,
+                effectiveHeight,
+                normalizedRegions
+            );
+        }
+
+        private static DocumentRagSnapshotVo.PageOverlayRegionItem normalizeRegion(DocumentRagSnapshotVo.PageOverlayRegionItem region,
+                                                                                   double pageWidth,
+                                                                                   double pageHeight) {
+            double x = numberOrZero(region.getX());
+            double y = numberOrZero(region.getY());
+            double width = numberOrZero(region.getWidth());
+            double height = numberOrZero(region.getHeight());
+            region.setLeftRatio(clampRatio(x / pageWidth));
+            region.setTopRatio(clampRatio(y / pageHeight));
+            region.setWidthRatio(clampRatio(width / pageWidth));
+            region.setHeightRatio(clampRatio(height / pageHeight));
+            return region;
+        }
+
+        private static double positiveOrDefault(Double value, double fallback) {
+            return value != null && value > 0D ? value : fallback;
+        }
+
+        private static double numberOrZero(Double value) {
+            return value == null ? 0D : value;
+        }
+
+        private static double clampRatio(double value) {
+            if (!Double.isFinite(value)) {
+                return 0D;
+            }
+            return Math.max(0D, Math.min(1D, value));
+        }
+
+        private static String displayPageNo(Integer pageNo, boolean zeroBasedPageNo) {
+            if (pageNo == null) {
+                return "";
+            }
+            return String.valueOf(zeroBasedPageNo ? pageNo + 1 : pageNo);
+        }
     }
 }
