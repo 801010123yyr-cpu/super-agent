@@ -2,6 +2,7 @@
   <section class="flex flex-col gap-4">
     <transition name="drawer-fade"><div v-if="logDrawerOpen" class="fixed inset-0 z-50 bg-[rgba(15,23,42,0.3)]" @click="closeLogDrawer"></div></transition>
     <transition name="drawer-fade"><div v-if="chunkDetailDrawerOpen" class="fixed inset-0 z-50 bg-[rgba(15,23,42,0.3)]" @click="closeChunkDetailDrawer"></div></transition>
+    <transition name="drawer-fade"><div v-if="artifactPreviewDrawerOpen" class="fixed inset-0 z-50 bg-[rgba(15,23,42,0.3)]" @click="closeArtifactPreviewDrawer"></div></transition>
 
     <DocumentParseRouteProgressDialog
       v-model="parseRouteDialogOpen"
@@ -100,6 +101,75 @@
               </button>
             </div>
           </div>
+        </div>
+      </aside>
+    </transition>
+
+    <transition name="drawer-slide">
+      <aside v-if="artifactPreviewDrawerOpen" class="fixed bottom-0 right-0 top-0 z-[51] flex w-[760px] max-w-[96vw] flex-col bg-card shadow-[-4px_0_24px_rgba(15,23,42,0.12)]">
+        <div class="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
+          <div class="min-w-0">
+            <h3 class="text-base font-semibold text-foreground">解析产物预览</h3>
+            <p class="mt-0.5 truncate text-xs text-muted-foreground">
+              <template v-if="artifactPreviewItem">{{ artifactPreviewItem.artifactTypeName || artifactPreviewItem.artifactType }} · {{ artifactPreviewItem.fileName || '-' }}</template>
+              <template v-else>正在读取解析产物</template>
+            </p>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <button v-if="artifactPreviewItem" class="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-50" type="button" :disabled="artifactDownloadLoading" @click="downloadParseArtifact(artifactPreviewItem)">
+              <ArrowDownTrayIcon class="h-4 w-4" />
+              {{ artifactDownloadLoading ? '下载中' : '下载' }}
+            </button>
+            <button class="grid h-9 w-9 place-items-center rounded-md border border-border bg-card text-foreground hover:bg-secondary" type="button" @click="closeArtifactPreviewDrawer"><XMarkIcon class="h-4 w-4" /></button>
+          </div>
+        </div>
+        <div v-if="artifactContentLoading" class="flex-1 py-8 text-center text-sm text-muted-foreground">正在加载解析产物...</div>
+        <div v-else-if="!artifactContent" class="flex-1 py-8 text-center text-sm text-muted-foreground">当前没有可预览的解析产物。</div>
+        <div v-else class="flex-1 overflow-y-auto px-6 py-5">
+          <div class="mb-4 grid gap-2 sm:grid-cols-2">
+            <div class="rounded-md border border-border bg-secondary p-3">
+              <span class="text-[11px] text-muted-foreground">对象路径</span>
+              <div class="mt-1 flex items-start gap-2">
+                <code class="min-w-0 flex-1 break-all text-xs text-foreground">{{ artifactPreviewItem?.objectName || '-' }}</code>
+                <button class="grid h-7 w-7 shrink-0 place-items-center rounded border border-border bg-card text-muted-foreground hover:text-foreground" type="button" title="复制对象路径" @click="copyText(artifactPreviewItem?.objectName || '')">
+                  <ClipboardDocumentIcon class="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="rounded-md border border-border bg-secondary p-3"><span class="text-[11px] text-muted-foreground">大小</span><strong class="mt-1 block text-sm text-foreground">{{ formatBytes(artifactPreviewItem?.size || artifactContent.contentLength) }}</strong></div>
+              <div class="rounded-md border border-border bg-secondary p-3"><span class="text-[11px] text-muted-foreground">Hash</span><strong class="mt-1 block truncate text-sm text-foreground">{{ artifactPreviewItem?.contentHash || '-' }}</strong></div>
+            </div>
+          </div>
+
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <label class="relative min-w-[220px] flex-1">
+              <MagnifyingGlassIcon class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input v-model="artifactSearchKeyword" class="h-9 w-full rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20" type="search" placeholder="搜索 jobId、layouts、pos 或字段路径" />
+            </label>
+            <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-muted-foreground">匹配 {{ artifactSearchMatchCount }} 处</span>
+            <button v-if="artifactCanCollapse" class="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="artifactPreviewCollapsed = !artifactPreviewCollapsed">{{ artifactPreviewCollapsed ? '展开全文' : '折叠预览' }}</button>
+            <button class="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="copyText(formattedArtifactContent)">
+              <ClipboardDocumentIcon class="h-3.5 w-3.5" />
+              复制内容
+            </button>
+          </div>
+
+          <div v-if="artifactJsonPathRows.length" class="mb-3 rounded-md border border-border bg-secondary p-3">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <strong class="text-xs text-foreground">JSON 字段路径</strong>
+              <span class="text-[11px] text-muted-foreground">{{ artifactSearchKeyword ? '按搜索词过滤' : '顶层字段' }}</span>
+            </div>
+            <div class="grid max-h-40 gap-1.5 overflow-y-auto">
+              <button v-for="row in artifactJsonPathRows" :key="row.path" class="flex items-start gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:border-primary/30" type="button" @click="copyText(row.path)">
+                <code class="shrink-0 text-[11px] font-semibold text-primary">{{ row.path }}</code>
+                <span class="line-clamp-1 min-w-0 text-[11px] text-muted-foreground">{{ row.preview }}</span>
+              </button>
+            </div>
+          </div>
+
+          <pre class="max-h-[62vh] overflow-auto rounded-md border border-border bg-[#0f172a] p-4 text-xs leading-5 text-[#e2e8f0]">{{ visibleArtifactContent }}</pre>
+          <p v-if="artifactPreviewCollapsed" class="mt-2 text-xs text-muted-foreground">内容较大，已默认折叠显示前 {{ formatCount(ARTIFACT_PREVIEW_LIMIT) }} 个字符，可展开全文或直接下载。</p>
         </div>
       </aside>
     </transition>
@@ -415,10 +485,85 @@
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <span class="inline-flex rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ ragSectionStatusText }}</span>
-              <span class="text-xs text-muted-foreground">解析任务 {{ ragSnapshot?.parseTaskId || '-' }} · 索引任务 {{ ragSnapshot?.indexTaskId || '-' }}</span>
+              <span class="text-xs text-muted-foreground">解析任务 {{ ragSnapshot?.parseTaskId || parseArtifactQuery?.taskId || '-' }} · 索引任务 {{ ragSnapshot?.indexTaskId || '-' }}</span>
               <button class="rounded-full border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="ragSnapshotLoading" @click="loadDocumentRagSnapshot">{{ ragSnapshotLoading ? '读取中...' : '刷新快照' }}</button>
             </div>
           </div>
+
+          <section class="mb-4 rounded-lg border border-border bg-card p-4">
+            <div class="mb-3 flex items-start justify-between gap-3 max-md:flex-col">
+              <div>
+                <h3 class="text-sm font-semibold text-foreground">解析产物</h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">查看 Document Mind 原始结果、layout 标准化结果、标准 JSON 和 Markdown 投影。</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ parseArtifacts.length }} 个 artifact</span>
+                <button class="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="parseArtifactsLoading" @click="loadParseArtifacts">
+                  <ArrowPathIcon class="h-4 w-4" />
+                  {{ parseArtifactsLoading ? '读取中...' : '刷新产物' }}
+                </button>
+              </div>
+            </div>
+            <div v-if="parseArtifactsLoading" class="rounded-md border border-dashed border-border bg-secondary py-5 text-center text-sm text-muted-foreground">正在读取解析产物...</div>
+            <div v-else-if="!parseArtifacts.length" class="rounded-md border border-dashed border-border bg-secondary py-5 text-center text-sm text-muted-foreground">当前文档还没有可查看的解析产物，等待解析任务完成后再刷新。</div>
+            <div v-else>
+              <div class="mb-3 grid gap-2" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+                <article v-for="stat in parseArtifactStats" :key="`parse-artifact-stat-${stat.label}`" class="rounded-md border border-border bg-secondary px-3 py-2.5">
+                  <span class="text-[11px] text-muted-foreground">{{ stat.label }}</span>
+                  <strong class="mt-1 block text-sm text-foreground">{{ stat.value }}</strong>
+                </article>
+              </div>
+              <div class="overflow-x-auto rounded-lg border border-border">
+                <table class="w-full min-w-[780px] border-collapse text-sm table-fixed">
+                  <colgroup>
+                    <col style="width:180px">
+                    <col style="width:170px">
+                    <col>
+                    <col style="width:120px">
+                    <col style="width:170px">
+                  </colgroup>
+                  <thead>
+                    <tr class="bg-secondary">
+                      <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">类型</th>
+                      <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">解析器</th>
+                      <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">对象 / Hash</th>
+                      <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">大小</th>
+                      <th class="border-b border-border px-4 py-3 text-left text-xs font-semibold text-muted-foreground">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in parseArtifacts" :key="item.artifactId" class="border-b border-border last:border-0">
+                      <td class="px-4 py-3">
+                        <strong class="block text-[13px] text-foreground">{{ item.artifactTypeName || item.artifactType }}</strong>
+                        <span class="text-[11px] text-muted-foreground">{{ formatDateTime(item.createTime) }}</span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <span class="block truncate text-[13px] text-foreground">{{ item.parserName || '-' }}</span>
+                        <span class="text-[11px] text-muted-foreground">{{ item.parserVersion || 'version -' }}</span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <code class="line-clamp-1 break-all text-[11px] text-foreground">{{ item.objectName || '-' }}</code>
+                        <span class="mt-1 block truncate text-[11px] text-muted-foreground">{{ item.contentHash || 'hash -' }}</span>
+                      </td>
+                      <td class="px-4 py-3 text-[13px] font-semibold text-foreground">{{ formatBytes(item.size) }}</td>
+                      <td class="px-4 py-3">
+                        <div class="flex flex-wrap gap-1.5">
+                          <button class="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-50" type="button" :disabled="!item.viewable || artifactContentLoading" @click="openParseArtifact(item)">
+                            <EyeIcon class="h-3.5 w-3.5" />
+                            查看
+                          </button>
+                          <button class="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-50" type="button" :disabled="artifactDownloadLoading" @click="downloadParseArtifact(item)">
+                            <ArrowDownTrayIcon class="h-3.5 w-3.5" />
+                            下载
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
 
           <div v-if="ragSnapshotLoading" class="py-6 text-center text-sm text-muted-foreground">正在读取 RAG 学习快照...</div>
           <div v-else-if="!ragSnapshot" class="rounded-md border border-dashed border-border py-6 text-center text-sm text-muted-foreground">当前还没有可展示的 RAG 快照。请先完成文档解析和索引构建。</div>
@@ -764,7 +909,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeftIcon, ArrowRightIcon, CheckCircleIcon, XMarkIcon, DocumentTextIcon, ClockIcon, ExclamationCircleIcon } from '@heroicons/vue/24/outline'
+import { ArrowDownTrayIcon, ArrowLeftIcon, ArrowPathIcon, ArrowRightIcon, CheckCircleIcon, ClipboardDocumentIcon, ClockIcon, ExclamationCircleIcon, EyeIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import { APIError, manageApi } from '../../api/api'
 import AdminStatusBadge from '../../components/admin/AdminStatusBadge.vue'
 import DocumentParseRouteProgressDialog from '../../components/admin/DocumentParseRouteProgressDialog.vue'
@@ -786,6 +931,7 @@ const OPERATOR_ID = '10001'
 const DEFAULT_CHUNK_PAGE_SIZE = 20
 const CHUNK_PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
 const WORKBENCH_SECTION_KEYS = ['overview', 'strategy', 'execution', 'chunk', 'rag', 'tasks']
+const ARTIFACT_PREVIEW_LIMIT = 12000
 
 const strategyLibrary = STRATEGY_LIBRARY
 const strategyPipelineLibrary = STRATEGY_PIPELINE_LIBRARY
@@ -812,6 +958,8 @@ const taskLogs = ref([])
 const taskLogSnapshot = ref(null)
 const buildTaskSnapshot = ref(null)
 const ragSnapshot = ref(null)
+const parseArtifactQuery = ref(null)
+const artifactContent = ref(null)
 const chunkQuery = ref(null)
 const chunkDetail = ref(null)
 const chunkDisplayMode = ref('grouped')
@@ -826,8 +974,14 @@ const logLoading = ref(false)
 const chunkLoading = ref(false)
 const chunkDetailLoading = ref(false)
 const ragSnapshotLoading = ref(false)
+const parseArtifactsLoading = ref(false)
+const artifactContentLoading = ref(false)
+const artifactDownloadLoading = ref(false)
 const logDrawerOpen = ref(false)
 const chunkDetailDrawerOpen = ref(false)
+const artifactPreviewDrawerOpen = ref(false)
+const artifactPreviewCollapsed = ref(false)
+const artifactSearchKeyword = ref('')
 const planPollTimer = ref(null)
 const buildPollTimer = ref(null)
 const parseRouteDialogOpen = ref(false)
@@ -933,6 +1087,40 @@ const chunkGroupedRecords = computed(() => {
 const ragSnapshotMetrics = computed(() => asArray(ragSnapshot.value?.metrics))
 const ragPipelineStages = computed(() => asArray(ragSnapshot.value?.pipelineStages))
 const parserTrace = computed(() => ragSnapshot.value?.parserTrace || null)
+const parseArtifacts = computed(() => asArray(parseArtifactQuery.value?.artifacts))
+const parseArtifactStats = computed(() => {
+  const totalSize = parseArtifacts.value.reduce((sum, item) => sum + Number(item.size || 0), 0)
+  const viewableCount = parseArtifacts.value.filter((item) => item.viewable).length
+  const typeCount = new Set(parseArtifacts.value.map((item) => item.artifactType).filter(Boolean)).size
+  return [
+    { label: '产物类型', value: `${formatCount(typeCount)} 类` },
+    { label: '可预览', value: `${formatCount(viewableCount)} 个` },
+    { label: '总大小', value: formatBytes(totalSize) },
+    { label: '解析任务', value: parseArtifactQuery.value?.taskId || '-' }
+  ]
+})
+const artifactPreviewItem = computed(() => artifactContent.value?.artifact || null)
+const formattedArtifactContent = computed(() => {
+  const content = String(artifactContent.value?.content || '')
+  if (!content || artifactContent.value?.json !== true) {
+    return content
+  }
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2)
+  } catch {
+    return content
+  }
+})
+const artifactCanCollapse = computed(() => formattedArtifactContent.value.length > ARTIFACT_PREVIEW_LIMIT)
+const visibleArtifactContent = computed(() => {
+  const content = formattedArtifactContent.value
+  if (!artifactPreviewCollapsed.value || content.length <= ARTIFACT_PREVIEW_LIMIT) {
+    return content
+  }
+  return `${content.slice(0, ARTIFACT_PREVIEW_LIMIT)}\n...`
+})
+const artifactSearchMatchCount = computed(() => countTextMatches(formattedArtifactContent.value, artifactSearchKeyword.value))
+const artifactJsonPathRows = computed(() => buildArtifactJsonPathRows(formattedArtifactContent.value, artifactSearchKeyword.value))
 const parserTraceWarnings = computed(() => asArray(parserTrace.value?.warnings).slice(0, 5))
 const parserTraceBlockTypes = computed(() => {
   const counts = parserTrace.value?.blockTypeCounts || {}
@@ -1901,6 +2089,98 @@ function formatDecimal(value) {
   return number.toFixed(number >= 10 ? 1 : 2).replace(/\.?0+$/, '')
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0)
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '-'
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1).replace(/\.0$/, '')} KB`
+  }
+  return `${(bytes / 1024 / 1024).toFixed(1).replace(/\.0$/, '')} MB`
+}
+
+function countTextMatches(content, keyword) {
+  const source = String(content || '')
+  const needle = String(keyword || '').trim()
+  if (!source || !needle) {
+    return 0
+  }
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return source.match(new RegExp(escaped, 'gi'))?.length || 0
+}
+
+function parseJsonSafely(content) {
+  try {
+    return JSON.parse(content)
+  } catch {
+    return null
+  }
+}
+
+function buildArtifactJsonPathRows(content, keyword) {
+  const root = parseJsonSafely(content)
+  if (root == null || typeof root !== 'object') {
+    return []
+  }
+  const needle = String(keyword || '').trim().toLowerCase()
+  const rows = []
+  if (!needle) {
+    Object.keys(root).slice(0, 80).forEach((key) => {
+      const value = root[key]
+      rows.push({
+        path: `$.${key}`,
+        preview: previewJsonPathValue(value)
+      })
+    })
+    return rows
+  }
+  collectJsonPathRows(root, '$', needle, rows)
+  return rows
+}
+
+function collectJsonPathRows(value, path, needle, rows) {
+  if (rows.length >= 120) {
+    return
+  }
+  const preview = previewJsonPathValue(value)
+  if (path.toLowerCase().includes(needle) || preview.toLowerCase().includes(needle)) {
+    rows.push({ path, preview })
+  }
+  if (Array.isArray(value)) {
+    value.slice(0, 200).forEach((item, index) => collectJsonPathRows(item, `${path}[${index}]`, needle, rows))
+    return
+  }
+  if (value && typeof value === 'object') {
+    Object.entries(value).slice(0, 300).forEach(([key, item]) => {
+      const safeKey = /^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`
+      collectJsonPathRows(item, `${path}${safeKey}`, needle, rows)
+    })
+  }
+}
+
+function previewJsonPathValue(value) {
+  if (value == null) {
+    return 'null'
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return `Array(${value.length})`
+  }
+  if (typeof value === 'object') {
+    return `Object(${Object.keys(value).length})`
+  }
+  return String(value)
+}
+
 function qualityBarWidth(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) {
@@ -2415,6 +2695,97 @@ async function loadDocumentRagSnapshot() {
   }
 }
 
+async function loadParseArtifacts() {
+  if (!documentId.value) {
+    parseArtifactQuery.value = null
+    return
+  }
+  parseArtifactsLoading.value = true
+  try {
+    parseArtifactQuery.value = await manageApi.queryParseArtifacts({
+      documentId: documentId.value
+    })
+  } catch (error) {
+    console.error('读取解析产物失败', error)
+    parseArtifactQuery.value = null
+  } finally {
+    parseArtifactsLoading.value = false
+  }
+}
+
+async function openParseArtifact(item) {
+  if (!item?.artifactId) {
+    return
+  }
+  artifactPreviewDrawerOpen.value = true
+  artifactContentLoading.value = true
+  artifactContent.value = null
+  artifactSearchKeyword.value = ''
+  try {
+    const data = await manageApi.queryParseArtifactContent({
+      documentId: documentId.value,
+      taskId: parseArtifactQuery.value?.taskId || item.taskId || undefined,
+      artifactId: item.artifactId
+    })
+    artifactContent.value = data
+    artifactPreviewCollapsed.value = Boolean(data?.json) && Number(data?.contentLength || 0) > ARTIFACT_PREVIEW_LIMIT
+  } catch (error) {
+    console.error('读取解析产物内容失败', error)
+    showNotice(normalizeError(error, '读取解析产物内容失败'), 'danger')
+    artifactContent.value = null
+  } finally {
+    artifactContentLoading.value = false
+  }
+}
+
+async function downloadParseArtifact(item) {
+  if (!item?.artifactId) {
+    return
+  }
+  artifactDownloadLoading.value = true
+  try {
+    const result = await manageApi.downloadParseArtifact({
+      documentId: documentId.value,
+      taskId: parseArtifactQuery.value?.taskId || item.taskId || undefined,
+      artifactId: item.artifactId
+    })
+    const url = window.URL.createObjectURL(result.blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = result.fileName || item.fileName || `${item.artifactType || 'artifact'}.bin`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('下载解析产物失败', error)
+    showNotice(normalizeError(error, '下载解析产物失败'), 'danger')
+  } finally {
+    artifactDownloadLoading.value = false
+  }
+}
+
+async function copyText(text) {
+  const value = String(text || '')
+  if (!value) {
+    return
+  }
+  try {
+    await navigator.clipboard?.writeText(value)
+    showNotice('已复制到剪贴板。', 'success')
+  } catch (error) {
+    console.error('复制失败', error)
+    showNotice('复制失败，请手动选择文本复制。', 'warning')
+  }
+}
+
+function closeArtifactPreviewDrawer() {
+  artifactPreviewDrawerOpen.value = false
+  artifactContent.value = null
+  artifactSearchKeyword.value = ''
+  artifactPreviewCollapsed.value = false
+}
+
 function buildRagSnapshotHighlightPayload() {
   const spec = ragTableHighlightSpec.value
   if (!spec.active) {
@@ -2480,7 +2851,8 @@ async function loadAll() {
       loadTaskLogs(),
       loadBuildTaskLogs(),
       loadDocumentChunks(),
-      loadDocumentRagSnapshot()
+      loadDocumentRagSnapshot(),
+      loadParseArtifacts()
     ])
   } catch (error) {
     console.error('读取文档详情失败', error)
@@ -2610,7 +2982,8 @@ async function handleParseRouteCompleted(progress) {
     await Promise.all([
       loadDocumentDetail(),
       loadStrategyPlan(),
-      loadTaskLogs()
+      loadTaskLogs(),
+      loadParseArtifacts()
     ])
     if (progress?.planReady) {
       activeWorkbenchSection.value = 'strategy'
@@ -2751,8 +3124,13 @@ watch(() => route.params.documentId, async (value, oldValue) => {
   chunkPageSize.value = DEFAULT_CHUNK_PAGE_SIZE
   chunkGroupCollapsedMap.value = {}
   chunkDetail.value = null
+  artifactContent.value = null
+  parseArtifactQuery.value = null
   chunkDetailDrawerOpen.value = false
+  artifactPreviewDrawerOpen.value = false
   chunkDetailFocusMode.value = 'chunk'
+  artifactSearchKeyword.value = ''
+  artifactPreviewCollapsed.value = false
   parseRouteDialogOpen.value = false
   parseRouteDialogTaskId.value = ''
   await loadAll()

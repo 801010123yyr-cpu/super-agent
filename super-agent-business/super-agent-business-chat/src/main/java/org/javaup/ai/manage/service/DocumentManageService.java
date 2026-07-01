@@ -7,6 +7,8 @@ import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactContentQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactQueryDto;
 import org.javaup.ai.manage.dto.DocumentParseRouteProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
@@ -19,6 +21,9 @@ import org.javaup.ai.manage.vo.DocumentDeleteVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
 import org.javaup.ai.manage.vo.DocumentIndexBuildProgressVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactContentVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactDownloadVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactListVo;
 import org.javaup.ai.manage.vo.DocumentParseRouteProgressVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
@@ -51,6 +56,12 @@ public interface DocumentManageService {
     DocumentIndexBuildProgressVo queryIndexBuildProgress(DocumentIndexBuildProgressQueryDto dto);
 
     DocumentParseRouteProgressVo queryParseRouteProgress(DocumentParseRouteProgressQueryDto dto);
+
+    DocumentParseArtifactListVo queryParseArtifacts(DocumentParseArtifactQueryDto dto);
+
+    DocumentParseArtifactContentVo queryParseArtifactContent(DocumentParseArtifactContentQueryDto dto);
+
+    DocumentParseArtifactDownloadVo downloadParseArtifact(DocumentParseArtifactContentQueryDto dto);
 
     DocumentChunkQueryVo queryDocumentChunks(DocumentChunkQueryDto dto);
 

@@ -9,6 +9,8 @@ import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentDeleteDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactContentQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactQueryDto;
 import org.javaup.ai.manage.dto.DocumentParseRouteProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentRagSnapshotQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
@@ -26,6 +28,9 @@ import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentDeleteVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactContentVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactDownloadVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactListVo;
 import org.javaup.ai.manage.vo.DocumentParseRouteProgressVo;
 import org.javaup.ai.manage.vo.DocumentRagSnapshotVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
@@ -33,13 +38,18 @@ import org.javaup.ai.manage.vo.DocumentStrategyPlanQueryVo;
 import org.javaup.ai.manage.vo.DocumentTaskLogQueryVo;
 import org.javaup.ai.manage.vo.DocumentUploadVo;
 import org.javaup.common.ApiResponse;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.nio.charset.StandardCharsets;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -119,6 +129,32 @@ public class DocumentManageController {
     @PostMapping("/parse-route/progress/query")
     public ApiResponse<DocumentParseRouteProgressVo> queryParseRouteProgress(@Valid @RequestBody DocumentParseRouteProgressQueryDto dto) {
         return ApiResponse.ok(documentManageService.queryParseRouteProgress(dto));
+    }
+
+    @Operation(summary = "查询文档解析产物列表")
+    @PostMapping("/parse-artifact/query")
+    public ApiResponse<DocumentParseArtifactListVo> queryParseArtifacts(@Valid @RequestBody DocumentParseArtifactQueryDto dto) {
+        return ApiResponse.ok(documentManageService.queryParseArtifacts(dto));
+    }
+
+    @Operation(summary = "查询文档解析产物文本内容")
+    @PostMapping("/parse-artifact/content/query")
+    public ApiResponse<DocumentParseArtifactContentVo> queryParseArtifactContent(@Valid @RequestBody DocumentParseArtifactContentQueryDto dto) {
+        return ApiResponse.ok(documentManageService.queryParseArtifactContent(dto));
+    }
+
+    @Operation(summary = "下载文档解析产物")
+    @PostMapping("/parse-artifact/download")
+    public ResponseEntity<byte[]> downloadParseArtifact(@Valid @RequestBody DocumentParseArtifactContentQueryDto dto) {
+        DocumentParseArtifactDownloadVo download = documentManageService.downloadParseArtifact(dto);
+        return ResponseEntity.ok()
+            .contentType(MediaType.parseMediaType(download.getContentType()))
+            .contentLength(download.getSize() == null ? 0L : download.getSize())
+            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                .filename(download.getFileName(), StandardCharsets.UTF_8)
+                .build()
+                .toString())
+            .body(download.getBytes());
     }
 
     @Operation(summary = "查询文档 chunk 列表")

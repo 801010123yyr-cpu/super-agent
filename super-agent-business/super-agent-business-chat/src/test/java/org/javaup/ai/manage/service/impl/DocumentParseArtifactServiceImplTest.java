@@ -9,6 +9,7 @@ import org.javaup.ai.manage.mapper.SuperAgentDocumentParseArtifactMapper;
 import org.javaup.ai.manage.service.DocumentStorageService;
 import org.javaup.ai.manage.service.DocumentTableStructureService;
 import org.javaup.ai.manage.support.StoredObjectInfo;
+import org.javaup.ai.manage.support.StoredObjectMetadata;
 import org.javaup.enums.BusinessStatus;
 import org.junit.jupiter.api.Test;
 
@@ -115,6 +116,11 @@ class DocumentParseArtifactServiceImplTest {
             @Override
             public String downloadText(String objectName) {
                 return "";
+            }
+
+            @Override
+            public StoredObjectMetadata getObjectMetadata(String objectName) {
+                return new StoredObjectMetadata(objectName, 0L, "application/octet-stream");
             }
 
             @Override

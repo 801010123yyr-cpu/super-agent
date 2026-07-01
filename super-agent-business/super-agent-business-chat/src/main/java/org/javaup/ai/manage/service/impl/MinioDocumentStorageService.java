@@ -9,9 +9,12 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.RemoveObjectArgs;
+import io.minio.StatObjectArgs;
+import io.minio.StatObjectResponse;
 import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.service.DocumentStorageService;
 import org.javaup.ai.manage.support.StoredObjectInfo;
+import org.javaup.ai.manage.support.StoredObjectMetadata;
 import org.javaup.enums.DocumentManageCode;
 import org.javaup.exception.SuperAgentFrameException;
 import org.springframework.stereotype.Service;
@@ -85,6 +88,22 @@ public class MinioDocumentStorageService implements DocumentStorageService {
     public String downloadText(String objectName) {
 
         return new String(downloadObject(objectName), StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public StoredObjectMetadata getObjectMetadata(String objectName) {
+        try {
+            StatObjectResponse response = minioClient.statObject(
+                StatObjectArgs.builder()
+                    .bucket(properties.getMinio().getBucketName())
+                    .object(objectName)
+                    .build());
+            return new StoredObjectMetadata(objectName, response.size(), response.contentType());
+        }
+        catch (Exception exception) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_STORAGE_FAILED.getCode(),
+                "读取 MinIO 文件元数据失败: " + exception.getMessage(), exception);
+        }
     }
 
     @Override

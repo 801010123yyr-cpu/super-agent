@@ -12,6 +12,7 @@ import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
+import org.javaup.ai.manage.data.SuperAgentDocumentParseArtifact;
 import org.javaup.ai.manage.data.SuperAgentDocumentProfile;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
@@ -25,6 +26,8 @@ import org.javaup.ai.manage.dto.DocumentDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildDto;
 import org.javaup.ai.manage.dto.DocumentIndexBuildProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentPageQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactContentQueryDto;
+import org.javaup.ai.manage.dto.DocumentParseArtifactQueryDto;
 import org.javaup.ai.manage.dto.DocumentParseRouteProgressQueryDto;
 import org.javaup.ai.manage.dto.DocumentStrategyConfirmDto;
 import org.javaup.ai.manage.dto.DocumentStrategyPlanQueryDto;
@@ -58,7 +61,9 @@ import org.javaup.ai.manage.service.GraphRagBuildService;
 import org.javaup.ai.manage.service.KnowledgeRouteIndexService;
 import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
+import org.javaup.ai.manage.support.DocumentParseArtifactAssembler;
 import org.javaup.ai.manage.support.StoredObjectInfo;
+import org.javaup.ai.manage.support.StoredObjectMetadata;
 import org.javaup.ai.manage.vo.DocumentChunkItemVo;
 import org.javaup.ai.manage.vo.DocumentChunkQueryVo;
 import org.javaup.ai.manage.vo.DocumentChunkDetailVo;
@@ -68,6 +73,10 @@ import org.javaup.ai.manage.vo.DocumentIndexBuildVo;
 import org.javaup.ai.manage.vo.DocumentListItemVo;
 import org.javaup.ai.manage.vo.DocumentParentBlockItemVo;
 import org.javaup.ai.manage.vo.DocumentPageQueryVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactContentVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactDownloadVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactItemVo;
+import org.javaup.ai.manage.vo.DocumentParseArtifactListVo;
 import org.javaup.ai.manage.vo.DocumentParseRouteProgressVo;
 import org.javaup.ai.manage.vo.DocumentStrategyConfirmVo;
 import org.javaup.ai.manage.vo.DocumentStrategyPipelineVo;
@@ -840,6 +849,42 @@ public class DocumentManageServiceImpl implements DocumentManageService {
     }
 
     @Override
+    public DocumentParseArtifactListVo queryParseArtifacts(DocumentParseArtifactQueryDto dto) {
+        SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
+        Long effectiveTaskId = resolveParseArtifactTaskId(document, dto.getTaskId());
+        if (effectiveTaskId == null) {
+            return new DocumentParseArtifactListVo(document.getId(), null, List.of());
+        }
+        validateParseRouteTask(document, effectiveTaskId);
+
+        List<DocumentParseArtifactItemVo> artifacts = parseArtifactService.listArtifacts(document.getId(), effectiveTaskId)
+            .stream()
+            .map(artifact -> DocumentParseArtifactAssembler.toItem(artifact, getArtifactMetadata(artifact)))
+            .filter(Objects::nonNull)
+            .toList();
+        return new DocumentParseArtifactListVo(document.getId(), effectiveTaskId, artifacts);
+    }
+
+    @Override
+    public DocumentParseArtifactContentVo queryParseArtifactContent(DocumentParseArtifactContentQueryDto dto) {
+        SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
+        SuperAgentDocumentParseArtifact artifact = getParseArtifactOrThrow(document, dto.getTaskId(), dto.getArtifactId());
+        DocumentParseArtifactItemVo item = DocumentParseArtifactAssembler.toItem(artifact, getArtifactMetadata(artifact));
+        if (item == null || !Boolean.TRUE.equals(item.getViewable())) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_STATUS_INVALID.getCode(),
+                "当前解析产物不支持文本预览，请下载后查看。");
+        }
+        return DocumentParseArtifactAssembler.toContent(artifact, storageService.downloadObject(artifact.getObjectName()));
+    }
+
+    @Override
+    public DocumentParseArtifactDownloadVo downloadParseArtifact(DocumentParseArtifactContentQueryDto dto) {
+        SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
+        SuperAgentDocumentParseArtifact artifact = getParseArtifactOrThrow(document, dto.getTaskId(), dto.getArtifactId());
+        return DocumentParseArtifactAssembler.toDownload(artifact, storageService.downloadObject(artifact.getObjectName()));
+    }
+
+    @Override
     public DocumentChunkQueryVo queryDocumentChunks(DocumentChunkQueryDto dto) {
         SuperAgentDocument document = getDocumentOrThrow(dto.getDocumentId());
         int pageNo = dto.getPageNo() == null || dto.getPageNo() <= 0 ? 1 : dto.getPageNo();
@@ -1233,6 +1278,46 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         }
         SuperAgentDocumentTask latestBuildTask = getLatestTask(document.getId(), DocumentTaskTypeEnum.BUILD_INDEX.getCode());
         return latestBuildTask == null ? null : latestBuildTask.getId();
+    }
+
+    private Long resolveParseArtifactTaskId(SuperAgentDocument document, Long requestedTaskId) {
+        if (requestedTaskId != null) {
+            return requestedTaskId;
+        }
+        if (document.getLastParseTaskId() != null) {
+            return document.getLastParseTaskId();
+        }
+        SuperAgentDocumentTask latestParseTask = getLatestTask(document.getId(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode());
+        return latestParseTask == null ? null : latestParseTask.getId();
+    }
+
+    private void validateParseRouteTask(SuperAgentDocument document, Long taskId) {
+        SuperAgentDocumentTask task = taskMapper.selectById(taskId);
+        if (task == null
+            || !Objects.equals(task.getStatus(), BusinessStatus.YES.getCode())
+            || !Objects.equals(task.getDocumentId(), document.getId())
+            || !Objects.equals(task.getTaskType(), DocumentTaskTypeEnum.PARSE_ROUTE.getCode())) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_NOT_FOUND.getCode(), "解析任务不存在。");
+        }
+    }
+
+    private SuperAgentDocumentParseArtifact getParseArtifactOrThrow(SuperAgentDocument document, Long requestedTaskId, Long artifactId) {
+        Long effectiveTaskId = resolveParseArtifactTaskId(document, requestedTaskId);
+        if (effectiveTaskId == null) {
+            throw new SuperAgentFrameException(DocumentManageCode.DOCUMENT_NOT_FOUND.getCode(), "当前文档还没有可查看的解析产物。");
+        }
+        validateParseRouteTask(document, effectiveTaskId);
+        return parseArtifactService.listArtifacts(document.getId(), effectiveTaskId).stream()
+            .filter(artifact -> Objects.equals(artifact.getId(), artifactId))
+            .findFirst()
+            .orElseThrow(() -> new SuperAgentFrameException(DocumentManageCode.DOCUMENT_NOT_FOUND.getCode(), "解析产物不存在。"));
+    }
+
+    private StoredObjectMetadata getArtifactMetadata(SuperAgentDocumentParseArtifact artifact) {
+        if (artifact == null || StrUtil.isBlank(artifact.getObjectName())) {
+            return null;
+        }
+        return storageService.getObjectMetadata(artifact.getObjectName());
     }
 
     private DocumentListItemVo toDocumentListItemVo(SuperAgentDocument document, SuperAgentDocumentTask latestTask) {

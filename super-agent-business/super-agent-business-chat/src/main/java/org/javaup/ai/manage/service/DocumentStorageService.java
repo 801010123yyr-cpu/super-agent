@@ -1,6 +1,7 @@
 package org.javaup.ai.manage.service;
 
 import org.javaup.ai.manage.support.StoredObjectInfo;
+import org.javaup.ai.manage.support.StoredObjectMetadata;
 
 import java.util.List;
 
@@ -21,6 +22,8 @@ public interface DocumentStorageService {
     byte[] downloadObject(String objectName);
 
     String downloadText(String objectName);
+
+    StoredObjectMetadata getObjectMetadata(String objectName);
 
     void deleteObjects(List<String> objectNameList);
 }
