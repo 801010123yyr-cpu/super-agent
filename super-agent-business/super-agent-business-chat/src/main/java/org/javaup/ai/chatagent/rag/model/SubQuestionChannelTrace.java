@@ -17,6 +17,10 @@ public class SubQuestionChannelTrace {
 
     private String channelName;
 
+    private String retrievalIntent;
+
+    private Double channelWeight;
+
     private int recalledCount;
 
     private int acceptedCount;

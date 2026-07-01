@@ -92,6 +92,8 @@ public class RagChatExecutor implements ConversationExecutor {
                                     ? List.of()
                                     : item.getChannelTraces().stream().map(trace -> Map.of(
                                         "channelName", StrUtil.blankToDefault(trace.getChannelName(), ""),
+                                        "retrievalIntent", StrUtil.blankToDefault(trace.getRetrievalIntent(), ""),
+                                        "channelWeight", trace.getChannelWeight() == null ? 0D : trace.getChannelWeight(),
                                         "recalledCount", trace.getRecalledCount(),
                                         "acceptedCount", trace.getAcceptedCount()
                                     )).toList(),
@@ -118,9 +120,15 @@ public class RagChatExecutor implements ConversationExecutor {
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""));
         item.put("sourceType", StrUtil.blankToDefault(reference.getSourceType(), ""));
+        item.put("documentId", reference.getDocumentId());
         item.put("documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()));
+        item.put("chunkId", reference.getChunkId());
+        item.put("chunkNo", reference.getChunkNo());
+        item.put("parentBlockId", reference.getParentBlockId());
+        item.put("parentBlockNo", reference.getParentBlockNo());
         item.put("sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), ""));
         item.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
+        item.put("score", reference.getScore());
         item.put("pageNo", reference.getPageNo());
         item.put("pageRange", StrUtil.blankToDefault(reference.getPageRange(), ""));
         item.put("bboxJson", StrUtil.blankToDefault(reference.getBboxJson(), ""));

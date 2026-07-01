@@ -169,7 +169,7 @@ public class RagRetrievalEngine {
         List<RetrievalChannelResult> channelResults = rawChannelResults.stream()
             .map(this::applyEvidenceGate)
             .toList();
-        List<SubQuestionChannelTrace> channelTraces = buildChannelTraces(rawChannelResults, channelResults);
+        List<SubQuestionChannelTrace> channelTraces = buildChannelTraces(rawChannelResults, channelResults, plan);
 
         channelResults.stream()
             .filter(result -> !result.getDocuments().isEmpty())
@@ -193,7 +193,7 @@ public class RagRetrievalEngine {
         if (traceRecorder != null) {
             try {
                 recordChannelObservations(traceRecorder, subQuestionIndex, subQuestion,
-                    rawChannelResults, channelResults, channelTraces);
+                    rawChannelResults, channelResults, channelTraces, finalDocuments);
                 recordRetrievalResultObservations(traceRecorder, subQuestionIndex, subQuestion,
                     rawChannelResults, channelResults, mergedCandidates, rerankedCandidates, finalDocuments);
             } catch (RuntimeException exception) {
@@ -1257,7 +1257,8 @@ public class RagRetrievalEngine {
     }
 
     private List<SubQuestionChannelTrace> buildChannelTraces(List<RetrievalChannelResult> rawResults,
-                                                             List<RetrievalChannelResult> filteredResults) {
+                                                             List<RetrievalChannelResult> filteredResults,
+                                                             ConversationExecutionPlan plan) {
         if ((rawResults == null || rawResults.isEmpty()) && (filteredResults == null || filteredResults.isEmpty())) {
             return List.of();
         }
@@ -1273,9 +1274,12 @@ public class RagRetrievalEngine {
         channelNames.addAll(rawMap.keySet());
         channelNames.addAll(filteredMap.keySet());
         List<SubQuestionChannelTrace> traces = new ArrayList<>(channelNames.size());
+        RetrievalIntent retrievalIntent = resolveRetrievalIntent(plan);
         for (String channelName : channelNames) {
             traces.add(new SubQuestionChannelTrace(
                 channelName,
+                retrievalIntent.name(),
+                resolveChannelWeight(channelName, plan),
                 rawMap.getOrDefault(channelName, 0),
                 filteredMap.getOrDefault(channelName, 0)
             ));
@@ -1288,7 +1292,8 @@ public class RagRetrievalEngine {
                                            String subQuestion,
                                            List<RetrievalChannelResult> rawResults,
                                            List<RetrievalChannelResult> filteredResults,
-                                           List<SubQuestionChannelTrace> channelTraces) {
+                                           List<SubQuestionChannelTrace> channelTraces,
+                                           List<Document> finalDocuments) {
         if (rawResults == null || rawResults.isEmpty()) {
             return;
         }
@@ -1301,10 +1306,7 @@ public class RagRetrievalEngine {
             RetrievalChannelResult filteredResult = filteredResults == null ? null :
                 filteredResults.stream().filter(r -> channelName.equals(r.getChannelName())).findFirst().orElse(null);
             int acceptedCount = filteredResult == null || filteredResult.getDocuments() == null ? 0 : filteredResult.getDocuments().size();
-
-            SubQuestionChannelTrace trace = channelTraces == null ? null :
-                channelTraces.stream().filter(t -> channelName.equals(t.getChannelName())).findFirst().orElse(null);
-            int finalSelectedCount = trace == null ? 0 : trace.getAcceptedCount();
+            int finalSelectedCount = countSelectedChannelDocuments(filteredResult, finalDocuments);
 
             ChannelExecutionView execution = new ChannelExecutionView();
             execution.setId(traceRecorder.exchangeId());
@@ -1468,14 +1470,15 @@ public class RagRetrievalEngine {
                     boolean passedGate = filteredResults != null && filteredResults.stream()
                         .anyMatch(fr -> channelName.equals(fr.getChannelName()) &&
                             fr.getDocuments() != null &&
-                            fr.getDocuments().stream().anyMatch(d -> Objects.equals(d.getId(), doc.getId())));
+                            fr.getDocuments().stream().anyMatch(d -> sameEvidenceIdentity(d, doc)));
                     view.setGatePassed(passedGate);
 
-                    boolean isSelected = doc.getId() != null && finalRankMap.containsKey(doc.getId());
+                    Integer finalRank = resolveFinalRank(doc, finalDocuments, finalRankMap);
+                    boolean isSelected = finalRank != null;
                     view.setSelected(isSelected);
 
                     if (isSelected) {
-                        view.setFinalRank(finalRankMap.get(doc.getId()));
+                        view.setFinalRank(finalRank);
                         view.setSelectionReason("已选入最终 Prompt");
                     } else if (!passedGate) {
 
@@ -1503,6 +1506,78 @@ public class RagRetrievalEngine {
         }
 
         traceRecorder.recordRetrievalResults(results);
+    }
+
+    private int countSelectedChannelDocuments(RetrievalChannelResult filteredResult, List<Document> finalDocuments) {
+        if (filteredResult == null || filteredResult.getDocuments() == null || filteredResult.getDocuments().isEmpty()
+            || finalDocuments == null || finalDocuments.isEmpty()) {
+            return 0;
+        }
+        return (int) filteredResult.getDocuments().stream()
+            .filter(candidate -> resolveFinalRank(candidate, finalDocuments, Map.of()) != null)
+            .count();
+    }
+
+    private Integer resolveFinalRank(Document candidate,
+                                     List<Document> finalDocuments,
+                                     Map<String, Integer> finalRankMap) {
+        if (candidate == null || finalDocuments == null || finalDocuments.isEmpty()) {
+            return null;
+        }
+        if (candidate.getId() != null && finalRankMap != null && finalRankMap.containsKey(candidate.getId())) {
+            return finalRankMap.get(candidate.getId());
+        }
+        for (int index = 0; index < finalDocuments.size(); index++) {
+            if (sameEvidenceIdentity(candidate, finalDocuments.get(index))) {
+                return index + 1;
+            }
+        }
+        return null;
+    }
+
+    private boolean sameEvidenceIdentity(Document left, Document right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        if (Objects.equals(left.getId(), right.getId())) {
+            return true;
+        }
+        Map<String, Object> leftMetadata = left.getMetadata();
+        Map<String, Object> rightMetadata = right.getMetadata();
+        Long leftDocumentId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+        Long rightDocumentId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+        if (leftDocumentId != null && rightDocumentId != null && !Objects.equals(leftDocumentId, rightDocumentId)) {
+            return false;
+        }
+        Long leftChunkId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.CHUNK_ID);
+        Long rightChunkId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.CHUNK_ID);
+        if (leftChunkId != null && rightChunkId != null && Objects.equals(leftChunkId, rightChunkId)) {
+            return true;
+        }
+        Long leftParentBlockId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
+        Long rightParentBlockId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
+        return leftChunkId == null && rightChunkId == null
+            && leftParentBlockId != null
+            && rightParentBlockId != null
+            && Objects.equals(leftParentBlockId, rightParentBlockId);
+    }
+
+    private Long metadataLong(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
     }
 
     private Double resolveTraceOriginalScore(Document document, String channelName) {

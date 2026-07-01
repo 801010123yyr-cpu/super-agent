@@ -107,6 +107,32 @@ function hasAnyListValue(values) {
   return asList(values).some((item) => item != null && String(item).trim() !== '')
 }
 
+function numericValue(value) {
+  if (value == null || value === '') {
+    return null
+  }
+  const num = Number(value)
+  return Number.isNaN(num) ? null : num
+}
+
+function formatCount(value) {
+  const num = numericValue(value)
+  return num == null ? '0' : String(num)
+}
+
+function scoreBarWidth(value) {
+  const num = numericValue(value)
+  if (num == null || num <= 0) {
+    return '0%'
+  }
+  const normalized = num <= 1 ? num * 100 : Math.min(num, 100)
+  return `${Math.max(6, Math.min(normalized, 100))}%`
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value != null && value !== '')
+}
+
 function isTableReference(reference) {
   if (!reference || typeof reference !== 'object') {
     return false
@@ -863,6 +889,479 @@ function buildReferenceDecisionRows(details = []) {
   })
 }
 
+function findStageSnapshot(stageTraces, stageCode) {
+  const trace = asList(stageTraces).find((item) => item?.stageCode === stageCode)
+  return trace?.snapshot && typeof trace.snapshot === 'object' ? trace.snapshot : null
+}
+
+function channelTraceKey(index, channelType) {
+  return `${index || 1}:${channelType || 'unknown'}`
+}
+
+function buildChannelTraceLookup(retrieveSnapshot) {
+  const lookup = new Map()
+  snapshotList(retrieveSnapshot || {}, 'subQuestions').forEach((subQuestion) => {
+    const index = subQuestion?.index || 1
+    asList(subQuestion?.channelTraces).forEach((trace) => {
+      if (!trace || typeof trace !== 'object') {
+        return
+      }
+      lookup.set(channelTraceKey(index, trace.channelName), trace)
+    })
+  })
+  return lookup
+}
+
+function referenceIdentityKey(reference, field) {
+  if (!reference || reference[field] == null || reference[field] === '') {
+    return ''
+  }
+  return `${reference.documentId || ''}:${field}:${reference[field]}`
+}
+
+function normalizedSourceType(reference) {
+  return String(reference?.sourceType || '').trim().toUpperCase()
+}
+
+function appendFinalReferenceKeys(lookup, reference, rank) {
+  const sourceType = normalizedSourceType(reference)
+  const keys = []
+  if (sourceType === 'GRAPH_RAG') {
+    keys.push(referenceIdentityKey(reference, 'kgEvidenceId'))
+  } else if (sourceType === 'RAPTOR') {
+    keys.push(referenceIdentityKey(reference, 'raptorNodeId'), referenceIdentityKey(reference, 'chunkId'))
+  } else if (sourceType === 'DOCUMENT_TABLE') {
+    keys.push(referenceIdentityKey(reference, 'tableId'))
+  } else {
+    keys.push(referenceIdentityKey(reference, 'chunkId'))
+  }
+  if (!keys.some(Boolean)) {
+    keys.push(referenceIdentityKey(reference, 'parentBlockId'))
+  }
+  keys.filter(Boolean).forEach((key) => {
+    if (!lookup.has(key)) {
+      lookup.set(key, rank)
+    }
+  })
+}
+
+function buildFinalReferenceLookup(retrieveSnapshot, citationRepairSnapshot, finalReferences = []) {
+  const lookup = new Map()
+  snapshotList(retrieveSnapshot || {}, 'references').forEach((reference, index) => {
+    appendFinalReferenceKeys(lookup, reference, index + 1)
+  })
+  snapshotList(citationRepairSnapshot || {}, 'finalCitations').forEach((reference, index) => {
+    appendFinalReferenceKeys(lookup, reference, reference.rank || index + 1)
+  })
+  asList(finalReferences).forEach((reference, index) => {
+    appendFinalReferenceKeys(lookup, reference, reference.rank || index + 1)
+  })
+  return lookup
+}
+
+function resolveSelectedRankFromReferences(result, finalReferenceLookup) {
+  if (!result || !finalReferenceLookup || !finalReferenceLookup.size) {
+    return null
+  }
+  const keys = [
+    referenceIdentityKey(result, 'kgEvidenceId'),
+    referenceIdentityKey(result, 'raptorNodeId'),
+    referenceIdentityKey(result, 'tableId'),
+    referenceIdentityKey(result, 'chunkId')
+  ].filter(Boolean)
+  for (const key of keys) {
+    if (finalReferenceLookup.has(key)) {
+      return finalReferenceLookup.get(key)
+    }
+  }
+  return null
+}
+
+function resultStatus(result, selectedRank = null) {
+  if (result?.isSelected || selectedRank != null) {
+    return {
+      label: '命中最终证据',
+      tone: 'success'
+    }
+  }
+  if (result && result.gatePassed === false) {
+    return {
+      label: '闸门过滤',
+      tone: 'warning'
+    }
+  }
+  return {
+    label: '未选入',
+    tone: 'neutral'
+  }
+}
+
+function resultSortKey(result) {
+  if (result?.isSelected) {
+    return 0
+  }
+  if (result?.gatePassed === false) {
+    return 2
+  }
+  return 1
+}
+
+function buildFusionResultRow(result, finalReferenceLookup) {
+  const selectedRank = resolveSelectedRankFromReferences(result, finalReferenceLookup)
+  const isSelected = Boolean(result?.isSelected) || selectedRank != null
+  const finalRank = result?.finalRank || selectedRank
+  const status = resultStatus(result, selectedRank)
+  const scoreItems = [
+    { label: 'raw', value: result?.originalScore },
+    { label: 'vector', value: result?.vectorScore },
+    { label: 'keyword', value: result?.keywordScore },
+    { label: 'metadata', value: result?.metadataBoost },
+    { label: 'RRF', value: result?.rrfScore },
+    { label: 'hybrid', value: result?.hybridScore },
+    { label: 'rerank', value: result?.rerankScore }
+  ].map((item) => ({
+    ...item,
+    text: formatScore(item.value),
+    width: scoreBarWidth(item.value)
+  }))
+  const stableId = [
+    result?.subQuestionIndex || 1,
+    result?.channelType || 'unknown',
+    result?.channelRank || 0,
+    finalRank || 0,
+    result?.documentId || '',
+    result?.chunkId || '',
+    result?.parentBlockId || ''
+  ].join('-')
+  return {
+    id: stableId,
+    status,
+    channelType: result?.channelType || 'unknown',
+    channelLabel: formatChannelType(result?.channelType),
+    channelRank: result?.channelRank,
+    rrfRank: result?.rrfRank,
+    finalRank,
+    documentId: result?.documentId || '',
+    documentName: result?.documentName || '未知文档',
+    chunkId: result?.chunkId || '',
+    chunkNo: result?.chunkNo,
+    parentBlockId: result?.parentBlockId || '',
+    parentBlockNo: result?.parentBlockNo,
+    sectionPath: result?.sectionPath || '',
+    preview: result?.chunkTextPreview || '',
+    scoreItems,
+    selectionReason: isSelected ? '该候选命中最终引用证据' : (result?.selectionReason || '未进入最终证据'),
+    isSelected,
+    gatePassed: result?.gatePassed !== false,
+    isElevated: Boolean(result?.isElevated)
+  }
+}
+
+function buildFusionChannelMetric(channelType, trace, execution, maxWeight) {
+  const weight = numericValue(trace?.channelWeight)
+  return {
+    key: channelType,
+    channelType,
+    channelLabel: formatChannelType(channelType),
+    retrievalIntent: trace?.retrievalIntent || '',
+    channelWeight: weight,
+    channelWeightText: weight == null ? '未记录权重' : weight.toFixed(2),
+    weightWidth: weight == null || maxWeight <= 0 ? '0%' : `${Math.max(8, Math.min((weight / maxWeight) * 100, 100))}%`,
+    recalledCount: firstPresent(trace?.recalledCount, execution?.recalledCount, 0),
+    acceptedCount: firstPresent(trace?.acceptedCount, execution?.acceptedCount, 0),
+    finalSelectedCount: firstPresent(execution?.finalSelectedCount, 0),
+    durationMs: execution?.durationMs,
+    avgScore: execution?.avgScore,
+    maxScore: execution?.maxScore,
+    minScore: execution?.minScore,
+    errorMessage: execution?.errorMessage || ''
+  }
+}
+
+export function buildFusionTraceGroups(retrievalResults, channelExecutions, stageTraces, finalReferences = []) {
+  const retrieveSnapshot = findStageSnapshot(stageTraces, 'RAG_RETRIEVE')
+  const citationRepairSnapshot = findStageSnapshot(stageTraces, 'CITATION_REPAIR')
+  const channelTraceLookup = buildChannelTraceLookup(retrieveSnapshot)
+  const finalReferenceLookup = buildFinalReferenceLookup(retrieveSnapshot, citationRepairSnapshot, finalReferences)
+  const executionLookup = new Map()
+  asList(channelExecutions).forEach((execution) => {
+    executionLookup.set(channelTraceKey(execution.subQuestionIndex || 1, execution.channelType), execution)
+  })
+
+  const grouped = new Map()
+  asList(retrievalResults).forEach((result) => {
+    const index = result.subQuestionIndex || 1
+    if (!grouped.has(index)) {
+      grouped.set(index, {
+        index,
+        question: result.subQuestion || `子问题 ${index}`,
+        channelTypes: new Set(),
+        resultRows: []
+      })
+    }
+    const group = grouped.get(index)
+    group.channelTypes.add(result.channelType || 'unknown')
+    group.resultRows.push(buildFusionResultRow(result, finalReferenceLookup))
+  })
+
+  snapshotList(retrieveSnapshot || {}, 'subQuestions').forEach((subQuestion) => {
+    const index = subQuestion?.index || 1
+    if (!grouped.has(index)) {
+      grouped.set(index, {
+        index,
+        question: subQuestion?.question || `子问题 ${index}`,
+        channelTypes: new Set(),
+        resultRows: []
+      })
+    }
+    const group = grouped.get(index)
+    group.fusedCandidateCount = subQuestion?.fusedCandidateCount
+    group.parentCandidateCount = subQuestion?.parentCandidateCount
+    group.rerankedCandidateCount = subQuestion?.rerankedCandidateCount
+    group.referenceCount = subQuestion?.referenceCount
+    asList(subQuestion?.channelTraces).forEach((trace) => group.channelTypes.add(trace?.channelName || 'unknown'))
+  })
+
+  asList(channelExecutions).forEach((execution) => {
+    const index = execution.subQuestionIndex || 1
+    if (!grouped.has(index)) {
+      grouped.set(index, {
+        index,
+        question: execution.subQuestion || `子问题 ${index}`,
+        channelTypes: new Set(),
+        resultRows: []
+      })
+    }
+    grouped.get(index).channelTypes.add(execution.channelType || 'unknown')
+  })
+
+  const groups = Array.from(grouped.values()).sort((a, b) => a.index - b.index).map((group) => {
+    const maxWeight = Array.from(group.channelTypes).reduce((max, channelType) => {
+      const trace = channelTraceLookup.get(channelTraceKey(group.index, channelType))
+      const weight = numericValue(trace?.channelWeight)
+      return Math.max(max, weight || 0)
+    }, 0)
+    const channelMetrics = Array.from(group.channelTypes).map((channelType) => buildFusionChannelMetric(
+      channelType,
+      channelTraceLookup.get(channelTraceKey(group.index, channelType)),
+      executionLookup.get(channelTraceKey(group.index, channelType)),
+      maxWeight
+    )).sort((a, b) => (b.channelWeight || 0) - (a.channelWeight || 0) || a.channelLabel.localeCompare(b.channelLabel))
+    const resultRows = group.resultRows
+      .sort((a, b) => resultSortKey(a) - resultSortKey(b)
+        || (a.finalRank || 9999) - (b.finalRank || 9999)
+        || (a.channelRank || 9999) - (b.channelRank || 9999))
+    channelMetrics.forEach((metric) => {
+      const selectedFromRows = resultRows.filter((row) => row.channelType === metric.channelType && row.isSelected).length
+      if (resultRows.length) {
+        metric.finalSelectedCount = selectedFromRows
+      }
+    })
+    return {
+      ...group,
+      channelMetrics,
+      resultRows,
+      selectedCount: resultRows.filter((item) => item.isSelected).length,
+      filteredCount: resultRows.filter((item) => !item.gatePassed).length,
+      rerankedCount: resultRows.filter((item) => item.scoreItems.some((score) => score.label === 'rerank' && score.text !== '-')).length
+    }
+  })
+
+  const summary = groups.reduce((acc, group) => {
+    acc.subQuestionCount += 1
+    acc.channelCount += group.channelMetrics.length
+    acc.candidateCount += group.resultRows.length
+    acc.selectedCount += group.selectedCount
+    acc.filteredCount += group.filteredCount
+    acc.rerankedCount += group.rerankedCount
+    return acc
+  }, {
+    subQuestionCount: 0,
+    channelCount: 0,
+    candidateCount: 0,
+    selectedCount: 0,
+    filteredCount: 0,
+    rerankedCount: 0
+  })
+
+  return {
+    hasData: groups.length > 0,
+    retrievalQuestion: snapshotValue(retrieveSnapshot, 'retrievalQuestion') || '',
+    usedChannels: snapshotList(retrieveSnapshot || {}, 'usedChannels').map(formatChannelName),
+    summary,
+    groups
+  }
+}
+
+export function buildChannelExecutionDisplay(channelExecutions, fusionTraceView) {
+  const metricMap = new Map()
+  asList(fusionTraceView?.groups).forEach((group) => {
+    asList(group?.channelMetrics).forEach((metric) => {
+      metricMap.set(`${group.index || 1}:${metric.channelType || 'unknown'}`, metric)
+    })
+  })
+  return asList(channelExecutions).map((execution) => ({
+    ...execution,
+    finalSelectedCount: metricMap.get(`${execution.subQuestionIndex || 1}:${execution.channelType || 'unknown'}`)?.finalSelectedCount
+      ?? execution.finalSelectedCount
+  }))
+}
+
+function normalizeCitationTraceItem(item, fallback = {}) {
+  const merged = { ...fallback, ...(item || {}) }
+  const referenceId = merged.referenceId || merged.evidenceId || ''
+  const documentName = merged.documentName || merged.title || '未命名文档'
+  return {
+    key: `${referenceId || 'ref'}-${merged.segmentIndex ?? merged.citationSegmentIndex ?? ''}-${merged.rank ?? merged.citationRank ?? ''}-${merged.chunkId || merged.parentBlockId || ''}`,
+    referenceId,
+    evidenceId: merged.evidenceId || referenceId,
+    sourceType: merged.sourceType || '',
+    channel: merged.channel || '',
+    channelLabel: merged.channel ? formatChannelName(merged.channel) : '未记录通道',
+    documentId: merged.documentId || '',
+    documentName,
+    chunkId: merged.chunkId || '',
+    chunkNo: merged.chunkNo,
+    parentBlockId: merged.parentBlockId || '',
+    parentBlockNo: merged.parentBlockNo,
+    tableId: merged.tableId || '',
+    tableNo: merged.tableNo,
+    tableTitle: merged.tableTitle || '',
+    kgEvidenceId: merged.kgEvidenceId || '',
+    raptorNodeId: merged.raptorNodeId || '',
+    sectionPath: merged.sectionPath || '',
+    pageNo: merged.pageNo,
+    pageRange: merged.pageRange || '',
+    answerSegment: merged.answerSegment || '',
+    segmentIndex: firstPresent(merged.segmentIndex, merged.citationSegmentIndex),
+    quoteText: merged.quoteText || '',
+    candidateText: merged.candidateText || merged.snippet || '',
+    citationScore: firstPresent(merged.citationScore, merged.score),
+    rerankScore: merged.rerankScore || merged.referenceScore || '',
+    rank: firstPresent(merged.rank, merged.citationRank),
+    repairedBefore: Boolean(merged.repairedBefore),
+    repairedAfter: Boolean(firstPresent(merged.repairedAfter, merged.citationRepaired)),
+    matched: merged.matched !== false,
+    filteredReason: merged.filteredReason || '',
+    scoreText: formatScore(firstPresent(merged.citationScore, merged.score)),
+    rerankScoreText: formatScore(merged.rerankScore || merged.referenceScore),
+    scoreWidth: scoreBarWidth(firstPresent(merged.citationScore, merged.score))
+  }
+}
+
+function findReferenceFallback(referenceIndex, item) {
+  const keys = [
+    item?.referenceId,
+    item?.evidenceId,
+    item?.chunkId ? `chunk:${item.chunkId}` : '',
+    item?.parentBlockId ? `parent:${item.parentBlockId}` : '',
+    item?.documentId ? `doc:${item.documentId}` : ''
+  ].filter(Boolean)
+  for (const key of keys) {
+    if (referenceIndex.has(String(key))) {
+      return referenceIndex.get(String(key))
+    }
+  }
+  return {}
+}
+
+function buildReferenceIndex(references, retrievalResults) {
+  const index = new Map()
+  asList(references).forEach((reference) => {
+    const normalized = normalizeCitationTraceItem(reference)
+    ;[
+      reference.referenceId,
+      reference.chunkId ? `chunk:${reference.chunkId}` : '',
+      reference.parentBlockId ? `parent:${reference.parentBlockId}` : '',
+      reference.documentId ? `doc:${reference.documentId}` : ''
+    ].filter(Boolean).forEach((key) => index.set(String(key), normalized))
+  })
+  asList(retrievalResults).forEach((result) => {
+    const normalized = {
+      documentId: result.documentId,
+      documentName: result.documentName,
+      chunkId: result.chunkId,
+      chunkNo: result.chunkNo,
+      parentBlockId: result.parentBlockId,
+      parentBlockNo: result.parentBlockNo,
+      sectionPath: result.sectionPath,
+      channel: result.channelType,
+      candidateText: result.chunkTextPreview,
+      rerankScore: result.rerankScore || result.hybridScore || result.originalScore
+    }
+    ;[
+      result.chunkId ? `chunk:${result.chunkId}` : '',
+      result.parentBlockId ? `parent:${result.parentBlockId}` : '',
+      result.documentId ? `doc:${result.documentId}` : ''
+    ].filter(Boolean).forEach((key) => {
+      if (!index.has(String(key))) {
+        index.set(String(key), normalizeCitationTraceItem(normalized))
+      }
+    })
+  })
+  return index
+}
+
+export function buildCitationRepairView(stageTraces, references, retrievalResults) {
+  const snapshot = findStageSnapshot(stageTraces, 'CITATION_REPAIR')
+  const referenceIndex = buildReferenceIndex(references, retrievalResults)
+  const fallbackFinals = asList(references).filter((item) => item?.citationRepaired || item?.quoteText || item?.answerSegment)
+  const candidateEvidences = snapshotList(snapshot || {}, 'candidateEvidences').map((item) => normalizeCitationTraceItem(item, findReferenceFallback(referenceIndex, item)))
+  const matchedCitations = snapshotList(snapshot || {}, 'matchedCitations').map((item) => normalizeCitationTraceItem(item, findReferenceFallback(referenceIndex, item)))
+  const finalCitations = (snapshotList(snapshot || {}, 'finalCitations').length
+    ? snapshotList(snapshot || {}, 'finalCitations')
+    : snapshotList(snapshot || {}, 'citations').length
+      ? snapshotList(snapshot || {}, 'citations')
+      : fallbackFinals
+  ).map((item) => normalizeCitationTraceItem(item, findReferenceFallback(referenceIndex, item)))
+  const removedCandidates = snapshotList(snapshot || {}, 'removedCandidates').map((item) => normalizeCitationTraceItem(item, findReferenceFallback(referenceIndex, item)))
+
+  const segments = new Map()
+  const ensureSegment = (item, index) => {
+    const key = item.answerSegment || (item.segmentIndex != null ? `segment-${item.segmentIndex}` : `segment-${index + 1}`)
+    if (!segments.has(key)) {
+      segments.set(key, {
+        key,
+        answerSegment: item.answerSegment || `答案句 ${item.segmentIndex != null ? item.segmentIndex + 1 : index + 1}`,
+        segmentIndex: item.segmentIndex,
+        matched: [],
+        finals: []
+      })
+    }
+    return segments.get(key)
+  }
+  matchedCitations.forEach((item, index) => ensureSegment(item, index).matched.push(item))
+  finalCitations.forEach((item, index) => ensureSegment(item, index).finals.push(item))
+
+  const segmentList = Array.from(segments.values()).sort((a, b) => {
+    const ai = a.segmentIndex == null ? 9999 : Number(a.segmentIndex)
+    const bi = b.segmentIndex == null ? 9999 : Number(b.segmentIndex)
+    return ai - bi
+  })
+
+  const summary = {
+    candidateReferenceCount: snapshotValue(snapshot || {}, 'candidateReferenceCount') || candidateEvidences.length,
+    documentReferenceCount: snapshotValue(snapshot || {}, 'documentReferenceCount') || candidateEvidences.length,
+    matchedCitationCount: snapshotValue(snapshot || {}, 'matchedCitationCount') || matchedCitations.length,
+    repairedReferenceCount: snapshotValue(snapshot || {}, 'repairedReferenceCount') || finalCitations.length,
+    removedDocumentReferenceCount: snapshotValue(snapshot || {}, 'removedDocumentReferenceCount') || removedCandidates.length,
+    minScore: snapshotValue(snapshot || {}, 'minScore'),
+    maxSegments: snapshotValue(snapshot || {}, 'maxSegments'),
+    maxMatchesPerSegment: snapshotValue(snapshot || {}, 'maxMatchesPerSegment')
+  }
+
+  return {
+    hasData: Boolean(snapshot || finalCitations.length || matchedCitations.length),
+    hasSnapshot: Boolean(snapshot),
+    summary,
+    candidateEvidences,
+    matchedCitations,
+    finalCitations,
+    removedCandidates,
+    segments: segmentList
+  }
+}
+
 export function buildTraceStageInspector(stageTrace, exchange) {
   if (!stageTrace) {
     return null
@@ -988,7 +1487,9 @@ export function buildTraceStageInspector(stageTrace, exchange) {
             if (!trace || typeof trace !== 'object') {
               return ''
             }
-            return `${formatChannelName(trace.channelName)} raw=${trace.recalledCount || 0} accepted=${trace.acceptedCount || 0}`
+            const weightText = trace.channelWeight == null ? '' : ` weight=${formatScore(trace.channelWeight)}`
+            const intentText = trace.retrievalIntent ? ` intent=${trace.retrievalIntent}` : ''
+            return `${formatChannelName(trace.channelName)} raw=${trace.recalledCount || 0} accepted=${trace.acceptedCount || 0}${weightText}${intentText}`
           }).filter(Boolean).join('；')
           return `${item.index}. ${item.question} | 通道 ${channelTraceText || '无'} | fused ${item.fusedCandidateCount || 0} | parent ${item.parentCandidateCount || 0} | rerank ${item.rerankedCandidateCount || 0} | 文档 ${item.documentCount || 0} | 引用 ${item.referenceCount || 0}`
         }).filter(Boolean),
@@ -1015,7 +1516,8 @@ export function buildTraceStageInspector(stageTrace, exchange) {
           const channelTraces = Array.isArray(item.channelTraces) ? item.channelTraces : []
           const countTrace = (channelName) => {
             const trace = channelTraces.find((entry) => entry?.channelName === channelName)
-            return `${trace?.recalledCount ?? 0} / ${trace?.acceptedCount ?? 0}`
+            const weight = trace?.channelWeight == null ? '' : ` / w ${formatScore(trace.channelWeight)}`
+            return `${trace?.recalledCount ?? 0} / ${trace?.acceptedCount ?? 0}${weight}`
           }
           return {
             cells: [
@@ -1068,6 +1570,68 @@ export function buildTraceStageInspector(stageTrace, exchange) {
         }))
       })
       break
+    case 'CITATION_REPAIR': {
+      const repairView = buildCitationRepairView([stageTrace], exchange?.references || [], [])
+      pushPair(summaryItems, '候选引用数', repairView.summary.candidateReferenceCount)
+      pushPair(summaryItems, '文档候选数', repairView.summary.documentReferenceCount)
+      pushPair(summaryItems, '语义匹配数', repairView.summary.matchedCitationCount)
+      pushPair(summaryItems, '最终引用数', repairView.summary.repairedReferenceCount)
+      pushPair(summaryItems, '移除文档证据数', repairView.summary.removedDocumentReferenceCount)
+      pushPair(summaryItems, '最低匹配阈值', repairView.summary.minScore)
+      tableSections.push({
+        label: '候选证据',
+        columns: ['Evidence', '通道', '文档', '位置', '候选文本'],
+        rows: repairView.candidateEvidences.map((item) => ({
+          cells: [
+            item.evidenceId || item.referenceId || '-',
+            item.channelLabel,
+            item.documentName,
+            item.pageNo ? `第 ${item.pageNo} 页` : (item.sectionPath || '-'),
+            truncate(item.candidateText, 120)
+          ]
+        }))
+      })
+      tableSections.push({
+        label: '语义匹配结果',
+        columns: ['答案句', 'Evidence', 'Quote', '分数', '状态'],
+        rows: repairView.matchedCitations.map((item) => ({
+          cells: [
+            truncate(item.answerSegment, 80),
+            item.evidenceId || item.referenceId || '-',
+            truncate(item.quoteText, 120),
+            item.scoreText,
+            item.filteredReason || (item.repairedAfter ? '进入最终引用候选' : '未进入最终引用')
+          ]
+        }))
+      })
+      tableSections.push({
+        label: '最终引用',
+        columns: ['答案句', '引用', '文档', 'Quote', '分数'],
+        rows: repairView.finalCitations.map((item) => ({
+          cells: [
+            truncate(item.answerSegment, 80),
+            item.referenceId || item.evidenceId || '-',
+            item.documentName,
+            truncate(item.quoteText, 120),
+            item.scoreText
+          ]
+        }))
+      })
+      tableSections.push({
+        label: '未进入最终引用',
+        columns: ['Evidence', '通道', '文档', '候选文本', '原因'],
+        rows: repairView.removedCandidates.map((item) => ({
+          cells: [
+            item.evidenceId || item.referenceId || '-',
+            item.channelLabel,
+            item.documentName,
+            truncate(item.candidateText, 100),
+            item.filteredReason || '未进入最终引用'
+          ]
+        }))
+      })
+      break
+    }
     case 'EVIDENCE_BUDGET':
       pushPair(summaryItems, '总预算', snapshotValue(snapshot, 'totalBudget'))
       pushPair(summaryItems, '单子问题预算', snapshotValue(snapshot, 'perSubQuestionBudget'))

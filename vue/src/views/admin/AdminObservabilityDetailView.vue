@@ -142,11 +142,11 @@
         </div>
       </section>
 
-      <section v-if="channelExecutions.length > 0">
+      <section v-if="channelExecutionDisplay.length > 0">
         <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">通道执行对比</h3>
         <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">对比各检索通道的性能和效果。</p>
         <div class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-          <article v-for="exec in channelExecutions" :key="exec.id" class="rounded-lg border border-border bg-card p-4">
+          <article v-for="exec in channelExecutionDisplay" :key="exec.id" class="rounded-lg border border-border bg-card p-4">
             <div class="mb-2 flex items-center justify-between gap-2">
               <strong class="text-sm text-foreground">{{ formatChannelType(exec.channelType) }}</strong>
               <span class="inline-flex rounded px-2 py-0.5 text-[11px] font-semibold" :class="statusBadgeClass(exec.executionState === 1 ? 'COMPLETED' : 'FAILED')">{{ formatExecutionState(exec.executionState) }}</span>
@@ -159,6 +159,92 @@
               </div>
             </div>
             <div v-if="exec.errorMessage" class="mt-2 rounded-md bg-destructive/[0.06] px-2.5 py-2 text-xs text-destructive">{{ exec.errorMessage }}</div>
+          </article>
+        </div>
+      </section>
+
+      <section v-if="fusionTraceView.hasData">
+        <div class="flex items-start justify-between gap-3 max-[768px]:flex-col">
+          <div>
+            <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">融合过程</h3>
+            <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">查看 route intent、通道权重、各通道 TopN、weighted hybrid、rerank 和最终选择原因。</p>
+          </div>
+          <div class="flex flex-wrap justify-end gap-1.5">
+            <span class="inline-flex rounded bg-foreground/[0.06] px-2.5 py-1 text-xs font-semibold text-[var(--color-muted-strong)]">子问题 {{ fusionTraceView.summary.subQuestionCount }}</span>
+            <span class="inline-flex rounded bg-primary/[0.08] px-2.5 py-1 text-xs font-semibold text-primary">候选 {{ fusionTraceView.summary.candidateCount }}</span>
+            <span class="inline-flex rounded bg-[var(--color-success)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--color-success)]">命中证据候选 {{ fusionTraceView.summary.selectedCount }}</span>
+            <span class="inline-flex rounded bg-amber-500/[0.14] px-2.5 py-1 text-xs font-semibold text-amber-700">过滤 {{ fusionTraceView.summary.filteredCount }}</span>
+          </div>
+        </div>
+        <div class="mt-4 flex flex-col gap-5">
+          <article v-for="subQ in fusionTraceView.groups" :key="`fusion-${subQ.index}`" class="rounded-lg border border-border bg-card p-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h4 class="m-0 text-sm font-semibold text-foreground">子问题 {{ subQ.index }}：{{ subQ.question }}</h4>
+                <div class="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <span>融合候选 {{ subQ.fusedCandidateCount ?? '-' }}</span>
+                  <span>父块提升 {{ subQ.parentCandidateCount ?? '-' }}</span>
+                  <span>重排候选 {{ subQ.rerankedCandidateCount ?? '-' }}</span>
+                  <span>最终引用 {{ subQ.referenceCount ?? subQ.selectedCount }}</span>
+                </div>
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                <span class="inline-flex rounded bg-primary/[0.08] px-2 py-0.5 text-[11px] font-semibold text-primary">命中证据候选 {{ subQ.selectedCount }}</span>
+                <span class="inline-flex rounded bg-foreground/[0.06] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-muted-strong)]">候选 {{ subQ.resultRows.length }}</span>
+              </div>
+            </div>
+            <div v-if="subQ.channelMetrics.length" class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
+              <div v-for="metric in subQ.channelMetrics" :key="`${subQ.index}-${metric.key}`" class="rounded-md border border-border bg-secondary/50 p-3">
+                <div class="mb-2 flex items-center justify-between gap-2">
+                  <strong class="text-[13px] text-foreground">{{ metric.channelLabel }}</strong>
+                  <span class="rounded bg-card px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--color-muted-strong)]">{{ metric.channelWeightText }}</span>
+                </div>
+                <div class="h-1.5 overflow-hidden rounded-full bg-foreground/[0.08]">
+                  <div class="h-full rounded-full bg-primary/65" :style="{ width: metric.weightWidth }"></div>
+                </div>
+                <div class="mt-2 grid grid-cols-3 gap-2 text-[12px]">
+                  <div class="grid gap-0.5"><span class="text-muted-foreground">召回</span><strong class="text-foreground">{{ metric.recalledCount }}</strong></div>
+                  <div class="grid gap-0.5"><span class="text-muted-foreground">闸门后</span><strong class="text-foreground">{{ metric.acceptedCount }}</strong></div>
+                  <div class="grid gap-0.5"><span class="text-muted-foreground">命中证据</span><strong class="text-primary">{{ metric.finalSelectedCount }}</strong></div>
+                </div>
+                <div v-if="metric.retrievalIntent" class="mt-2 text-[11px] text-muted-foreground">intent {{ metric.retrievalIntent }}</div>
+              </div>
+            </div>
+            <div v-if="subQ.resultRows.length" class="mt-4 overflow-x-auto rounded-md border border-border">
+              <table class="w-full min-w-[980px] border-collapse text-sm">
+                <thead><tr class="bg-secondary"><th v-for="h in ['状态','通道/排名','文档块','分数拆解','最终排名/原因']" :key="h" class="border-b border-border px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">{{ h }}</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in subQ.resultRows" :key="row.id" class="border-b border-border last:border-0 transition-colors" :class="row.isSelected ? 'bg-primary/[0.04]' : ''">
+                    <td class="px-3 py-3">
+                      <span class="inline-flex rounded px-2 py-0.5 text-xs font-semibold" :class="fusionStatusClass(row.status.tone)">{{ row.status.label }}</span>
+                    </td>
+                    <td class="px-3 py-3 text-[13px] text-muted-foreground">
+                      <div class="font-semibold text-foreground">{{ row.channelLabel }}</div>
+                      <div>通道 #{{ row.channelRank || '-' }}<span v-if="row.rrfRank"> / RRF #{{ row.rrfRank }}</span></div>
+                    </td>
+                    <td class="px-3 py-3">
+                      <div class="text-[13px] font-medium text-foreground">{{ row.documentName }}</div>
+                      <div v-if="row.sectionPath" class="mt-0.5 text-xs text-muted-foreground">{{ row.sectionPath }}</div>
+                      <div class="mt-0.5 text-xs text-muted-foreground">chunk {{ row.chunkNo || row.chunkId || '-' }} / parent {{ row.parentBlockNo || row.parentBlockId || '-' }}</div>
+                      <p v-if="row.preview" class="mt-1 max-w-[340px] text-xs leading-relaxed text-[var(--color-muted-strong)]">{{ truncate(row.preview, 130) }}</p>
+                    </td>
+                    <td class="px-3 py-3">
+                      <div class="grid min-w-[320px] grid-cols-7 gap-1.5">
+                        <div v-for="score in row.scoreItems" :key="`${row.id}-${score.label}`" class="grid gap-1">
+                          <span class="font-mono text-[10px] text-muted-foreground">{{ score.label }}</span>
+                          <span class="font-mono text-[11px] text-foreground">{{ score.text }}</span>
+                          <span class="h-1 overflow-hidden rounded-full bg-foreground/[0.08]"><span class="block h-full rounded-full bg-primary/60" :style="{ width: score.width }"></span></span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="px-3 py-3 text-[13px] text-muted-foreground">
+                      <div class="font-semibold" :class="row.isSelected ? 'text-primary' : 'text-foreground'">{{ row.finalRank ? `最终 #${row.finalRank}` : '未进入最终排序' }}</div>
+                      <div class="mt-0.5 max-w-[260px] leading-relaxed">{{ row.selectionReason }}</div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </article>
         </div>
       </section>
@@ -198,6 +284,73 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <section v-if="citationRepairView.hasData">
+        <div class="flex items-start justify-between gap-3 max-[768px]:flex-col">
+          <div>
+            <h3 class="mb-1 mt-1 text-base font-semibold text-foreground">Citation repair</h3>
+            <p class="m-0 text-[13px] text-[var(--color-muted-strong)]">查看答案句、候选证据、语义匹配 quote、修复结果和最终引用。</p>
+          </div>
+          <div class="flex flex-wrap justify-end gap-1.5">
+            <span class="inline-flex rounded bg-foreground/[0.06] px-2.5 py-1 text-xs font-semibold text-[var(--color-muted-strong)]">候选 {{ citationRepairView.summary.documentReferenceCount }}</span>
+            <span class="inline-flex rounded bg-primary/[0.08] px-2.5 py-1 text-xs font-semibold text-primary">匹配 {{ citationRepairView.summary.matchedCitationCount }}</span>
+            <span class="inline-flex rounded bg-[var(--color-success)]/10 px-2.5 py-1 text-xs font-semibold text-[var(--color-success)]">最终 {{ citationRepairView.summary.repairedReferenceCount }}</span>
+            <span class="inline-flex rounded bg-amber-500/[0.14] px-2.5 py-1 text-xs font-semibold text-amber-700">移除 {{ citationRepairView.summary.removedDocumentReferenceCount }}</span>
+          </div>
+        </div>
+        <div class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+          <div v-for="item in citationSummaryItems" :key="item.label" class="rounded-md border border-border bg-card p-3">
+            <span class="text-xs text-muted-foreground">{{ item.label }}</span>
+            <strong class="mt-1 block text-sm text-foreground">{{ item.value }}</strong>
+          </div>
+        </div>
+        <div v-if="citationRepairView.segments.length" class="mt-4 flex flex-col gap-3">
+          <article v-for="segment in citationRepairView.segments" :key="segment.key" class="rounded-lg border border-border bg-card p-4">
+            <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+              <div class="min-w-0">
+                <span class="text-xs text-muted-foreground">答案句 {{ segment.segmentIndex != null ? Number(segment.segmentIndex) + 1 : '' }}</span>
+                <p class="m-0 mt-1 text-[13px] leading-relaxed text-foreground">{{ segment.answerSegment }}</p>
+              </div>
+              <span class="inline-flex rounded bg-primary/[0.08] px-2 py-0.5 text-[11px] font-semibold text-primary">最终 {{ segment.finals.length }} / 匹配 {{ segment.matched.length }}</span>
+            </div>
+            <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+              <div v-for="item in segment.finals" :key="`final-${segment.key}-${item.key}`" class="rounded-md border border-[var(--color-success)]/20 bg-[var(--color-success)]/[0.04] p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <strong class="text-[13px] text-foreground">引用 {{ item.referenceId || item.evidenceId || '-' }}</strong>
+                  <span class="rounded bg-card px-2 py-0.5 font-mono text-[11px] font-semibold text-[var(--color-success)]">{{ item.scoreText }}</span>
+                </div>
+                <p v-if="item.quoteText" class="mt-2 text-xs leading-relaxed text-foreground">{{ truncate(item.quoteText, 180) }}</p>
+                <div class="mt-2 text-xs text-muted-foreground">{{ item.documentName }}<span v-if="item.sectionPath"> / {{ item.sectionPath }}</span></div>
+                <div class="mt-1 flex flex-wrap gap-1.5">
+                  <span class="rounded bg-card px-2 py-0.5 text-[11px] font-semibold text-[var(--color-muted-strong)]">{{ item.channelLabel }}</span>
+                  <span v-if="item.repairedAfter" class="rounded bg-[var(--color-success)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-success)]">repair 后引用</span>
+                </div>
+                <RouterLink v-if="item.documentId" :to="citationDocumentRoute(item)"
+                  class="mt-3 inline-flex rounded-md border border-primary/20 bg-primary/[0.06] px-3 py-1.5 text-[12px] font-semibold text-primary transition-colors hover:bg-primary/[0.10]">
+                  查看文档证据
+                </RouterLink>
+              </div>
+            </div>
+          </article>
+        </div>
+        <details v-if="citationRepairView.removedCandidates.length" class="mt-4 rounded-lg border border-border bg-card p-4">
+          <summary class="cursor-pointer text-sm font-semibold text-foreground">未进入最终引用的候选证据</summary>
+          <div class="mt-3 overflow-x-auto rounded-md border border-border">
+            <table class="w-full min-w-[760px] border-collapse text-sm">
+              <thead><tr class="bg-secondary"><th v-for="h in ['Evidence','通道','文档','候选文本','原因']" :key="h" class="border-b border-border px-3 py-2.5 text-left text-xs font-semibold text-muted-foreground">{{ h }}</th></tr></thead>
+              <tbody>
+                <tr v-for="item in citationRepairView.removedCandidates" :key="`removed-${item.key}`" class="border-b border-border last:border-0">
+                  <td class="px-3 py-2.5 font-mono text-xs text-foreground">{{ item.evidenceId || item.referenceId || '-' }}</td>
+                  <td class="px-3 py-2.5 text-[13px] text-muted-foreground">{{ item.channelLabel }}</td>
+                  <td class="px-3 py-2.5 text-[13px] text-foreground">{{ item.documentName }}</td>
+                  <td class="px-3 py-2.5 text-xs text-muted-foreground">{{ truncate(item.candidateText, 130) }}</td>
+                  <td class="px-3 py-2.5 text-[13px] text-muted-foreground">{{ item.filteredReason || '未进入最终引用' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <section v-if="evidenceBudgetSnapshot">
@@ -339,7 +492,7 @@ import { ArrowLeftIcon, ArrowPathIcon } from '@heroicons/vue/24/outline'
 import { chatApi } from '../../api/api'
 import {
   buildExchangeStages, buildExchangeStatusNarrative, buildTraceStageInspector, buildUsageStageInspector,
-  buildTableEvidenceItems,
+  buildChannelExecutionDisplay, buildCitationRepairView, buildFusionTraceGroups, buildTableEvidenceItems,
   formatChatMode, formatDateTime, formatExecutionMode, formatStatusLabel, formatChannelType,
   formatExecutionState, formatScore, groupResultsBySubQuestion, normalizeError, statusTone, truncate
 } from './observabilityHelpers'
@@ -374,9 +527,20 @@ const totalTokenCount = computed(() => (activeExchange.value?.debugTrace?.modelU
 const totalCostText = computed(() => { const total = (activeExchange.value?.debugTrace?.modelUsageTraces || []).reduce((sum, item) => sum + Number(item?.estimatedCost || 0), 0); return total > 0 ? `¥ ${total.toFixed(4)}` : '无' })
 const maxTraceDuration = computed(() => stageTraces.value.reduce((max, item) => Math.max(max, Number(item?.durationMs || 0)), 0))
 const groupedRetrievalResults = computed(() => groupResultsBySubQuestion(retrievalResults.value))
+const fusionTraceView = computed(() => buildFusionTraceGroups(retrievalResults.value, channelExecutions.value, stageTraces.value, activeExchange.value?.references || []))
+const channelExecutionDisplay = computed(() => buildChannelExecutionDisplay(channelExecutions.value, fusionTraceView.value))
 const evidenceBudgetSnapshot = computed(() => stageTraces.value.find((item) => item.stageCode === 'EVIDENCE_BUDGET')?.snapshot || null)
 const tableEvidenceItems = computed(() => buildTableEvidenceItems(activeExchange.value?.references || []))
 const tableEvidenceBboxCount = computed(() => tableEvidenceItems.value.reduce((sum, item) => sum + item.cellBboxJsons.length, 0))
+const citationRepairView = computed(() => buildCitationRepairView(stageTraces.value, activeExchange.value?.references || [], retrievalResults.value))
+const citationSummaryItems = computed(() => [
+  { label: '候选引用', value: citationRepairView.value.summary.candidateReferenceCount },
+  { label: '文档候选', value: citationRepairView.value.summary.documentReferenceCount },
+  { label: '语义匹配', value: citationRepairView.value.summary.matchedCitationCount },
+  { label: '最终引用', value: citationRepairView.value.summary.repairedReferenceCount },
+  { label: '移除文档证据', value: citationRepairView.value.summary.removedDocumentReferenceCount },
+  { label: '阈值 / 分句', value: `${citationRepairView.value.summary.minScore ?? '-'} / ${citationRepairView.value.summary.maxSegments ?? '-'}` }
+])
 const ragSystemPrompt = computed(() => activeExchange.value?.debugTrace?.ragSystemPrompt || '')
 const ragUserPrompt = computed(() => activeExchange.value?.debugTrace?.ragUserPrompt || '')
 const hasPromptData = computed(() => Boolean(ragSystemPrompt.value || ragUserPrompt.value))
@@ -422,11 +586,16 @@ function benchmarkLevelClass(level) {
   if (level === 'warning') return 'bg-amber-500/[0.14] text-amber-700'
   return 'bg-red-500/[0.12] text-red-700'
 }
+function fusionStatusClass(tone) {
+  if (tone === 'success') return 'bg-[var(--color-success)]/10 text-[var(--color-success)]'
+  if (tone === 'warning') return 'bg-amber-500/[0.14] text-amber-700'
+  return 'bg-foreground/[0.06] text-[var(--color-muted-strong)]'
+}
 function channelMetrics(exec) {
   return [
     { label: '召回数', value: exec.recalledCount },
     { label: '闸门后', value: exec.acceptedCount },
-    { label: '最终选入', value: exec.finalSelectedCount, highlight: true },
+    { label: '命中证据候选', value: exec.finalSelectedCount, highlight: true },
     { label: '耗时', value: exec.durationMs ? `${exec.durationMs} ms` : '-' },
     { label: '平均分', value: formatScore(exec.avgScore) },
     { label: '分数区间', value: `${formatScore(exec.minScore)}~${formatScore(exec.maxScore)}` }
@@ -455,6 +624,19 @@ function tableEvidenceDocumentRoute(item) {
       highlightRows: item.rowNos.length ? item.rowNos.join(',') : undefined,
       highlightColumns: item.columnNames.length ? item.columnNames.join(',') : undefined,
       highlightCells: item.cellCoordinates.length ? item.cellCoordinates.join(',') : undefined
+    }
+  }
+}
+function citationDocumentRoute(item) {
+  return {
+    name: 'AdminDocumentDetail',
+    params: { documentId: item.documentId },
+    query: {
+      section: 'rag',
+      highlightChunkId: item.chunkId || undefined,
+      highlightParentBlockId: item.parentBlockId || undefined,
+      highlightTableId: item.tableId || undefined,
+      highlightPageNo: item.pageNo || undefined
     }
   }
 }
