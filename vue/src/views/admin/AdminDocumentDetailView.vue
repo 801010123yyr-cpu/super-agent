@@ -142,34 +142,42 @@
             </div>
           </div>
 
-          <div class="mb-3 flex flex-wrap items-center gap-2">
-            <label class="relative min-w-[220px] flex-1">
-              <MagnifyingGlassIcon class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input v-model="artifactSearchKeyword" class="h-9 w-full rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20" type="search" placeholder="搜索 jobId、layouts、pos 或字段路径" />
-            </label>
-            <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-muted-foreground">匹配 {{ artifactSearchMatchCount }} 处</span>
-            <button v-if="artifactCanCollapse" class="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="artifactPreviewCollapsed = !artifactPreviewCollapsed">{{ artifactPreviewCollapsed ? '展开全文' : '折叠预览' }}</button>
-            <button class="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="copyText(formattedArtifactContent)">
-              <ClipboardDocumentIcon class="h-3.5 w-3.5" />
-              复制内容
-            </button>
-          </div>
-
-          <div v-if="artifactJsonPathRows.length" class="mb-3 rounded-md border border-border bg-secondary p-3">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <strong class="text-xs text-foreground">JSON 字段路径</strong>
-              <span class="text-[11px] text-muted-foreground">{{ artifactSearchKeyword ? '按搜索词过滤' : '顶层字段' }}</span>
+          <template v-if="artifactIsImage">
+            <div v-if="artifactImageSrc" class="max-h-[68vh] overflow-auto rounded-md border border-border bg-secondary p-3">
+              <img class="mx-auto block max-h-[64vh] max-w-full rounded border border-border bg-white object-contain" :src="artifactImageSrc" :alt="artifactPreviewItem?.fileName || 'parse artifact image'" />
             </div>
-            <div class="grid max-h-40 gap-1.5 overflow-y-auto">
-              <button v-for="row in artifactJsonPathRows" :key="row.path" class="flex items-start gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:border-primary/30" type="button" @click="copyText(row.path)">
-                <code class="shrink-0 text-[11px] font-semibold text-primary">{{ row.path }}</code>
-                <span class="line-clamp-1 min-w-0 text-[11px] text-muted-foreground">{{ row.preview }}</span>
+            <div v-else class="rounded-md border border-dashed border-border py-8 text-center text-sm text-muted-foreground">当前图片内容为空。</div>
+          </template>
+          <template v-else>
+            <div class="mb-3 flex flex-wrap items-center gap-2">
+              <label class="relative min-w-[220px] flex-1">
+                <MagnifyingGlassIcon class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <input v-model="artifactSearchKeyword" class="h-9 w-full rounded-md border border-border bg-card pl-9 pr-3 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20" type="search" placeholder="搜索 jobId、layouts、pos 或字段路径" />
+              </label>
+              <span class="rounded-full bg-secondary px-3 py-1.5 text-xs text-muted-foreground">匹配 {{ artifactSearchMatchCount }} 处</span>
+              <button v-if="artifactCanCollapse" class="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="artifactPreviewCollapsed = !artifactPreviewCollapsed">{{ artifactPreviewCollapsed ? '展开全文' : '折叠预览' }}</button>
+              <button class="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary" type="button" @click="copyText(formattedArtifactContent)">
+                <ClipboardDocumentIcon class="h-3.5 w-3.5" />
+                复制内容
               </button>
             </div>
-          </div>
 
-          <pre class="max-h-[62vh] overflow-auto rounded-md border border-border bg-[#0f172a] p-4 text-xs leading-5 text-[#e2e8f0]">{{ visibleArtifactContent }}</pre>
-          <p v-if="artifactPreviewCollapsed" class="mt-2 text-xs text-muted-foreground">内容较大，已默认折叠显示前 {{ formatCount(ARTIFACT_PREVIEW_LIMIT) }} 个字符，可展开全文或直接下载。</p>
+            <div v-if="artifactJsonPathRows.length" class="mb-3 rounded-md border border-border bg-secondary p-3">
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <strong class="text-xs text-foreground">JSON 字段路径</strong>
+                <span class="text-[11px] text-muted-foreground">{{ artifactSearchKeyword ? '按搜索词过滤' : '顶层字段' }}</span>
+              </div>
+              <div class="grid max-h-40 gap-1.5 overflow-y-auto">
+                <button v-for="row in artifactJsonPathRows" :key="row.path" class="flex items-start gap-2 rounded-md border border-border bg-card px-2.5 py-2 text-left hover:border-primary/30" type="button" @click="copyText(row.path)">
+                  <code class="shrink-0 text-[11px] font-semibold text-primary">{{ row.path }}</code>
+                  <span class="line-clamp-1 min-w-0 text-[11px] text-muted-foreground">{{ row.preview }}</span>
+                </button>
+              </div>
+            </div>
+
+            <pre class="max-h-[62vh] overflow-auto rounded-md border border-border bg-[#0f172a] p-4 text-xs leading-5 text-[#e2e8f0]">{{ visibleArtifactContent }}</pre>
+            <p v-if="artifactPreviewCollapsed" class="mt-2 text-xs text-muted-foreground">内容较大，已默认折叠显示前 {{ formatCount(ARTIFACT_PREVIEW_LIMIT) }} 个字符，可展开全文或直接下载。</p>
+          </template>
         </div>
       </aside>
     </transition>
@@ -1121,6 +1129,19 @@ const visibleArtifactContent = computed(() => {
 })
 const artifactSearchMatchCount = computed(() => countTextMatches(formattedArtifactContent.value, artifactSearchKeyword.value))
 const artifactJsonPathRows = computed(() => buildArtifactJsonPathRows(formattedArtifactContent.value, artifactSearchKeyword.value))
+const artifactIsImage = computed(() => artifactContent.value?.image === true || String(artifactPreviewItem.value?.contentType || '').toLowerCase().startsWith('image/'))
+const artifactImageSrc = computed(() => {
+  const directUrl = String(artifactContent.value?.dataUrl || '')
+  if (directUrl) {
+    return directUrl
+  }
+  const imageBase64 = String(artifactContent.value?.imageBase64 || '')
+  if (!imageBase64) {
+    return ''
+  }
+  const contentType = String(artifactPreviewItem.value?.contentType || 'image/png').split(';')[0] || 'image/png'
+  return `data:${contentType};base64,${imageBase64}`
+})
 const parserTraceWarnings = computed(() => asArray(parserTrace.value?.warnings).slice(0, 5))
 const parserTraceBlockTypes = computed(() => {
   const counts = parserTrace.value?.blockTypeCounts || {}
@@ -2728,7 +2749,7 @@ async function openParseArtifact(item) {
       artifactId: item.artifactId
     })
     artifactContent.value = data
-    artifactPreviewCollapsed.value = Boolean(data?.json) && Number(data?.contentLength || 0) > ARTIFACT_PREVIEW_LIMIT
+    artifactPreviewCollapsed.value = !Boolean(data?.image) && Boolean(data?.json) && Number(data?.contentLength || 0) > ARTIFACT_PREVIEW_LIMIT
   } catch (error) {
     console.error('读取解析产物内容失败', error)
     showNotice(normalizeError(error, '读取解析产物内容失败'), 'danger')

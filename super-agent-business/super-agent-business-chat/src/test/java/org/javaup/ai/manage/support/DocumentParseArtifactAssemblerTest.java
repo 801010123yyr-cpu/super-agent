@@ -88,6 +88,37 @@ class DocumentParseArtifactAssemblerTest {
         assertThat(content.getMarkdown()).isTrue();
     }
 
+    @Test
+    void treatsImageArtifactsAsViewablePngDownloads() {
+        SuperAgentDocumentParseArtifact artifact = artifact(
+            "PAGE_IMAGE",
+            "parse-artifacts/10/20/1700000000000-document.page-1.png",
+            "sha256-page"
+        );
+        byte[] bytes = new byte[]{1, 2, 3, 4};
+
+        DocumentParseArtifactItemVo item = DocumentParseArtifactAssembler.toItem(
+            artifact,
+            new StoredObjectMetadata(artifact.getObjectName(), (long) bytes.length, null)
+        );
+        DocumentParseArtifactContentVo content = DocumentParseArtifactAssembler.toContent(artifact, bytes);
+        DocumentParseArtifactDownloadVo download = DocumentParseArtifactAssembler.toDownload(artifact, bytes);
+
+        assertThat(item.getArtifactTypeName()).isEqualTo("页面图片");
+        assertThat(item.getFileName()).isEqualTo("document.page-1.png");
+        assertThat(item.getContentType()).isEqualTo("image/png");
+        assertThat(item.getViewable()).isTrue();
+        assertThat(content.getContent()).isEmpty();
+        assertThat(content.getImage()).isTrue();
+        assertThat(content.getJson()).isFalse();
+        assertThat(content.getMarkdown()).isFalse();
+        assertThat(content.getImageBase64()).isEqualTo("AQIDBA==");
+        assertThat(content.getDataUrl()).isEqualTo("data:image/png;base64,AQIDBA==");
+        assertThat(download.getFileName()).isEqualTo("document.page-1.png");
+        assertThat(download.getContentType()).isEqualTo("image/png");
+        assertThat(download.getBytes()).containsExactly(bytes);
+    }
+
     private static SuperAgentDocumentParseArtifact artifact(String artifactType, String objectName, String contentHash) {
         SuperAgentDocumentParseArtifact artifact = new SuperAgentDocumentParseArtifact();
         artifact.setId(100L);

@@ -1,6 +1,7 @@
 import base64
 import json
 import unittest
+from io import BytesIO
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -95,7 +96,7 @@ class AliyunDocMindDocumentParserTest(unittest.TestCase):
         request = DocumentParseRequest(
             fileName="docmind.pdf",
             fileType="PDF",
-            contentBase64=base64.b64encode(b"%PDF-1.4\n%%EOF").decode("ascii"),
+            contentBase64=base64.b64encode(_tiny_pdf_bytes()).decode("ascii"),
         )
         fake_client = _FakeDocMindClient()
 
@@ -136,6 +137,20 @@ class AliyunDocMindDocumentParserTest(unittest.TestCase):
         self.assertIn("LAYOUT_JSON", artifact_types)
         self.assertIn("JSON", artifact_types)
         self.assertIn("MARKDOWN", artifact_types)
+        self.assertIn("PAGE_IMAGE", artifact_types)
+        self.assertIn("TABLE_IMAGE", artifact_types)
+        self.assertIn("FIGURE_IMAGE", artifact_types)
+        page_image = self._artifact(response.artifacts, "PAGE_IMAGE")
+        self.assertEqual("image/png", page_image.content_type)
+        self.assertTrue(page_image.file_name.endswith(".page-1.png"))
+        page_width, page_height = _png_size(page_image)
+        self.assertGreaterEqual(page_height, 1260)
+        table_image = self._artifact(response.artifacts, "TABLE_IMAGE")
+        self.assertEqual("image/png", table_image.content_type)
+        self.assertIn(".block-2.", table_image.file_name)
+        figure_image = self._artifact(response.artifacts, "FIGURE_IMAGE")
+        self.assertEqual("image/png", figure_image.content_type)
+        self.assertIn(".block-3.", figure_image.file_name)
         raw_payload = self._artifact_payload(response.artifacts, "ALIYUN_DOCMIND_JSON")
         self.assertEqual("docmind-job-1", raw_payload.get("jobId"))
         self.assertEqual(4, raw_payload.get("traceMetadata", {}).get("tableCellBboxCount"))
@@ -144,6 +159,55 @@ class AliyunDocMindDocumentParserTest(unittest.TestCase):
         self.assertEqual(3, blocks_payload.get("traceMetadata", {}).get("bboxBlockCount"))
         layout_payload = self._artifact_payload(response.artifacts, "LAYOUT_JSON")
         self.assertEqual(1, layout_payload.get("traceMetadata", {}).get("pageCount"))
+
+    def test_docmind_image_input_emits_page_image_artifact(self) -> None:
+        request = DocumentParseRequest(
+            fileName="scan.png",
+            fileType="PNG",
+            contentBase64=base64.b64encode(_tiny_png_bytes()).decode("ascii"),
+        )
+        fake_client = _FakeDocMindClient()
+
+        with patch.object(document_parser.AliyunDocMindParser, "_sdk_available", return_value=True), \
+                patch.object(document_parser.AliyunDocMindParser, "_access_key_id", return_value="ak"), \
+                patch.object(document_parser.AliyunDocMindParser, "_access_key_secret", return_value="sk"), \
+                patch.object(document_parser.AliyunDocMindParser, "_client", return_value=fake_client), \
+                patch.object(document_parser.AliyunDocMindParser, "_runtime_options", return_value=None):
+            response = parse_document(request)
+
+        page_images = [artifact for artifact in response.artifacts if artifact.artifact_type == "PAGE_IMAGE"]
+        self.assertEqual(1, len(page_images))
+        self.assertEqual("image/png", page_images[0].content_type)
+        self.assertTrue(page_images[0].file_name.endswith(".page-1.png"))
+
+    def test_docmind_zero_based_page_numbers_still_emit_page_and_crop_images(self) -> None:
+        request = DocumentParseRequest(
+            fileName="zero-based.pdf",
+            fileType="PDF",
+            contentBase64=base64.b64encode(_tiny_pdf_bytes()).decode("ascii"),
+        )
+        fake_client = _FakeDocMindClient(page_no=0)
+
+        with patch.object(document_parser.AliyunDocMindParser, "_sdk_available", return_value=True), \
+                patch.object(document_parser.AliyunDocMindParser, "_access_key_id", return_value="ak"), \
+                patch.object(document_parser.AliyunDocMindParser, "_access_key_secret", return_value="sk"), \
+                patch.object(document_parser.AliyunDocMindParser, "_client", return_value=fake_client), \
+                patch.object(document_parser.AliyunDocMindParser, "_runtime_options", return_value=None):
+            response = parse_document(request)
+
+        artifact_types = {artifact.artifact_type for artifact in response.artifacts}
+        self.assertIn("PAGE_IMAGE", artifact_types)
+        self.assertIn("TABLE_IMAGE", artifact_types)
+        self.assertIn("FIGURE_IMAGE", artifact_types)
+        page_image = self._artifact(response.artifacts, "PAGE_IMAGE")
+        self.assertTrue(page_image.file_name.endswith(".page-1.png"))
+        self.assertEqual([0], response.trace_metadata.get("pageNumbers"))
+        self.assertEqual(1, response.trace_metadata.get("pageCount"))
+
+    def _artifact(self, artifacts, artifact_type: str):
+        matches = [artifact for artifact in artifacts if artifact.artifact_type == artifact_type]
+        self.assertEqual(1, len(matches))
+        return matches[0]
 
     def _artifact_payload(self, artifacts, artifact_type: str) -> dict:
         matches = [artifact for artifact in artifacts if artifact.artifact_type == artifact_type]
@@ -165,6 +229,9 @@ class _FakeTeaResponse:
 
 
 class _FakeDocMindClient:
+    def __init__(self, page_no: int = 1):
+        self.page_no = page_no
+
     def submit_doc_parser_job_advance(self, request, runtime):
         return _FakeTeaResponse({
             "Code": "200",
@@ -181,6 +248,7 @@ class _FakeDocMindClient:
         layout_num = getattr(request, "layout_num", 0) or 0
         if layout_num > 0:
             return _FakeTeaResponse({"Code": "200", "Data": {"layouts": []}})
+        page_no = self.page_no
         return _FakeTeaResponse({
             "Code": "200",
             "Data": {
@@ -190,7 +258,7 @@ class _FakeDocMindClient:
                         "index": 1,
                         "type": "title",
                         "text": "年度经营摘要",
-                        "pageNum": 1,
+                        "pageNum": page_no,
                         "layoutConf": 0.98,
                         "pos": [{"x": 12, "y": 24}, {"x": 260, "y": 24}, {"x": 260, "y": 60}, {"x": 12, "y": 60}],
                     },
@@ -198,26 +266,52 @@ class _FakeDocMindClient:
                         "index": 2,
                         "type": "table",
                         "llmResult": "<table><tr><td>指标</td><td>数值</td></tr><tr><td>收入</td><td>100</td></tr></table>",
-                        "pageNum": 1,
+                        "pageNum": page_no,
                         "layoutConf": 0.95,
-                        "pos": [{"x": 16, "y": 80}, {"x": 316, "y": 80}, {"x": 316, "y": 200}, {"x": 16, "y": 200}],
+                        "pos": [{"x": 94, "y": 908}, {"x": 1074, "y": 908}, {"x": 1074, "y": 1098}, {"x": 94, "y": 1098}],
                         "cells": [
-                            {"rowIndex": 1, "colIndex": 1, "text": "指标", "pos": [{"x": 16, "y": 80}, {"x": 100, "y": 80}, {"x": 100, "y": 110}, {"x": 16, "y": 110}]},
-                            {"rowIndex": 1, "colIndex": 2, "text": "数值", "pos": [{"x": 100, "y": 80}, {"x": 180, "y": 80}, {"x": 180, "y": 110}, {"x": 100, "y": 110}]},
-                            {"rowIndex": 2, "colIndex": 1, "text": "收入", "pos": [{"x": 16, "y": 110}, {"x": 100, "y": 110}, {"x": 100, "y": 140}, {"x": 16, "y": 140}]},
-                            {"rowIndex": 2, "colIndex": 2, "text": "100", "pos": [{"x": 100, "y": 110}, {"x": 180, "y": 110}, {"x": 180, "y": 140}, {"x": 100, "y": 140}]},
+                            {"rowIndex": 1, "colIndex": 1, "text": "指标", "pos": [{"x": 94, "y": 908}, {"x": 300, "y": 908}, {"x": 300, "y": 950}, {"x": 94, "y": 950}]},
+                            {"rowIndex": 1, "colIndex": 2, "text": "数值", "pos": [{"x": 300, "y": 908}, {"x": 520, "y": 908}, {"x": 520, "y": 950}, {"x": 300, "y": 950}]},
+                            {"rowIndex": 2, "colIndex": 1, "text": "收入", "pos": [{"x": 94, "y": 950}, {"x": 300, "y": 950}, {"x": 300, "y": 996}, {"x": 94, "y": 996}]},
+                            {"rowIndex": 2, "colIndex": 2, "text": "100", "pos": [{"x": 300, "y": 950}, {"x": 520, "y": 950}, {"x": 520, "y": 996}, {"x": 300, "y": 996}]},
                         ],
                     },
                     {
                         "index": 3,
                         "type": "figure",
                         "text": "收入趋势图显示持续增长。",
-                        "pageNum": 1,
+                        "pageNum": page_no,
                         "pos": [{"x": 20, "y": 220}, {"x": 260, "y": 220}, {"x": 260, "y": 320}, {"x": 20, "y": 320}],
                     },
                 ],
             },
         })
+
+
+def _tiny_png_bytes() -> bytes:
+    from PIL import Image
+
+    output = BytesIO()
+    Image.new("RGB", (360, 420), "white").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _tiny_pdf_bytes() -> bytes:
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=360, height=420)
+    page.insert_text((20, 40), "docmind test")
+    content = document.tobytes()
+    document.close()
+    return content
+
+
+def _png_size(artifact) -> tuple[int, int]:
+    from PIL import Image
+
+    image = Image.open(BytesIO(base64.b64decode(artifact.content_base64)))
+    return image.width, image.height
 
 
 if __name__ == "__main__":

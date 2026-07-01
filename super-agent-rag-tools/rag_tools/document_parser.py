@@ -2,6 +2,7 @@ import base64
 import hashlib
 import html
 import json
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -486,7 +487,27 @@ def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
         parser_version=parser.provider_version,
         elapsed_ms=int((time.perf_counter() - started) * 1000),
     )
-    artifacts = _build_artifacts(request.file_name, parsed_text, normalized_blocks, parser, parser_result.artifacts, trace_metadata)
+    warning_list = list(parser_result.warnings or [])
+    artifacts = _build_artifacts(
+        request.file_name,
+        parsed_text,
+        normalized_blocks,
+        parser,
+        content,
+        file_type,
+        parser_result.artifacts,
+        trace_metadata,
+        warning_list,
+    )
+    if warning_list != list(parser_result.warnings or []):
+        trace_metadata = _parse_trace_metadata(
+            normalized_blocks,
+            warning_list,
+            base_metadata=trace_metadata,
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+        )
     capabilities = _response_capabilities(parser, artifacts)
 
     return DocumentParseResponse(
@@ -505,7 +526,7 @@ def parse_document(request: DocumentParseRequest) -> DocumentParseResponse:
         providerVersion=parser.provider_version,
         capabilities=capabilities,
         elapsedMs=trace_metadata.get("elapsedMs", int((time.perf_counter() - started) * 1000)),
-        warnings=parser_result.warnings,
+        warnings=warning_list,
         failedReason="",
         traceMetadata=trace_metadata,
     )
@@ -1194,8 +1215,11 @@ def _build_artifacts(file_name: str,
                      parsed_text: str,
                      blocks: list[DocumentBlock],
                      parser,
+                     source_content: bytes | None = None,
+                     file_type: str = "",
                      parser_artifacts: list[ParseArtifact] | None = None,
-                     trace_metadata: dict[str, Any] | None = None) -> list[ParseArtifact]:
+                     trace_metadata: dict[str, Any] | None = None,
+                     warnings: list[str] | None = None) -> list[ParseArtifact]:
     base_name = _base_name(file_name)
     markdown_bytes = parsed_text.encode("utf-8")
     blocks_payload = {
@@ -1236,6 +1260,14 @@ def _build_artifacts(file_name: str,
             parser_version=parser.provider_version,
         ))
     artifacts.extend(parser_artifacts or [])
+    artifacts.extend(_build_image_artifacts(
+        file_name,
+        source_content or b"",
+        file_type,
+        blocks,
+        parser,
+        warnings,
+    ))
     return artifacts
 
 
@@ -1297,6 +1329,219 @@ def _layout_payload(blocks: list[DocumentBlock], parser, trace_metadata: dict[st
         "traceMetadata": trace_metadata or {},
         "blocks": layout_blocks,
     }
+
+
+def _build_image_artifacts(file_name: str,
+                           content: bytes,
+                           file_type: str,
+                           blocks: list[DocumentBlock],
+                           parser,
+                           warnings: list[str] | None = None) -> list[ParseArtifact]:
+    if parser.provider_name != ALIYUN_DOCMIND_PARSER_NAME or not content:
+        return []
+    page_images = _render_page_images(content, file_type, blocks, warnings)
+    if not page_images:
+        return []
+
+    base_name = _base_name(file_name)
+    zero_based_page_numbers = _uses_zero_based_page_numbers(_artifact_page_numbers(blocks))
+    artifacts: list[ParseArtifact] = []
+    for page_no in sorted(page_images):
+        image_bytes, _, _ = page_images[page_no]
+        artifacts.append(_artifact(
+            "PAGE_IMAGE",
+            f"{base_name}.page-{_display_page_no(page_no, zero_based_page_numbers)}.png",
+            "image/png",
+            image_bytes,
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+        ))
+
+    for block in blocks or []:
+        block_type = (block.block_type or "").upper()
+        if block_type not in {"TABLE", "FIGURE", "IMAGE"} or block.page_no is None or not block.bbox_json:
+            continue
+        page_image = page_images.get(block.page_no)
+        if page_image is None:
+            continue
+        crop_bytes = _crop_page_image(page_image, _read_json_object(block.bbox_json))
+        if not crop_bytes:
+            continue
+        artifact_type = "TABLE_IMAGE" if block_type == "TABLE" else "FIGURE_IMAGE"
+        suffix = "table" if artifact_type == "TABLE_IMAGE" else "figure"
+        artifacts.append(_artifact(
+            artifact_type,
+            f"{base_name}.page-{_display_page_no(block.page_no, zero_based_page_numbers)}.block-{block.block_no}.{suffix}.png",
+            "image/png",
+            crop_bytes,
+            parser_name=parser.provider_name,
+            parser_version=parser.provider_version,
+        ))
+    return artifacts
+
+
+def _render_page_images(content: bytes,
+                        file_type: str,
+                        blocks: list[DocumentBlock],
+                        warnings: list[str] | None = None) -> dict[int, tuple[bytes, int, int]]:
+    normalized_type = (file_type or "").upper()
+    if normalized_type == "PDF":
+        return _render_pdf_page_images(content, blocks, warnings)
+    if normalized_type in {"PNG", "JPG", "JPEG", "BMP", "GIF"}:
+        return _render_input_image_page(content, blocks, warnings)
+    return {}
+
+
+def _render_pdf_page_images(content: bytes,
+                            blocks: list[DocumentBlock],
+                            warnings: list[str] | None = None) -> dict[int, tuple[bytes, int, int]]:
+    try:
+        import fitz
+    except Exception as exception:
+        _append_warning(warnings, f"PAGE_IMAGE 生成跳过：缺少 PyMuPDF，{exception}")
+        return {}
+
+    page_numbers = _artifact_page_numbers(blocks)
+    if not page_numbers:
+        page_numbers = {1}
+    zero_based_page_numbers = _uses_zero_based_page_numbers(page_numbers)
+    rendered: dict[int, tuple[bytes, int, int]] = {}
+    document = None
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+        for page_no in sorted(page_numbers):
+            page_index = _pdf_page_index(page_no, zero_based_page_numbers)
+            if page_index >= document.page_count:
+                _append_warning(warnings, f"PAGE_IMAGE 生成跳过页 {page_no}：超出 PDF 页数 {document.page_count}")
+                continue
+            page = document.load_page(page_index)
+            scale = _pdf_render_scale(page.rect.width, page.rect.height, _page_bboxes(blocks, page_no))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            rendered[page_no] = (pixmap.tobytes("png"), pixmap.width, pixmap.height)
+    except Exception as exception:
+        _append_warning(warnings, f"PAGE_IMAGE 生成失败：{exception}")
+        return rendered
+    finally:
+        if document is not None:
+            document.close()
+    return rendered
+
+
+def _render_input_image_page(content: bytes,
+                             blocks: list[DocumentBlock],
+                             warnings: list[str] | None = None) -> dict[int, tuple[bytes, int, int]]:
+    try:
+        from PIL import Image
+    except Exception as exception:
+        _append_warning(warnings, f"PAGE_IMAGE 生成跳过：缺少 Pillow，{exception}")
+        return {}
+    try:
+        image = Image.open(BytesIO(content))
+        image.load()
+        if getattr(image, "is_animated", False):
+            image.seek(0)
+        rgb_image = image.convert("RGB")
+        output = BytesIO()
+        rgb_image.save(output, format="PNG")
+        page_no = min(_artifact_page_numbers(blocks) or {1})
+        return {page_no: (output.getvalue(), rgb_image.width, rgb_image.height)}
+    except Exception as exception:
+        _append_warning(warnings, f"PAGE_IMAGE 生成失败：{exception}")
+        return {}
+
+
+def _crop_page_image(page_image: tuple[bytes, int, int], bbox: dict[str, Any]) -> bytes:
+    try:
+        from PIL import Image
+    except Exception:
+        return b""
+    image_bytes, width, height = page_image
+    crop_box = _image_crop_box(bbox, width, height)
+    if crop_box is None:
+        return b""
+    try:
+        image = Image.open(BytesIO(image_bytes))
+        cropped = image.crop(crop_box)
+        output = BytesIO()
+        cropped.save(output, format="PNG")
+        return output.getvalue()
+    except Exception:
+        return b""
+
+
+def _image_crop_box(bbox: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int] | None:
+    raw_bbox = _coerce_bbox(bbox)
+    if not raw_bbox:
+        return None
+    x0, y0, x1, y1 = raw_bbox
+    if width <= 0 or height <= 0:
+        return None
+    max_coordinate = max(abs(x0), abs(y0), abs(x1), abs(y1))
+    if 0 < max_coordinate <= 1.5:
+        x0, x1 = x0 * width, x1 * width
+        y0, y1 = y0 * height, y1 * height
+    left = max(0, min(width, math.floor(min(x0, x1))))
+    top = max(0, min(height, math.floor(min(y0, y1))))
+    right = max(0, min(width, math.ceil(max(x0, x1))))
+    bottom = max(0, min(height, math.ceil(max(y0, y1))))
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right, bottom
+
+
+def _page_bboxes(blocks: list[DocumentBlock], page_no: int) -> list[tuple[float, float, float, float]]:
+    bboxes: list[tuple[float, float, float, float]] = []
+    for block in blocks or []:
+        if block.page_no != page_no or not block.bbox_json:
+            continue
+        bbox = _coerce_bbox(_read_json_object(block.bbox_json))
+        if bbox:
+            bboxes.append(bbox)
+    return bboxes
+
+
+def _pdf_render_scale(page_width: float, page_height: float, bboxes: list[tuple[float, float, float, float]]) -> float:
+    if page_width <= 0 or page_height <= 0 or not bboxes:
+        return 1.0
+    max_x = max(max(abs(bbox[0]), abs(bbox[2])) for bbox in bboxes)
+    max_y = max(max(abs(bbox[1]), abs(bbox[3])) for bbox in bboxes)
+    if max(max_x, max_y) <= 1.5:
+        return 1.0
+    required = max(max_x / float(page_width), max_y / float(page_height), 1.0)
+    if required <= 1.05:
+        return 1.0
+    return min(4.0, float(math.ceil(required)))
+
+
+def _artifact_page_numbers(blocks: list[DocumentBlock]) -> set[int]:
+    return {
+        block.page_no
+        for block in (blocks or [])
+        if block.page_no is not None and block.page_no >= 0
+    }
+
+
+def _pdf_page_index(page_no: int, zero_based_page_numbers: bool) -> int:
+    if zero_based_page_numbers:
+        return max(0, page_no)
+    return max(0, page_no - 1)
+
+
+def _display_page_no(page_no: int | None, zero_based_page_numbers: bool = False) -> int:
+    if page_no is None:
+        return 1
+    if zero_based_page_numbers:
+        return page_no + 1
+    return page_no
+
+
+def _uses_zero_based_page_numbers(page_numbers: set[int]) -> bool:
+    return bool(page_numbers) and min(page_numbers) == 0
+
+
+def _append_warning(warnings: list[str] | None, message: str) -> None:
+    if warnings is not None and message:
+        warnings.append(message)
 
 
 def _block(

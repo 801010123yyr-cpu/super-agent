@@ -18,4 +18,10 @@ public class DocumentParseArtifactContentVo {
     private Boolean json;
 
     private Boolean markdown;
+
+    private Boolean image;
+
+    private String imageBase64;
+
+    private String dataUrl;
 }
