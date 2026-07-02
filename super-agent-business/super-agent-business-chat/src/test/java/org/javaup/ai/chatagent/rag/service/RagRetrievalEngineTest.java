@@ -171,6 +171,11 @@ class RagRetrievalEngineTest {
 
             List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
             assertThat(documents).extracting(Document::getId).containsExactly("vector-doc");
+            assertThat(documents.get(0).getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.RERANK_STATUS, "FAILED");
+            assertThat(String.valueOf(documents.get(0).getMetadata().get(DocumentKnowledgeMetadataKeys.RERANK_ERROR)))
+                .contains("IllegalStateException")
+                .contains("rerank timeout");
             assertThat(context.getUsedChannels()).containsExactly(RetrievalChannelEnum.VECTOR.getName());
             assertThat(context.getRetrievalNotes())
                 .anySatisfy(note -> assertThat(note).contains("rerank 失败或超时"));
@@ -502,6 +507,113 @@ class RagRetrievalEngineTest {
                 .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES")
                 .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG")
                 .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalEvidenceBudgetCanReserveGraphRagEvidenceAfterRerankWindow() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(true);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document vectorHigh = document("vector-high", "普通文本证据一，包含审批流程背景。", 0.99D);
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        vectorHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.VECTOR.getName());
+        Document keywordHigh = document("keyword-high", "普通文本证据二，包含部门说明。", 0.98D);
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        keywordHigh.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.KEYWORD.getName());
+
+        LinkedHashMap<String, Object> graphMetadata = new LinkedHashMap<>();
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.GRAPH_RAG.getName());
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.SCORE, 0.60D);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 1001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "权限申请");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 2001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, 1002L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME, "信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "审计系统");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->APPROVES->ORG:信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.84D);
+        Document graphDoc = Document.builder()
+            .id("graph-approval")
+            .text("GraphRAG: 权限申请 APPROVES 信息安全部。")
+            .metadata(graphMetadata)
+            .score(0.60D)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(3);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(
+                    new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(vectorHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(keywordHigh)),
+                    new StaticRetrievalChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), List.of(graphDoc))
+                ),
+                properties,
+                new RagRerankService(null, properties) {
+                    @Override
+                    public List<Document> rerank(String query, List<Document> candidates) {
+                        Document vector = candidates.stream()
+                            .filter(document -> "vector-high".equals(document.getId()))
+                            .findFirst()
+                            .orElseThrow();
+                        Document keyword = candidates.stream()
+                            .filter(document -> "keyword-high".equals(document.getId()))
+                            .findFirst()
+                            .orElseThrow();
+                        Document graph = candidates.stream()
+                            .filter(document -> "graph-approval".equals(document.getId()))
+                            .findFirst()
+                            .orElseThrow();
+                        vector.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 1);
+                        keyword.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 2);
+                        graph.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 3);
+                        return List.of(vector, keyword, graph);
+                    }
+                },
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GRAPH_RAG)
+                .retrievalQuestion("审计系统相关的权限审批部门是谁？")
+                .retrievalSubQuestions(List.of("审计系统相关的权限审批部门是谁？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            assertThat(context.getSubQuestionEvidenceList().get(0).getRerankedCandidateCount()).isEqualTo(3);
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).hasSize(2);
+            assertThat(documents)
+                .extracting(Document::getId)
+                .contains("graph-approval");
+            Document reservedGraphDocument = documents.stream()
+                .filter(document -> "graph-approval".equals(document.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(reservedGraphDocument.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.RERANK_RANK, 3)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
+            assertThat(context.getUsedChannels()).contains(RetrievalChannelEnum.RERANK.getName());
         }
         finally {
             executorService.shutdownNow();

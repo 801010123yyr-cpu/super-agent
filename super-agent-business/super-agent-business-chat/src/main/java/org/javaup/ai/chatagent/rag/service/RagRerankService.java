@@ -2,6 +2,7 @@ package org.javaup.ai.chatagent.rag.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
+import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsRerankRequest;
 import org.javaup.ai.ragtools.model.RagToolsRerankResponse;
@@ -17,17 +18,13 @@ import java.util.Map;
 @Service
 public class RagRerankService {
 
-    private static final String RERANK_SCORE_KEY = "rerankScore";
-    private static final String RERANK_RANK_KEY = "rerankRank";
-    private static final String RERANK_MODEL_KEY = "rerankModel";
+    private static final String RERANK_STATUS_SUCCESS = "SUCCESS";
 
     private final RagToolsClient ragToolsClient;
-    private final ChatRagProperties properties;
 
     public RagRerankService(RagToolsClient ragToolsClient,
                             ChatRagProperties properties) {
         this.ragToolsClient = ragToolsClient;
-        this.properties = properties;
     }
 
     public List<Document> rerank(String query, List<Document> candidates) {
@@ -35,7 +32,7 @@ public class RagRerankService {
             return List.of();
         }
 
-        int topK = Math.min(Math.max(properties.getFinalTopK(), 1), candidates.size());
+        int topK = candidates.size();
         Map<String, Document> documentMap = new LinkedHashMap<>();
         List<RagToolsRerankRequest.Candidate> requestCandidates = new ArrayList<>(candidates.size());
         for (int index = 0; index < candidates.size(); index++) {
@@ -67,9 +64,12 @@ public class RagRerankService {
                 throw new IllegalStateException("rag-tools rerank 返回了未知候选 id: " + (result == null ? "" : result.getId()));
             }
             Document document = documentMap.get(result.getId());
-            document.getMetadata().put(RERANK_SCORE_KEY, result.getScore() == null ? 0D : result.getScore());
-            document.getMetadata().put(RERANK_RANK_KEY, result.getRank() == null ? rerankedDocuments.size() + 1 : result.getRank());
-            document.getMetadata().put(RERANK_MODEL_KEY, "rag-tools");
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_SCORE, result.getScore() == null ? 0D : result.getScore());
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, result.getRank() == null ? rerankedDocuments.size() + 1 : result.getRank());
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_MODEL, "rag-tools");
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_STATUS, RERANK_STATUS_SUCCESS);
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_CANDIDATE_COUNT, candidates.size());
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_TOP_K, topK);
             rerankedDocuments.add(document);
         }
         log.info("rag-tools rerank 完成: candidateCount={}, topK={}, resultCount={}",

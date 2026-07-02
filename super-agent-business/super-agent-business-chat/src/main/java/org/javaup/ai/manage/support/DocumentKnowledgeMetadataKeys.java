@@ -46,6 +46,13 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String METADATA_BOOST = "metadataBoost";
     public static final String VECTOR_SCORE = "vectorScore";
     public static final String KEYWORD_SCORE = "keywordScore";
+    public static final String RERANK_SCORE = "rerankScore";
+    public static final String RERANK_RANK = "rerankRank";
+    public static final String RERANK_MODEL = "rerankModel";
+    public static final String RERANK_STATUS = "rerankStatus";
+    public static final String RERANK_ERROR = "rerankError";
+    public static final String RERANK_CANDIDATE_COUNT = "rerankCandidateCount";
+    public static final String RERANK_TOP_K = "rerankTopK";
     public static final String RETRIEVAL_INTENT = "retrievalIntent";
     public static final String CHANNEL_WEIGHT = "channelWeight";
     public static final String TABLE_ID = "tableId";

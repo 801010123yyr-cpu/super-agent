@@ -988,6 +988,7 @@ public class RagRetrievalEngine {
         }
         catch (RuntimeException exception) {
             Throwable rootCause = unwrapThrowable(exception);
+            markRerankFailure(candidates, rootCause);
             log.warn("rerank 失败，保留 weighted hybrid 候选继续回答: subQuestionIndex={}, subQuestion='{}', candidateCount={}, exceptionType={}, message={}",
                 subQuestionIndex,
                 subQuestion,
@@ -997,6 +998,24 @@ public class RagRetrievalEngine {
                 exception);
             notes.add("子问题" + subQuestionIndex + " rerank 失败或超时，已保留融合候选继续回答。");
             return candidates;
+        }
+    }
+
+    private void markRerankFailure(List<Document> candidates, Throwable rootCause) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        String error = rootCause == null
+            ? "UNKNOWN"
+            : rootCause.getClass().getSimpleName() + ": " + safeText(rootCause.getMessage());
+        for (Document candidate : candidates) {
+            if (candidate == null || candidate.getMetadata() == null) {
+                continue;
+            }
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_STATUS, "FAILED");
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_ERROR, error);
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_CANDIDATE_COUNT, candidates.size());
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_TOP_K, candidates.size());
         }
     }
 
@@ -1355,6 +1374,7 @@ public class RagRetrievalEngine {
         List<RetrievalResultView> results = new ArrayList<>();
         Map<String, Integer> finalRankMap = new LinkedHashMap<>();
         Map<String, Document> mergedCandidateMap = new LinkedHashMap<>();
+        Map<String, Document> rerankedCandidateMap = new LinkedHashMap<>();
         if (finalDocuments != null) {
             for (int i = 0; i < finalDocuments.size(); i++) {
                 String docId = finalDocuments.get(i).getId();
@@ -1367,6 +1387,13 @@ public class RagRetrievalEngine {
             for (Document document : mergedCandidates) {
                 if (document.getId() != null) {
                     mergedCandidateMap.put(document.getId(), document);
+                }
+            }
+        }
+        if (rerankedCandidates != null) {
+            for (Document document : rerankedCandidates) {
+                if (document.getId() != null) {
+                    rerankedCandidateMap.put(document.getId(), document);
                 }
             }
         }
@@ -1383,6 +1410,8 @@ public class RagRetrievalEngine {
                     Document doc = rawDocs.get(i);
                     Document mergedDoc = doc.getId() == null ? null : mergedCandidateMap.get(doc.getId());
                     Map<String, Object> scoreMetadata = mergedDoc == null ? doc.getMetadata() : mergedDoc.getMetadata();
+                    Document rerankedDoc = findMatchingDocument(doc, rerankedCandidates, rerankedCandidateMap);
+                    Map<String, Object> rerankMetadata = rerankedDoc == null ? scoreMetadata : rerankedDoc.getMetadata();
                     RetrievalResultView view = new RetrievalResultView();
                     view.setId(traceRecorder.exchangeId());
                     view.setTraceId(traceRecorder.traceId());
@@ -1421,7 +1450,7 @@ public class RagRetrievalEngine {
                         view.setKeywordScore(BigDecimal.valueOf(((Number) keywordScoreObj).doubleValue()));
                     }
 
-                    Object rerankScoreObj = doc.getMetadata().get("rerankScore");
+                    Object rerankScoreObj = rerankMetadata.get(DocumentKnowledgeMetadataKeys.RERANK_SCORE);
                     if (rerankScoreObj instanceof Number) {
                         view.setRerankScore(BigDecimal.valueOf(((Number) rerankScoreObj).doubleValue()));
                     }
@@ -1506,6 +1535,21 @@ public class RagRetrievalEngine {
         }
 
         traceRecorder.recordRetrievalResults(results);
+    }
+
+    private Document findMatchingDocument(Document candidate,
+                                          List<Document> documents,
+                                          Map<String, Document> byId) {
+        if (candidate == null || documents == null || documents.isEmpty()) {
+            return null;
+        }
+        if (candidate.getId() != null && byId != null && byId.containsKey(candidate.getId())) {
+            return byId.get(candidate.getId());
+        }
+        return documents.stream()
+            .filter(document -> sameEvidenceIdentity(candidate, document))
+            .findFirst()
+            .orElse(null);
     }
 
     private int countSelectedChannelDocuments(RetrievalChannelResult filteredResult, List<Document> finalDocuments) {
