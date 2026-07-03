@@ -12,6 +12,8 @@ public class KnowledgeTopicSaveDto {
 
     private String id;
 
+    private String knowledgeBaseId;
+
     private String topicCode;
 
     private String topicName;

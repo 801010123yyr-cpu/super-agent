@@ -2,6 +2,7 @@ package org.javaup.ai.manage.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.Refresh;
 import co.elastic.clients.elasticsearch._types.query_dsl.TextQueryType;
 import co.elastic.clients.elasticsearch.core.BulkRequest;
@@ -34,11 +35,13 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -87,18 +90,31 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
     }
 
     @Override
-    public List<RouteLexicalHit> search(String routingText, String entityType, int size) {
+    public List<RouteLexicalHit> search(String routingText, String entityType, int size, Collection<Long> knowledgeBaseIds) {
         if (StrUtil.isBlank(routingText) || StrUtil.isBlank(entityType)) {
             return List.of();
         }
         refreshIfNeeded();
         List<String> entityTerms = extractEntityTerms(routingText);
+        List<FieldValue> selectedKnowledgeBaseIds = knowledgeBaseIds == null
+            ? List.of()
+            : knowledgeBaseIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .map(FieldValue::of)
+                .toList();
         try {
             SearchResponse<KnowledgeRouteIndexRecord> response = elasticsearchClient.search(search -> search
                     .index(properties.getElasticsearch().getRouteIndexName())
                     .size(Math.max(1, Math.min(size, 10)))
                     .query(query -> query.bool(bool -> {
                         bool.filter(filter -> filter.term(term -> term.field("entityType").value(entityType)));
+                        if (!selectedKnowledgeBaseIds.isEmpty()) {
+                            bool.filter(filter -> filter.terms(terms -> terms
+                                .field("knowledgeBaseId")
+                                .terms(value -> value.value(selectedKnowledgeBaseIds))
+                            ));
+                        }
                         bool.should(should -> should.matchPhrase(matchPhrase -> matchPhrase
                             .field("displayName")
                             .query(routingText)
@@ -131,6 +147,7 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
                     source.getEntityCode(),
                     source.getEntityType(),
                     source.getDocumentId(),
+                    source.getKnowledgeBaseId(),
                     source.getScopeCode(),
                     source.getTopicCode(),
                     source.getDocumentName(),
@@ -221,23 +238,24 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
             .stream()
             .collect(Collectors.toMap(SuperAgentDocumentProfile::getDocumentId, item -> item, (left, right) -> right));
         Map<String, List<SuperAgentKnowledgeTopicNode>> topicByScope = topics.stream()
-            .collect(Collectors.groupingBy(SuperAgentKnowledgeTopicNode::getScopeCode));
+            .collect(Collectors.groupingBy(topic -> routeKey(topic.getKnowledgeBaseId(), topic.getScopeCode())));
         Map<String, List<SuperAgentTopicDocumentRelation>> relationByTopic = topicDocumentRelationMapper.selectList(
                 new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
                     .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()))
             .stream()
-            .collect(Collectors.groupingBy(SuperAgentTopicDocumentRelation::getTopicCode));
+            .collect(Collectors.groupingBy(relation -> routeKey(relation.getKnowledgeBaseId(), relation.getTopicCode())));
 
         for (SuperAgentKnowledgeScopeNode scope : scopes) {
             List<String> scopeTags = new ArrayList<>();
-            topicByScope.getOrDefault(scope.getScopeCode(), List.of()).forEach(topic -> {
+            topicByScope.getOrDefault(routeKey(scope.getKnowledgeBaseId(), scope.getScopeCode()), List.of()).forEach(topic -> {
                 addUnique(scopeTags, topic.getTopicName());
                 parseCommaText(topic.getAliases()).forEach(item -> addUnique(scopeTags, item));
             });
             records.add(KnowledgeRouteIndexRecord.builder()
-                .routeId("scope:" + scope.getScopeCode())
+                .routeId("scope:" + safeIdPart(scope.getKnowledgeBaseId()) + ":" + scope.getScopeCode())
                 .entityType("scope")
                 .entityCode(scope.getScopeCode())
+                .knowledgeBaseId(scope.getKnowledgeBaseId())
                 .scopeCode(scope.getScopeCode())
                 .scopeName(scope.getScopeName())
                 .displayName(safeText(scope.getScopeName()))
@@ -256,9 +274,10 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
             parseJsonArray(topic.getExamples()).forEach(item -> addUnique(tags, item));
             parseCommaText(topic.getAliases()).forEach(item -> addUnique(tags, item));
             records.add(KnowledgeRouteIndexRecord.builder()
-                .routeId("topic:" + topic.getTopicCode())
+                .routeId("topic:" + safeIdPart(topic.getKnowledgeBaseId()) + ":" + topic.getTopicCode())
                 .entityType("topic")
                 .entityCode(topic.getTopicCode())
+                .knowledgeBaseId(topic.getKnowledgeBaseId())
                 .scopeCode(topic.getScopeCode())
                 .topicCode(topic.getTopicCode())
                 .topicName(topic.getTopicName())
@@ -280,27 +299,21 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
                 .build());
         }
 
-        Map<Long, SuperAgentKnowledgeTopicNode> topicDocumentMap = new LinkedHashMap<>();
-        for (SuperAgentKnowledgeTopicNode topic : topics) {
-            for (SuperAgentTopicDocumentRelation relation : relationByTopic.getOrDefault(topic.getTopicCode(), List.of())) {
-                topicDocumentMap.put(relation.getDocumentId(), topic);
-            }
-        }
-
         for (SuperAgentDocument document : documents) {
             SuperAgentDocumentProfile profile = profileMap.get(document.getId());
             List<String> tags = new ArrayList<>();
-            parseCommaText(document.getDocumentTags()).forEach(item -> addUnique(tags, item));
             if (profile != null) {
                 parseJsonArray(profile.getCoreTopics()).forEach(item -> addUnique(tags, item));
                 parseJsonArray(profile.getExampleQuestions()).forEach(item -> addUnique(tags, item));
             }
             relationByTopic.forEach((topicCode, relations) -> relations.stream()
-                .filter(relation -> document.getId().equals(relation.getDocumentId()))
+                .filter(relation -> document.getId().equals(relation.getDocumentId())
+                    && Objects.equals(document.getKnowledgeBaseId(), relation.getKnowledgeBaseId()))
                 .findFirst()
                 .ifPresent(relation -> {
                     SuperAgentKnowledgeTopicNode topic = topics.stream()
-                        .filter(item -> topicCode.equals(item.getTopicCode()))
+                        .filter(item -> Objects.equals(item.getKnowledgeBaseId(), relation.getKnowledgeBaseId())
+                            && relation.getTopicCode().equals(item.getTopicCode()))
                         .findFirst()
                         .orElse(null);
                     if (topic != null) {
@@ -313,10 +326,8 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
                 .entityType("document")
                 .entityCode(String.valueOf(document.getId()))
                 .documentId(document.getId())
-                .scopeCode(safeText(document.getKnowledgeScopeCode()))
-                .scopeName(safeText(document.getKnowledgeScopeName()))
+                .knowledgeBaseId(document.getKnowledgeBaseId())
                 .documentName(safeText(document.getDocumentName()))
-                .businessCategory(safeText(document.getBusinessCategory()))
                 .displayName(safeText(document.getDocumentName()))
                 .descriptionText(profile == null ? "" : safeText(profile.getDocumentType()))
                 .aliasesText("")
@@ -324,20 +335,24 @@ public class ElasticsearchKnowledgeRouteIndexService implements KnowledgeRouteIn
                 .summaryText(profile == null ? "" : safeText(profile.getDocumentSummary()))
                 .routeText(join(
                     document.getDocumentName(),
-                    document.getKnowledgeScopeCode(),
-                    document.getKnowledgeScopeName(),
-                    document.getBusinessCategory(),
-                    document.getDocumentTags(),
                     profile == null ? "" : profile.getDocumentSummary(),
                     profile == null ? "" : profile.getCoreTopics(),
                     profile == null ? "" : profile.getExampleQuestions(),
                     profile == null ? "" : profile.getDocumentType()
                 ))
-                .entityTerms(extractEntityTerms(join(document.getDocumentName(), document.getDocumentTags(), document.getKnowledgeScopeName())))
+                .entityTerms(extractEntityTerms(document.getDocumentName()))
                 .tags(tags)
                 .build());
         }
         return records;
+    }
+
+    private String routeKey(Long knowledgeBaseId, String code) {
+        return safeIdPart(knowledgeBaseId) + ":" + safeText(code);
+    }
+
+    private String safeIdPart(Long value) {
+        return value == null ? "none" : String.valueOf(value);
     }
 
     private List<String> extractEntityTerms(String text) {

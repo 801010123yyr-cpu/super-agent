@@ -118,7 +118,7 @@ class GraphRagRetrievalChannelTest {
     }
 
     @Test
-    void graphSearchUsesRetrievalQueryWithHistoryHintsButKeepsOriginalQuestionInEvidenceText() {
+    void graphSearchKeepsHistoryHintsOutOfFreshTopicQueryAndEvidenceText() {
         GraphRagSearchResult evidence = GraphRagSearchResult.builder()
             .documentId(100L)
             .taskId(900L)
@@ -151,7 +151,9 @@ class GraphRagRetrievalChannelTest {
 
         RetrievalChannelResult result = channel.retrieve("这个相关部门是谁？", plan);
 
-        assertThat(graphRagSearchService.question).contains("这个相关部门是谁？", "审计系统", "AuditTrail", "权限审批");
+        assertThat(graphRagSearchService.question)
+            .isEqualTo("这个相关部门是谁？")
+            .doesNotContain("审计系统", "AuditTrail", "权限审批");
         assertThat(graphRagSearchService.documentIds).containsExactly(100L);
         assertThat(graphRagSearchService.taskIds).containsExactly(900L);
         assertThat(result.getDocuments()).hasSize(1);
@@ -286,11 +288,15 @@ class GraphRagRetrievalChannelTest {
                 100L,
                 "星联智服全渠道客服平台上线与运营管理手册.md",
                 900L,
-                "",
-                "",
-                "",
-                ""
+                1L,
+                "test-kb",
+                "测试知识库"
             ));
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
+            return listRetrievableDocuments();
         }
 
         @Override

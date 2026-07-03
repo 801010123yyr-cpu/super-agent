@@ -2,6 +2,7 @@ package org.javaup.ai.chatagent.service;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.enums.ChatQueryMode;
 
 import java.time.LocalDate;
@@ -27,6 +28,8 @@ public class StreamLaunchPlan {
     private final String selectedDocumentName;
 
     private final Long selectedTaskId;
+
+    private final KnowledgeBaseSelectionSnapshot knowledgeBaseSelectionSnapshot;
 
     private final String leaseKey;
 

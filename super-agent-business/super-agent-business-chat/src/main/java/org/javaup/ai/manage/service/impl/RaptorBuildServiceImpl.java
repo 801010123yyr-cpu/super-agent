@@ -11,10 +11,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
+import org.javaup.ai.manage.data.SuperAgentKnowledgeTopicNode;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
+import org.javaup.ai.manage.data.SuperAgentTopicDocumentRelation;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKnowledgeTopicNodeMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
+import org.javaup.ai.manage.mapper.SuperAgentTopicDocumentRelationMapper;
 import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
 import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 import org.javaup.ai.manage.service.RaptorBuildService;
@@ -104,6 +108,10 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
     private final SuperAgentDocumentMapper documentMapper;
 
     private final SuperAgentDocumentChunkMapper chunkMapper;
+
+    private final SuperAgentKnowledgeTopicNodeMapper topicNodeMapper;
+
+    private final SuperAgentTopicDocumentRelationMapper topicDocumentRelationMapper;
 
     private final RagToolsClient ragToolsClient;
 
@@ -221,14 +229,44 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public RaptorBuildResult rebuildKnowledgeScopeTree(String knowledgeScopeCode) {
+    public RaptorBuildResult rebuildKnowledgeScopeTree(Long knowledgeBaseId, String knowledgeScopeCode) {
         String normalizedScopeCode = RaptorScopeSupport.normalizeScopeCode(knowledgeScopeCode);
-        if (StrUtil.isBlank(normalizedScopeCode)) {
+        if (knowledgeBaseId == null || StrUtil.isBlank(normalizedScopeCode)) {
             return RaptorBuildResult.builder().build();
         }
-        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(normalizedScopeCode);
+        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(knowledgeBaseId, normalizedScopeCode);
+        List<String> topicCodes = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+                .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
+                .eq(SuperAgentKnowledgeTopicNode::getScopeCode, knowledgeScopeCode)
+                .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .map(SuperAgentKnowledgeTopicNode::getTopicCode)
+            .filter(StrUtil::isNotBlank)
+            .distinct()
+            .toList();
+        if (topicCodes.isEmpty()) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识范围没有可用主题: scopeKey={}", scopeKey);
+            return RaptorBuildResult.builder().build();
+        }
+        List<Long> documentIds = topicDocumentRelationMapper.selectList(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
+                .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
+                .in(SuperAgentTopicDocumentRelation::getTopicCode, topicCodes)
+                .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .map(SuperAgentTopicDocumentRelation::getDocumentId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (documentIds.isEmpty()) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识范围没有主题文档关联: scopeKey={}, topicCount={}",
+                scopeKey, topicCodes.size());
+            return RaptorBuildResult.builder().build();
+        }
         List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
-            .eq(SuperAgentDocument::getKnowledgeScopeCode, knowledgeScopeCode)
+            .in(SuperAgentDocument::getId, documentIds)
+            .eq(SuperAgentDocument::getKnowledgeBaseId, knowledgeBaseId)
             .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
             .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
             .isNotNull(SuperAgentDocument::getLastIndexTaskId)

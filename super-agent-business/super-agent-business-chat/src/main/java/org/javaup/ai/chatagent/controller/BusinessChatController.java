@@ -15,6 +15,7 @@ import org.javaup.ai.chatagent.model.KnowledgeDocumentOptionView;
 import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.chatagent.model.StageBenchmarkView;
 import org.javaup.ai.chatagent.service.BusinessChatService;
+import org.javaup.ai.manage.vo.KnowledgeBaseOptionVo;
 import org.javaup.ai.chatagent.vo.ConversationResetVo;
 import org.javaup.ai.chatagent.vo.ConversationSessionListVo;
 import org.javaup.ai.chatagent.vo.ConversationStopVo;
@@ -47,6 +48,11 @@ public class BusinessChatController {
     @PostMapping("/document/options")
     public ApiResponse<List<KnowledgeDocumentOptionView>> documentOptions() {
         return ApiResponse.ok(businessChatService.listKnowledgeDocumentOptions());
+    }
+
+    @PostMapping("/knowledge-base/options")
+    public ApiResponse<List<KnowledgeBaseOptionVo>> knowledgeBaseOptions() {
+        return ApiResponse.ok(businessChatService.listKnowledgeBaseOptions());
     }
 
     @PostMapping("/session/stop")

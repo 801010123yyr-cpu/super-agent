@@ -10,28 +10,34 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RaptorScopeSupportTest {
 
     @Test
-    void buildsKnowledgeAndGlobalScopeKeysFromJavaSelectedDocuments() {
-        SuperAgentDocument release = document(1L, "release");
-        SuperAgentDocument qa = document(2L, "qa");
-        SuperAgentDocument blank = document(3L, " ");
+    void buildsKnowledgeBaseAwareScopeKeysFromSelectedDocuments() {
+        SuperAgentDocument release = document(1L);
+        release.setKnowledgeBaseId(10L);
+        SuperAgentDocument qa = document(2L);
+        qa.setKnowledgeBaseId(10L);
+        SuperAgentDocument blank = document(3L);
+        blank.setKnowledgeBaseId(20L);
 
         List<String> scopeKeys = RaptorScopeSupport.searchScopeKeys(List.of(release, qa, blank));
 
-        assertThat(scopeKeys).containsExactly("knowledge:release", "knowledge:qa", "global");
+        assertThat(scopeKeys).containsExactly(
+            "kb:10",
+            "kb:20"
+        );
     }
 
     @Test
     void keepsDocumentScopeSeparateFromDatasetScope() {
         assertThat(RaptorScopeSupport.documentScopeKey(99L)).isEqualTo("document:99");
-        assertThat(RaptorScopeSupport.knowledgeScopeKey(" Release Ops ")).isEqualTo("knowledge:release_ops");
+        assertThat(RaptorScopeSupport.knowledgeBaseScopeKey(10L)).isEqualTo("kb:10");
+        assertThat(RaptorScopeSupport.knowledgeScopeKey(10L, " Release Ops ")).isEqualTo("kb:10:scope:release_ops");
         assertThat(RaptorScopeSupport.isDatasetScope(RaptorScopeSupport.SCOPE_TYPE_DATASET)).isTrue();
         assertThat(RaptorScopeSupport.isDatasetScope(RaptorScopeSupport.SCOPE_TYPE_DOCUMENT)).isFalse();
     }
 
-    private static SuperAgentDocument document(Long id, String scopeCode) {
+    private static SuperAgentDocument document(Long id) {
         SuperAgentDocument document = new SuperAgentDocument();
         document.setId(id);
-        document.setKnowledgeScopeCode(scopeCode);
         return document;
     }
 }

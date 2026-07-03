@@ -21,11 +21,9 @@ public class KnowledgeDocumentDescriptor {
 
     private Long lastIndexTaskId;
 
-    private String knowledgeScopeCode;
+    private Long knowledgeBaseId;
 
-    private String knowledgeScopeName;
+    private String knowledgeBaseCode;
 
-    private String businessCategory;
-
-    private String documentTags;
+    private String knowledgeBaseName;
 }

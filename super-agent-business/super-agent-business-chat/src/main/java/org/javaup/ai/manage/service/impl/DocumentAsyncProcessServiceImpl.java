@@ -54,7 +54,6 @@ import org.javaup.ai.manage.support.DocumentStrategyPlanDraft;
 import org.javaup.ai.manage.support.DocumentStrategyStepDraft;
 import org.javaup.ai.manage.support.MybatisBatchExecutor;
 import org.javaup.ai.manage.support.ParentBlockCandidate;
-import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.javaup.enums.BusinessStatus;
 import org.javaup.enums.DocumentChunkSourceTypeEnum;
 import org.javaup.enums.DocumentFileTypeEnum;
@@ -101,8 +100,6 @@ import java.util.concurrent.RejectedExecutionException;
 public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessService {
 
     private static final Set<Long> RUNNING_INDEX_TASK_IDS = ConcurrentHashMap.newKeySet();
-
-    private static final Set<String> RUNNING_DATASET_RAPTOR_SCOPE_KEYS = ConcurrentHashMap.newKeySet();
 
     private static final TypeReference<Map<String, Object>> EXT_JSON_TYPE = new TypeReference<>() {
     };
@@ -864,8 +861,6 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
             document.setLastIndexTaskId(taskId);
             documentMapper.updateById(document);
 
-            submitDatasetRaptorBuild(document, taskId);
-
             finishTaskSuccess(task, DocumentTaskStageEnum.STORE_COMPLETE.getCode(), startTime);
             progressCacheService.update(document, task);
             saveIndexBuildLog(taskId, documentId,
@@ -916,143 +911,6 @@ public class DocumentAsyncProcessServiceImpl implements DocumentAsyncProcessServ
 	                    "currentStage", failedStage,
 	                    "currentStageName", stageName(failedStage),
 	                    "costMillis", failedCostMillis));
-        }
-    }
-
-    private void submitDatasetRaptorBuild(SuperAgentDocument document, Long taskId) {
-        if (document == null || StrUtil.isBlank(document.getKnowledgeScopeCode())) {
-            return;
-        }
-        Long documentId = document.getId();
-        String knowledgeScopeCode = document.getKnowledgeScopeCode();
-        String knowledgeScopeName = document.getKnowledgeScopeName();
-        String normalizedScopeCode = RaptorScopeSupport.normalizeScopeCode(knowledgeScopeCode);
-        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(normalizedScopeCode);
-        if (StrUtil.isBlank(normalizedScopeCode) || StrUtil.isBlank(scopeKey)) {
-            return;
-        }
-        if (!RUNNING_DATASET_RAPTOR_SCOPE_KEYS.add(scopeKey)) {
-            log.info("RAPTOR dataset-level 构建已在后台执行中，跳过重复提交，documentId={}, taskId={}, scopeKey={}",
-                documentId, taskId, scopeKey);
-            saveIndexBuildLog(taskId, documentId,
-                DocumentTaskStageEnum.RAPTOR.getCode(),
-                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
-                DocumentLogLevelEnum.INFO.getCode(),
-                DocumentOperatorTypeEnum.SYSTEM.getCode(),
-                null,
-                "knowledge scope 级 RAPTOR 跨文档摘要树已有后台任务执行中，本次跳过重复提交。",
-                detail("knowledgeScopeCode", knowledgeScopeCode,
-                    "knowledgeScopeName", knowledgeScopeName,
-                    "scopeKey", scopeKey,
-                    "async", true,
-                    "deduplicated", true));
-            return;
-        }
-        try {
-            datasetRaptorExecutorService.execute(() -> {
-                try {
-                    runDatasetRaptorBuild(documentId, taskId, knowledgeScopeCode, knowledgeScopeName, scopeKey);
-                }
-                finally {
-                    RUNNING_DATASET_RAPTOR_SCOPE_KEYS.remove(scopeKey);
-                }
-            });
-            log.info("RAPTOR dataset-level 构建已提交后台执行，documentId={}, taskId={}, scopeKey={}",
-                documentId, taskId, scopeKey);
-            saveIndexBuildLog(taskId, documentId,
-                DocumentTaskStageEnum.RAPTOR.getCode(),
-                DocumentTaskEventTypeEnum.START.getCode(),
-                DocumentLogLevelEnum.INFO.getCode(),
-                DocumentOperatorTypeEnum.SYSTEM.getCode(),
-                null,
-                "knowledge scope 级 RAPTOR 跨文档摘要树已提交后台构建。",
-                detail("knowledgeScopeCode", knowledgeScopeCode,
-                    "knowledgeScopeName", knowledgeScopeName,
-                    "scopeKey", scopeKey,
-                    "async", true));
-        }
-        catch (RejectedExecutionException exception) {
-            RUNNING_DATASET_RAPTOR_SCOPE_KEYS.remove(scopeKey);
-            log.warn("RAPTOR dataset-level 后台线程池已满，跳过本次提交，documentId={}, taskId={}, scopeKey={}",
-                documentId, taskId, scopeKey, exception);
-            saveIndexBuildLog(taskId, documentId,
-                DocumentTaskStageEnum.RAPTOR.getCode(),
-                DocumentTaskEventTypeEnum.FAILED.getCode(),
-                DocumentLogLevelEnum.WARN.getCode(),
-                DocumentOperatorTypeEnum.SYSTEM.getCode(),
-                null,
-                "knowledge scope 级 RAPTOR 跨文档摘要树后台线程池已满，本次未提交。",
-                detail("knowledgeScopeCode", knowledgeScopeCode,
-                    "knowledgeScopeName", knowledgeScopeName,
-                    "scopeKey", scopeKey,
-                    "async", true,
-                    "error", exception.getMessage()));
-        }
-    }
-
-    private void runDatasetRaptorBuild(Long documentId,
-                                       Long taskId,
-                                       String knowledgeScopeCode,
-                                       String knowledgeScopeName,
-                                       String scopeKey) {
-        long datasetRaptorStartedNanos = System.nanoTime();
-        saveIndexBuildLog(taskId, documentId,
-            DocumentTaskStageEnum.RAPTOR.getCode(),
-            DocumentTaskEventTypeEnum.START.getCode(),
-            DocumentLogLevelEnum.INFO.getCode(),
-            DocumentOperatorTypeEnum.SYSTEM.getCode(),
-            null,
-            "开始后台构建 knowledge scope 级 RAPTOR 跨文档摘要树。",
-            detail("knowledgeScopeCode", knowledgeScopeCode,
-                "knowledgeScopeName", knowledgeScopeName,
-                "scopeKey", scopeKey,
-                "async", true));
-        try {
-            RaptorBuildResult datasetRaptorBuildResult = raptorBuildService.rebuildKnowledgeScopeTree(knowledgeScopeCode);
-            long datasetRaptorCostMillis = elapsedMillis(datasetRaptorStartedNanos);
-            log.info("RAPTOR dataset-level 后台构建完成，documentId={}, taskId={}, scopeKey={}, inputMode={}, inputCount={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
-                documentId, taskId, scopeKey, datasetRaptorBuildResult.getInputMode(), datasetRaptorBuildResult.getInputCount(),
-                datasetRaptorBuildResult.getNodeCount(), datasetRaptorBuildResult.getLevelCount(),
-                datasetRaptorBuildResult.getSourceChunkCount(), datasetRaptorCostMillis);
-            saveIndexBuildLog(taskId, documentId,
-                DocumentTaskStageEnum.RAPTOR.getCode(),
-                DocumentTaskEventTypeEnum.COMPLETE.getCode(),
-                DocumentLogLevelEnum.INFO.getCode(),
-                DocumentOperatorTypeEnum.SYSTEM.getCode(),
-                null,
-                "knowledge scope 级 RAPTOR 跨文档摘要树后台构建完成，耗时 " + datasetRaptorCostMillis + "ms。",
-                detail("knowledgeScopeCode", knowledgeScopeCode,
-                    "knowledgeScopeName", knowledgeScopeName,
-                    "scopeKey", scopeKey,
-                    "async", true,
-                    "inputMode", datasetRaptorBuildResult.getInputMode(),
-                    "inputCount", datasetRaptorBuildResult.getInputCount(),
-                    "reusableSummaryInputCount", datasetRaptorBuildResult.getReusableSummaryInputCount(),
-                    "originalChunkInputCount", datasetRaptorBuildResult.getOriginalChunkInputCount(),
-                    "nodeCount", datasetRaptorBuildResult.getNodeCount(),
-                    "levelCount", datasetRaptorBuildResult.getLevelCount(),
-                    "sourceChunkCount", datasetRaptorBuildResult.getSourceChunkCount(),
-                    "sourceQualityReport", datasetRaptorBuildResult.getSourceQualityReport(),
-                    "savedQualityReport", datasetRaptorBuildResult.getSavedQualityReport(),
-                    "costMillis", datasetRaptorCostMillis));
-        }
-        catch (Exception exception) {
-            long datasetRaptorCostMillis = elapsedMillis(datasetRaptorStartedNanos);
-            log.error("RAPTOR dataset-level 后台构建失败，documentId={}, taskId={}, scopeKey={}, costMillis={}",
-                documentId, taskId, scopeKey, datasetRaptorCostMillis, exception);
-            saveIndexBuildLog(taskId, documentId,
-                DocumentTaskStageEnum.RAPTOR.getCode(),
-                DocumentTaskEventTypeEnum.FAILED.getCode(),
-                DocumentLogLevelEnum.ERROR.getCode(),
-                DocumentOperatorTypeEnum.SYSTEM.getCode(),
-                null,
-                "knowledge scope 级 RAPTOR 跨文档摘要树后台构建失败，单文档索引结果保持成功。",
-                detail("knowledgeScopeCode", knowledgeScopeCode,
-                    "knowledgeScopeName", knowledgeScopeName,
-                    "scopeKey", scopeKey,
-                    "async", true,
-                    "error", exception.getMessage(),
-                    "costMillis", datasetRaptorCostMillis));
         }
     }
 

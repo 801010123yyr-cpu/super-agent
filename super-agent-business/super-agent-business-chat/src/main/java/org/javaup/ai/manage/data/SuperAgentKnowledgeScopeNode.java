@@ -24,6 +24,8 @@ public class SuperAgentKnowledgeScopeNode extends BaseTableData {
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
 
+    private Long knowledgeBaseId;
+
     private String scopeCode;
 
     private String scopeName;

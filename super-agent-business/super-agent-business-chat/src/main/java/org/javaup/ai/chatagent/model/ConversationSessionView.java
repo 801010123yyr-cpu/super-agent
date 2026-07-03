@@ -31,6 +31,9 @@ public class ConversationSessionView {
     private ChatQueryMode chatMode;
     private String selectedDocumentId;
     private String selectedDocumentName;
+    private String knowledgeBaseSelectionMode;
+    private List<String> selectedKnowledgeBaseIds;
+    private List<String> selectedKnowledgeBaseNames;
     private Instant createdAt;
     private Instant updatedAt;
     private List<ConversationExchangeView> exchanges;

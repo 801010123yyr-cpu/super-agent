@@ -44,6 +44,9 @@ public final class SearchReferenceMapper {
         reference.setTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME), "文档片段"));
         reference.setDocumentId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID)));
         reference.setDocumentName(asText(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME), ""));
+        reference.setKnowledgeBaseId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID)));
+        reference.setKnowledgeBaseCode(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_CODE), ""));
+        reference.setKnowledgeBaseName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME), ""));
         reference.setParentBlockId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID)));
         reference.setParentBlockNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO)));
         reference.setChunkId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID)));
@@ -53,8 +56,6 @@ public final class SearchReferenceMapper {
         reference.setStructureNodeType(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE)));
         reference.setCanonicalPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.CANONICAL_PATH), ""));
         reference.setItemIndex(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.ITEM_INDEX)));
-        reference.setKnowledgeScopeCode(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE), ""));
-        reference.setKnowledgeScopeName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME), ""));
         reference.setPageNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_NO)));
         reference.setPageRange(asText(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_RANGE), ""));
         reference.setBboxJson(asText(metadata.get(DocumentKnowledgeMetadataKeys.BBOX_JSON), ""));

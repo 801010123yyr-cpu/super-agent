@@ -16,6 +16,8 @@ public class KnowledgeScopeItemVo {
 
     private String id;
 
+    private String knowledgeBaseId;
+
     private String scopeCode;
 
     private String scopeName;

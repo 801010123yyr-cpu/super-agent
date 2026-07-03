@@ -68,7 +68,6 @@ public class KnowledgeRouteElasticsearchIndexInitializer {
                 .properties("topicCode", property -> property.keyword(keyword -> keyword))
                 .properties("topicName", property -> property.text(text -> text.analyzer(analyzer).searchAnalyzer(searchAnalyzer)))
                 .properties("documentName", property -> property.text(text -> text.analyzer(analyzer).searchAnalyzer(searchAnalyzer)))
-                .properties("businessCategory", property -> property.keyword(keyword -> keyword))
                 .properties("displayName", property -> property.text(text -> text.analyzer(analyzer).searchAnalyzer(searchAnalyzer)))
                 .properties("descriptionText", property -> property.text(text -> text.analyzer(analyzer).searchAnalyzer(searchAnalyzer)))
                 .properties("aliasesText", property -> property.text(text -> text.analyzer(analyzer).searchAnalyzer(searchAnalyzer)))

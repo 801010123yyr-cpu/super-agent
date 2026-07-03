@@ -15,6 +15,9 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String SCORE = "score";
     public static final String DOCUMENT_ID = "documentId";
     public static final String DOCUMENT_NAME = "documentName";
+    public static final String KNOWLEDGE_BASE_ID = "knowledgeBaseId";
+    public static final String KNOWLEDGE_BASE_CODE = "knowledgeBaseCode";
+    public static final String KNOWLEDGE_BASE_NAME = "knowledgeBaseName";
     public static final String TASK_ID = "taskId";
     public static final String PARENT_BLOCK_ID = "parentBlockId";
     public static final String PARENT_BLOCK_NO = "parentBlockNo";
@@ -33,10 +36,6 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String PAGE_RANGE = "pageRange";
     public static final String BBOX_JSON = "bboxJson";
     public static final String SOURCE_BLOCK_IDS = "sourceBlockIds";
-    public static final String KNOWLEDGE_SCOPE_CODE = "knowledgeScopeCode";
-    public static final String KNOWLEDGE_SCOPE_NAME = "knowledgeScopeName";
-    public static final String BUSINESS_CATEGORY = "businessCategory";
-    public static final String DOCUMENT_TAGS = "documentTags";
     public static final String TITLE = "title";
     public static final String URL = "url";
     public static final String TOOL_NAME = "toolName";

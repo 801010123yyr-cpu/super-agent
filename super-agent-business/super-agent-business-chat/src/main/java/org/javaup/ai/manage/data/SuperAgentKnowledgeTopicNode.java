@@ -24,6 +24,8 @@ public class SuperAgentKnowledgeTopicNode extends BaseTableData {
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
 
+    private Long knowledgeBaseId;
+
     private String topicCode;
 
     private String topicName;

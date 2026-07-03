@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_dialogue (
     chat_mode TINYINT(1) NOT NULL DEFAULT '1' COMMENT '1:当前文档问答 2:开放式提问',
     selected_document_id BIGINT DEFAULT NULL COMMENT '当前会话显式锁定的提问文档id',
     selected_document_name VARCHAR(255) DEFAULT NULL COMMENT '当前会话显式锁定的提问文档名称',
+    knowledge_base_selection_mode VARCHAR(16) NOT NULL DEFAULT 'NONE' COMMENT '当前会话知识库选择模式 NONE/ALL/SELECTED',
+    selected_knowledge_base_ids_json JSON DEFAULT NULL COMMENT '当前会话已选知识库id快照',
+    selected_knowledge_base_names_json JSON DEFAULT NULL COMMENT '当前会话已选知识库名称快照',
     create_time DATETIME DEFAULT NULL COMMENT '创建时间',
     edit_time DATETIME DEFAULT NULL COMMENT '编辑时间',
     status TINYINT(1) DEFAULT '1' COMMENT '1:正常 0:删除',
@@ -28,6 +31,10 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_exchange (
     finish_note TEXT DEFAULT NULL COMMENT '失败或终止说明',
     first_token_latency_ms BIGINT DEFAULT NULL COMMENT '首包耗时，毫秒',
     total_latency_ms BIGINT DEFAULT NULL COMMENT '总耗时，毫秒',
+    knowledge_base_selection_mode VARCHAR(16) NOT NULL DEFAULT 'NONE' COMMENT '当轮知识库选择模式 NONE/ALL/SELECTED',
+    selected_knowledge_base_ids_json JSON DEFAULT NULL COMMENT '当轮已选知识库id快照',
+    selected_knowledge_base_names_json JSON DEFAULT NULL COMMENT '当轮已选知识库名称快照',
+    retrieval_config_snapshot_json JSON DEFAULT NULL COMMENT '当轮生效RAG检索配置快照',
     create_time DATETIME DEFAULT NULL COMMENT '创建时间',
     edit_time DATETIME DEFAULT NULL COMMENT '编辑时间',
     status TINYINT(1) DEFAULT '1' COMMENT '1:正常 0:删除',
@@ -104,6 +111,28 @@ CREATE TABLE IF NOT EXISTS GRAPH_CHECKPOINT (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Spring AI Alibaba Graph checkpoint 表';
 
 
+CREATE TABLE IF NOT EXISTS `super_agent_knowledge_base` (
+    `id` bigint NOT NULL COMMENT '主键id',
+    `base_code` varchar(64) NOT NULL COMMENT '知识库编码',
+    `base_name` varchar(128) NOT NULL COMMENT '知识库名称',
+    `description` varchar(1024) DEFAULT NULL COMMENT '知识库描述',
+    `embedding_model` varchar(128) DEFAULT NULL COMMENT '向量模型快照',
+    `retrieval_config_json` JSON DEFAULT NULL COMMENT '检索配置JSON',
+    `graph_rag_config_json` JSON DEFAULT NULL COMMENT 'GraphRAG配置JSON',
+    `raptor_config_json` JSON DEFAULT NULL COMMENT 'RAPTOR配置JSON',
+    `metadata_filter_json` JSON DEFAULT NULL COMMENT '元数据过滤配置JSON',
+    `is_default` tinyint(1) NOT NULL DEFAULT '0' COMMENT '是否默认知识库 1:是 0:否',
+    `sort_order` int DEFAULT '0' COMMENT '排序值',
+    `create_time` datetime DEFAULT NULL COMMENT '创建时间',
+    `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
+    `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_knowledge_base_code` (`base_code`),
+    KEY `idx_knowledge_base_default` (`is_default`, `status`),
+    KEY `idx_knowledge_base_sort` (`sort_order`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='轻量知识库表';
+
+
 CREATE TABLE IF NOT EXISTS `super_agent_document` (
     `id` bigint NOT NULL COMMENT '主键id',
     `document_name` varchar(255) NOT NULL COMMENT '文档名称',
@@ -124,10 +153,9 @@ CREATE TABLE IF NOT EXISTS `super_agent_document` (
     `content_quality_level` tinyint DEFAULT '0' COMMENT '内容质量 0:未知 1:低 2:中 3:高',
     `parse_text_path` varchar(512) DEFAULT NULL COMMENT '解析文本存储路径',
     `parse_error_msg` varchar(1000) DEFAULT NULL COMMENT '解析失败原因',
-    `knowledge_scope_code` varchar(64) DEFAULT NULL COMMENT '业务知识域编码，例如 oa / crm / finance',
-    `knowledge_scope_name` varchar(128) DEFAULT NULL COMMENT '业务知识域名称，例如 OA系统 / CRM系统',
-    `business_category` varchar(128) DEFAULT NULL COMMENT '业务分类，例如 流程 / 规则 / 操作手册',
-    `document_tags` varchar(512) DEFAULT NULL COMMENT '逗号分隔标签快照',
+    `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
+    `knowledge_base_code` varchar(64) NOT NULL COMMENT '所属知识库编码快照',
+    `knowledge_base_name` varchar(128) NOT NULL COMMENT '所属知识库名称快照',
     `current_plan_id` bigint DEFAULT NULL COMMENT '当前策略方案id',
     `last_parse_task_id` bigint DEFAULT NULL COMMENT '最近一次成功解析任务id',
     `structure_node_count` int DEFAULT '0' COMMENT '最近一次结构化解析生成的节点数',
@@ -140,7 +168,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_document` (
     KEY `idx_parse_status` (`parse_status`),
     KEY `idx_strategy_status` (`strategy_status`),
     KEY `idx_index_status` (`index_status`),
-    KEY `idx_knowledge_scope_code` (`knowledge_scope_code`),
+    KEY `idx_knowledge_base_id` (`knowledge_base_id`),
     KEY `idx_current_plan_id` (`current_plan_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='文档表';
 
@@ -716,6 +744,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_raptor_node` (
 
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
     `id` bigint NOT NULL COMMENT '主键id',
+    `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
     `scope_code` varchar(64) NOT NULL COMMENT '知识范围编码',
     `scope_name` varchar(128) NOT NULL COMMENT '知识范围名称',
     `parent_scope_code` varchar(64) DEFAULT NULL COMMENT '父级知识范围编码',
@@ -727,7 +756,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_scope_code` (`scope_code`),
+    UNIQUE KEY `uk_scope_base_code` (`knowledge_base_id`, `scope_code`),
+    KEY `idx_knowledge_base_id` (`knowledge_base_id`),
     KEY `idx_parent_scope_code` (`parent_scope_code`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识范围节点表';
@@ -735,6 +765,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
 
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_topic_node` (
     `id` bigint NOT NULL COMMENT '主键id',
+    `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
     `topic_code` varchar(64) NOT NULL COMMENT '主题编码',
     `topic_name` varchar(128) NOT NULL COMMENT '主题名称',
     `scope_code` varchar(64) NOT NULL COMMENT '所属知识范围编码',
@@ -748,7 +779,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_topic_node` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_topic_code` (`topic_code`),
+    UNIQUE KEY `uk_topic_base_code` (`knowledge_base_id`, `topic_code`),
+    KEY `idx_knowledge_base_id` (`knowledge_base_id`),
     KEY `idx_scope_code` (`scope_code`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识主题节点表';
@@ -782,6 +814,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_profile` (
 
 CREATE TABLE IF NOT EXISTS `super_agent_topic_document_relation` (
     `id` bigint NOT NULL COMMENT '主键id',
+    `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
     `topic_code` varchar(64) NOT NULL COMMENT '主题编码',
     `document_id` bigint NOT NULL COMMENT '文档id',
     `relation_score` decimal(8,4) DEFAULT '0.0000' COMMENT '关联分数',
@@ -791,7 +824,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_topic_document_relation` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_topic_document` (`topic_code`, `document_id`),
+    UNIQUE KEY `uk_base_topic_document` (`knowledge_base_id`, `topic_code`, `document_id`),
+    KEY `idx_knowledge_base_id` (`knowledge_base_id`),
     KEY `idx_document_id` (`document_id`),
     KEY `idx_topic_code` (`topic_code`),
     KEY `idx_status` (`status`)
@@ -805,6 +839,10 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_route_trace` (
     `question` text COMMENT '原始问题',
     `rewrite_question` text COMMENT '改写问题',
     `mode` varchar(32) DEFAULT NULL COMMENT '运行模式 shadow/auto',
+    `knowledge_base_selection_mode` varchar(16) DEFAULT NULL COMMENT '知识库选择模式 NONE/ALL/SELECTED',
+    `selected_knowledge_base_ids_json` JSON DEFAULT NULL COMMENT '已选知识库id快照',
+    `selected_knowledge_base_names_json` JSON DEFAULT NULL COMMENT '已选知识库名称快照',
+    `allowed_document_ids_json` JSON DEFAULT NULL COMMENT '知识库硬边界允许检索的文档id快照',
     `top_scopes_json` text COMMENT '候选知识范围 JSON',
     `top_topics_json` text COMMENT '候选主题 JSON',
     `top_documents_json` text COMMENT '候选文档 JSON',

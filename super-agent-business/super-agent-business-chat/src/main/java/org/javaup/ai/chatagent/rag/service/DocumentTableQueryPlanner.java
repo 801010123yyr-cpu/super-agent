@@ -300,8 +300,20 @@ public class DocumentTableQueryPlanner {
         }
         DocumentTableQuery.Operation operation = DocumentTableQuery.Operation.COUNT;
         Optional<DocumentTableDescriptor.Column> metricColumn = resolveMetricColumn(question, table);
-        Optional<DocumentTableDescriptor.Column> groupColumn = Optional.empty();
-        List<DocumentTableQuery.Filter> filters = List.of();
+        Optional<DocumentTableDescriptor.Column> groupColumn = resolveGroupColumn(question, table, metricColumn.orElse(null));
+        List<DocumentTableQuery.Filter> filters = resolveFilters(question, table);
+
+        String normalizedQuestion = normalize(question);
+        boolean aggregateCue = containsAny(normalizedQuestion, List.of("合计", "总计", "求和", "总和", "sum"));
+        if (aggregateCue && metricColumn.isPresent()) {
+            operation = DocumentTableQuery.Operation.SUM;
+        }
+        if (groupColumn.isPresent() && aggregateCue && metricColumn.isPresent()) {
+            operation = DocumentTableQuery.Operation.GROUP_SUM;
+        }
+        else if (groupColumn.isPresent() && containsAny(normalizedQuestion, List.of("数量", "个数", "多少", "统计"))) {
+            operation = DocumentTableQuery.Operation.GROUP_COUNT;
+        }
 
         if (operation == DocumentTableQuery.Operation.COUNT && groupColumn.isPresent()) {
             operation = DocumentTableQuery.Operation.GROUP_COUNT;
@@ -335,7 +347,9 @@ public class DocumentTableQueryPlanner {
     }
 
     private boolean mentionsKnownTableSignal(String question, List<DocumentTableDescriptor> tables) {
-        return tables.stream()
+        String normalizedQuestion = normalize(question);
+        boolean operationCue = containsAny(normalizedQuestion, List.of("合计", "总计", "求和", "总和", "统计", "数量", "个数", "多少", "最大", "最小", "sum", "count"));
+        return operationCue && tables.stream()
             .filter(table -> table != null)
             .anyMatch(table -> textMentionScore(question, table.getTitle()) > 0
                 || textMentionScore(question, table.getSectionPath()) > 0
@@ -353,6 +367,77 @@ public class DocumentTableQueryPlanner {
             .or(() -> table.getColumns().stream()
                 .filter(column -> "NUMBER".equalsIgnoreCase(StrUtil.blankToDefault(column.getValueType(), "")))
                 .findFirst());
+    }
+
+    private Optional<DocumentTableDescriptor.Column> resolveGroupColumn(String question,
+                                                                        DocumentTableDescriptor table,
+                                                                        DocumentTableDescriptor.Column metricColumn) {
+        String normalizedQuestion = normalize(question);
+        if (!containsAny(normalizedQuestion, List.of("按", "分别", "分组", "各", "每"))) {
+            return Optional.empty();
+        }
+        return table.getColumns().stream()
+            .filter(column -> metricColumn == null || !StrUtil.equals(column.getColumnName(), metricColumn.getColumnName()))
+            .filter(column -> !"NUMBER".equalsIgnoreCase(StrUtil.blankToDefault(column.getValueType(), "")))
+            .map(column -> new ColumnScore(column, columnMentionScore(question, column)))
+            .filter(item -> item.score() > 0)
+            .max(Comparator.comparingInt(ColumnScore::score))
+            .map(ColumnScore::column);
+    }
+
+    private List<DocumentTableQuery.Filter> resolveFilters(String question, DocumentTableDescriptor table) {
+        String normalizedQuestion = normalize(question);
+        List<DocumentTableQuery.Filter> filters = new ArrayList<>();
+        for (DocumentTableDescriptor.Column column : table.getColumns()) {
+            if (column == null || StrUtil.isBlank(column.getColumnName())) {
+                continue;
+            }
+            String normalizedColumn = normalize(column.getColumnName());
+            if (normalizedColumn.isBlank()) {
+                continue;
+            }
+            for (String marker : List.of("为", "是", "等于")) {
+                int start = normalizedQuestion.indexOf(normalizedColumn + marker);
+                if (start < 0) {
+                    continue;
+                }
+                int valueStart = start + normalizedColumn.length() + normalize(marker).length();
+                String value = extractFilterValue(normalizedQuestion.substring(valueStart), table);
+                if (StrUtil.isNotBlank(value)) {
+                    filters.add(DocumentTableQuery.Filter.builder()
+                        .column(column.getColumnName())
+                        .operator(DocumentTableQuery.Operator.EQ)
+                        .value(value)
+                        .build());
+                    break;
+                }
+            }
+        }
+        return filters;
+    }
+
+    private String extractFilterValue(String normalizedRemainder, DocumentTableDescriptor table) {
+        if (StrUtil.isBlank(normalizedRemainder)) {
+            return "";
+        }
+        String value = normalizedRemainder;
+        for (DocumentTableDescriptor.Column column : table.getColumns()) {
+            String normalizedColumn = normalize(column.getColumnName());
+            if (StrUtil.isBlank(normalizedColumn)) {
+                continue;
+            }
+            int index = value.indexOf(normalizedColumn);
+            if (index > 0) {
+                value = value.substring(0, index);
+            }
+        }
+        for (String cue : List.of("的", "数量", "个数", "多少", "合计", "总计", "求和", "总和", "统计", "sum", "count")) {
+            int index = value.indexOf(normalize(cue));
+            if (index > 0) {
+                value = value.substring(0, index);
+            }
+        }
+        return value.trim();
     }
 
     private int scorePlan(String question, DocumentTableDescriptor table, DocumentTableQuery query) {

@@ -10,5 +10,7 @@ import lombok.Data;
 @Data
 public class TopicDocumentRelationListQueryDto {
 
+    private String knowledgeBaseId;
+
     private String topicCode;
 }

@@ -6,6 +6,7 @@ import org.javaup.ai.chatagent.model.debug.ChatDebugTrace;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.support.StreamEventMetadata;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.enums.ChatQueryMode;
 import reactor.core.Disposable;
 import reactor.core.publisher.Sinks;
@@ -33,6 +34,7 @@ public class TaskInfo {
     private final Long selectedDocumentId;
     private final String selectedDocumentName;
     private final Long selectedTaskId;
+    private final KnowledgeBaseSelectionSnapshot knowledgeBaseSelectionSnapshot;
     private final LocalDate currentDate;
     private final String currentDateText;
 
@@ -70,6 +72,7 @@ public class TaskInfo {
                     Long selectedDocumentId,
                     String selectedDocumentName,
                     Long selectedTaskId,
+                    KnowledgeBaseSelectionSnapshot knowledgeBaseSelectionSnapshot,
                     LocalDate currentDate,
                     String currentDateText,
                     ConversationExecutionPlan executionPlan,
@@ -92,6 +95,7 @@ public class TaskInfo {
         this.selectedDocumentId = selectedDocumentId;
         this.selectedDocumentName = selectedDocumentName;
         this.selectedTaskId = selectedTaskId;
+        this.knowledgeBaseSelectionSnapshot = knowledgeBaseSelectionSnapshot;
         this.currentDate = currentDate;
         this.currentDateText = currentDateText;
         this.executionPlan = executionPlan;
@@ -146,6 +150,10 @@ public class TaskInfo {
 
     public Long selectedTaskId() {
         return selectedTaskId;
+    }
+
+    public KnowledgeBaseSelectionSnapshot knowledgeBaseSelectionSnapshot() {
+        return knowledgeBaseSelectionSnapshot;
     }
 
     public LocalDate currentDate() {

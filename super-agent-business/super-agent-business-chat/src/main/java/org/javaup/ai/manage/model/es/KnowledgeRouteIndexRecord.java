@@ -28,6 +28,8 @@ public class KnowledgeRouteIndexRecord {
 
     private Long documentId;
 
+    private Long knowledgeBaseId;
+
     private String scopeCode;
 
     private String scopeName;
@@ -37,8 +39,6 @@ public class KnowledgeRouteIndexRecord {
     private String topicName;
 
     private String documentName;
-
-    private String businessCategory;
 
     private String displayName;
 

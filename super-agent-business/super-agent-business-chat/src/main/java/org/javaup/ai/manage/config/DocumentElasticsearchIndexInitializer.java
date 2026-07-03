@@ -78,12 +78,6 @@ public class DocumentElasticsearchIndexInitializer {
                 .properties("pageRange", property -> property.keyword(keyword -> keyword))
                 .properties("bboxJson", property -> property.keyword(keyword -> keyword))
                 .properties("sourceBlockIds", property -> property.keyword(keyword -> keyword))
-                .properties("knowledgeScopeCode", property -> property.keyword(keyword -> keyword))
-                .properties("knowledgeScopeName", property -> property.text(text -> text
-                    .analyzer(analyzer)
-                    .searchAnalyzer(searchAnalyzer)))
-                .properties("businessCategory", property -> property.keyword(keyword -> keyword))
-                .properties("documentTags", property -> property.keyword(keyword -> keyword))
                 .properties("contentWithWeight", property -> property.text(text -> text
                     .analyzer(analyzer)
                     .searchAnalyzer(searchAnalyzer)))

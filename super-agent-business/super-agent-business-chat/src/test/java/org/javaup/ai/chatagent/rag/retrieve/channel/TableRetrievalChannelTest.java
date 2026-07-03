@@ -149,11 +149,15 @@ class TableRetrievalChannelTest {
                 10L,
                 "费用报销制度.xlsx",
                 20L,
-                "",
-                "",
-                "",
-                ""
+                1L,
+                "test-kb",
+                "测试知识库"
             ));
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
+            return listRetrievableDocuments();
         }
 
         @Override

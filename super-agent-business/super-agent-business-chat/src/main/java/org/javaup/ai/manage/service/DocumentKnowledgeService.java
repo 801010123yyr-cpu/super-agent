@@ -4,6 +4,7 @@ import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.springframework.ai.document.Document;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -15,6 +16,8 @@ import java.util.List;
 public interface DocumentKnowledgeService {
 
     List<KnowledgeDocumentDescriptor> listRetrievableDocuments();
+
+    List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(Collection<Long> knowledgeBaseIds);
 
     List<Document> vectorSearch(DocumentRetrieveRequest request);
 

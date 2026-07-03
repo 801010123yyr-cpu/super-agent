@@ -170,8 +170,6 @@ public class RagCitationRepairService {
         metadata.put("chunkNo", reference.getChunkNo());
         metadata.put("parentBlockNo", reference.getParentBlockNo());
         metadata.put("sourceBlockIds", StrUtil.blankToDefault(reference.getSourceBlockIds(), ""));
-        metadata.put("knowledgeScopeCode", StrUtil.blankToDefault(reference.getKnowledgeScopeCode(), ""));
-        metadata.put("knowledgeScopeName", StrUtil.blankToDefault(reference.getKnowledgeScopeName(), ""));
         metadata.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
         metadata.put("tableId", reference.getTableId());
         metadata.put("tableNo", reference.getTableNo());

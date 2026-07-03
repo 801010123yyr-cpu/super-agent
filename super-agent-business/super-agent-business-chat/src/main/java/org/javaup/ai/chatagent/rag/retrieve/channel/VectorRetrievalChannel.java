@@ -3,6 +3,7 @@ package org.javaup.ai.chatagent.rag.retrieve.channel;
 import cn.hutool.core.collection.CollectionUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.service.DocumentRetrieveRequestFactory;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.enums.RetrievalChannelEnum;
@@ -47,7 +48,7 @@ public class VectorRetrievalChannel implements RetrievalChannel {
     public RetrievalChannelResult retrieve(String subQuestion, ConversationExecutionPlan plan) {
 
         List<Document> documentList = documentKnowledgeService.vectorSearch(
-            documentRetrieveRequestFactory.build(subQuestion, plan, properties.getVectorTopK())
+            documentRetrieveRequestFactory.build(subQuestion, plan, RagRuntimeOptions.resolve(plan, properties).getVectorTopK())
         );
         return new RetrievalChannelResult(
             channelName(), documentList

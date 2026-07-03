@@ -8,6 +8,7 @@ import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
+import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.model.SubQuestionChannelTrace;
@@ -169,7 +170,7 @@ public class RagRetrievalEngine {
             .filter(result -> result.getDocuments() != null)
             .toList();
         List<RetrievalChannelResult> channelResults = rawChannelResults.stream()
-            .map(this::applyEvidenceGate)
+            .map(result -> applyEvidenceGate(result, plan))
             .toList();
         List<SubQuestionChannelTrace> channelTraces = buildChannelTraces(rawChannelResults, channelResults, plan);
 
@@ -197,7 +198,7 @@ public class RagRetrievalEngine {
                 recordChannelObservations(traceRecorder, subQuestionIndex, subQuestion,
                     rawChannelResults, channelResults, channelTraces, finalDocuments);
                 recordRetrievalResultObservations(traceRecorder, subQuestionIndex, subQuestion,
-                    rawChannelResults, channelResults, mergedCandidates, rerankedCandidates, finalDocuments);
+                    rawChannelResults, channelResults, mergedCandidates, rerankedCandidates, finalDocuments, plan);
             } catch (RuntimeException exception) {
                 log.warn("记录检索观测数据失败, subQuestionIndex={}", subQuestionIndex, exception);
             }
@@ -219,7 +220,7 @@ public class RagRetrievalEngine {
         if (rerankedCandidates == null || rerankedCandidates.isEmpty()) {
             return List.of();
         }
-        int finalTopK = Math.max(properties.getFinalTopK(), 0);
+        int finalTopK = Math.max(runtimeOptions(plan).getFinalTopK(), 0);
         if (finalTopK <= 0 || rerankedCandidates.size() <= finalTopK) {
             return rerankedCandidates.stream()
                 .limit(finalTopK)
@@ -293,30 +294,31 @@ public class RagRetrievalEngine {
         return replaceIndex >= 0 ? replaceIndex : selected.size() - 1;
     }
 
-    private RetrievalChannelResult applyEvidenceGate(RetrievalChannelResult result) {
+    private RetrievalChannelResult applyEvidenceGate(RetrievalChannelResult result, ConversationExecutionPlan plan) {
         if (result == null || result.getDocuments() == null || result.getDocuments().isEmpty()) {
             return result;
         }
 
         List<Document> documents = switch (result.getChannelName()) {
-            case "vector" -> filterVectorCandidates(result.getDocuments());
-            case "keyword" -> filterKeywordCandidates(result.getDocuments());
+            case "vector" -> filterVectorCandidates(result.getDocuments(), plan);
+            case "keyword" -> filterKeywordCandidates(result.getDocuments(), plan);
             default -> result.getDocuments();
         };
         return new RetrievalChannelResult(result.getChannelName(), documents);
     }
 
-    private List<Document> filterVectorCandidates(List<Document> documents) {
+    private List<Document> filterVectorCandidates(List<Document> documents, ConversationExecutionPlan plan) {
+        double minSimilarity = runtimeOptions(plan).getMinVectorSimilarity();
         return documents.stream()
 
             .filter(document -> {
                 Double score = resolveScore(document);
-                return score != null && score >= properties.getMinVectorSimilarity();
+                return score != null && score >= minSimilarity;
             })
             .toList();
     }
 
-    private List<Document> filterKeywordCandidates(List<Document> documents) {
+    private List<Document> filterKeywordCandidates(List<Document> documents, ConversationExecutionPlan plan) {
         Double topScore = documents.stream()
             .map(this::resolveScore)
             .filter(Objects::nonNull)
@@ -326,7 +328,7 @@ public class RagRetrievalEngine {
             return documents;
         }
 
-        double acceptedFloor = topScore * Math.max(0D, properties.getKeywordRelativeScoreFloor());
+        double acceptedFloor = topScore * Math.max(0D, runtimeOptions(plan).getKeywordRelativeScoreFloor());
         return documents.stream()
             .filter(document -> {
                 Double score = resolveScore(document);
@@ -347,7 +349,7 @@ public class RagRetrievalEngine {
         }
 
         List<CandidateHolder> sortedHolders = holders.values().stream()
-            .peek(this::finishHybridScore)
+            .peek(holder -> finishHybridScore(holder, plan))
             .peek(this::writeHybridMetadata)
             .sorted((left, right) -> Double.compare(right.score, left.score))
             .toList();
@@ -361,7 +363,7 @@ public class RagRetrievalEngine {
         if (sortedHolders == null || sortedHolders.isEmpty()) {
             return List.of();
         }
-        int candidateTopK = Math.max(properties.getCandidateTopK(), 0);
+        int candidateTopK = Math.max(runtimeOptions(plan).getCandidateTopK(), 0);
         if (candidateTopK <= 0 || sortedHolders.size() <= candidateTopK) {
             return sortedHolders.stream()
                 .limit(candidateTopK)
@@ -479,9 +481,9 @@ public class RagRetrievalEngine {
             CandidateHolder holder = holders.computeIfAbsent(documentId, ignored -> new CandidateHolder(document));
             mergeGraphRagMetadata(holder, document);
             holder.rrfScore += rrfScore;
-            holder.rankScore += channelWeight * hybridRankWeight() * normalizedRankScore;
-            holder.originalScore += channelWeight * hybridOriginalScoreWeight() * normalizedOriginalScore;
-            holder.metadataBoost = Math.max(holder.metadataBoost, calculateMetadataBoost(document, metadataBoostTerms));
+            holder.rankScore += channelWeight * hybridRankWeight(plan) * normalizedRankScore;
+            holder.originalScore += channelWeight * hybridOriginalScoreWeight(plan) * normalizedOriginalScore;
+            holder.metadataBoost = Math.max(holder.metadataBoost, calculateMetadataBoost(document, metadataBoostTerms, plan));
             holder.channels.add(channelResult.getChannelName());
             if (RetrievalChannelEnum.VECTOR.getName().equals(channelResult.getChannelName()) && originalScore != null) {
                 holder.vectorScore = originalScore;
@@ -492,10 +494,10 @@ public class RagRetrievalEngine {
         }
     }
 
-    private void finishHybridScore(CandidateHolder holder) {
+    private void finishHybridScore(CandidateHolder holder, ConversationExecutionPlan plan) {
         holder.score = holder.rankScore
             + holder.originalScore
-            + hybridMetadataBoostWeight() * Math.min(holder.metadataBoost, hybridMaxMetadataBoost());
+            + hybridMetadataBoostWeight(plan) * Math.min(holder.metadataBoost, hybridMaxMetadataBoost(plan));
     }
 
     private double normalizeOriginalScore(Double originalScore, double channelMaxScore) {
@@ -506,7 +508,7 @@ public class RagRetrievalEngine {
     }
 
     private double resolveChannelWeight(String channelName, ConversationExecutionPlan plan) {
-        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+        RagRuntimeOptions.HybridOptions hybrid = runtimeOptions(plan).getHybrid();
         double baseWeight;
         if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
             baseWeight = hybrid == null ? 1D : Math.max(0D, hybrid.getVectorWeight());
@@ -659,23 +661,27 @@ public class RagRetrievalEngine {
         return plan == null || plan.getRetrievalIntent() == null ? RetrievalIntent.GENERAL : plan.getRetrievalIntent();
     }
 
-    private double hybridRankWeight() {
-        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+    private RagRuntimeOptions runtimeOptions(ConversationExecutionPlan plan) {
+        return RagRuntimeOptions.resolve(plan, properties);
+    }
+
+    private double hybridRankWeight(ConversationExecutionPlan plan) {
+        RagRuntimeOptions.HybridOptions hybrid = runtimeOptions(plan).getHybrid();
         return hybrid == null ? 1D : Math.max(0D, hybrid.getRankWeight());
     }
 
-    private double hybridOriginalScoreWeight() {
-        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+    private double hybridOriginalScoreWeight(ConversationExecutionPlan plan) {
+        RagRuntimeOptions.HybridOptions hybrid = runtimeOptions(plan).getHybrid();
         return hybrid == null ? 0.08D : Math.max(0D, hybrid.getOriginalScoreWeight());
     }
 
-    private double hybridMetadataBoostWeight() {
-        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+    private double hybridMetadataBoostWeight(ConversationExecutionPlan plan) {
+        RagRuntimeOptions.HybridOptions hybrid = runtimeOptions(plan).getHybrid();
         return hybrid == null ? 0.04D : Math.max(0D, hybrid.getMetadataBoostWeight());
     }
 
-    private double hybridMaxMetadataBoost() {
-        ChatRagProperties.HybridProperties hybrid = properties.getHybrid();
+    private double hybridMaxMetadataBoost(ConversationExecutionPlan plan) {
+        RagRuntimeOptions.HybridOptions hybrid = runtimeOptions(plan).getHybrid();
         return hybrid == null ? 1D : Math.max(0D, hybrid.getMaxMetadataBoost());
     }
 
@@ -724,7 +730,7 @@ public class RagRetrievalEngine {
         }
     }
 
-    private double calculateMetadataBoost(Document document, List<String> terms) {
+    private double calculateMetadataBoost(Document document, List<String> terms, ConversationExecutionPlan plan) {
         if (document == null || document.getMetadata() == null || terms == null || terms.isEmpty()) {
             return 0D;
         }
@@ -734,12 +740,9 @@ public class RagRetrievalEngine {
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.KEYWORDS) ? 0.18D : 0D;
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.QUESTIONS) ? 0.14D : 0D;
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_NAME) ? 0.10D : 0D;
-        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME) ? 0.08D : 0D;
-        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY) ? 0.06D : 0D;
-        boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS) ? 0.06D : 0D;
         boost += chunkTypeBoost(document);
         boost += graphRankMetadataBoost(document);
-        return Math.min(boost, hybridMaxMetadataBoost());
+        return Math.min(boost, hybridMaxMetadataBoost(plan));
     }
 
     private boolean containsAnyMetadataTerm(Document document, List<String> terms, String metadataKey) {
@@ -1371,7 +1374,8 @@ public class RagRetrievalEngine {
                                                    List<RetrievalChannelResult> filteredResults,
                                                    List<Document> mergedCandidates,
                                                    List<Document> rerankedCandidates,
-                                                   List<Document> finalDocuments) {
+                                                   List<Document> finalDocuments,
+                                                   ConversationExecutionPlan plan) {
         List<RetrievalResultView> results = new ArrayList<>();
         Map<String, Integer> finalRankMap = new LinkedHashMap<>();
         Map<String, Document> mergedCandidateMap = new LinkedHashMap<>();
@@ -1516,18 +1520,18 @@ public class RagRetrievalEngine {
                         if ("vector".equals(channelName)) {
                             view.setSelectionReason(String.format(
                                 "向量闸门过滤：分数 %.4f < 阈值 %.4f",
-                                score, properties.getMinVectorSimilarity()
+                                score, runtimeOptions(plan).getMinVectorSimilarity()
                             ));
                         } else if ("keyword".equals(channelName)) {
                             view.setSelectionReason(String.format(
                                 "关键词闸门过滤：分数 %.4f 低于相对阈值（floor=%.2f）",
-                                score, properties.getKeywordRelativeScoreFloor()
+                                score, runtimeOptions(plan).getKeywordRelativeScoreFloor()
                             ));
                         } else {
                             view.setSelectionReason("闸门过滤：分数 " + String.format("%.4f", score));
                         }
                     } else {
-                        view.setSelectionReason("超出 finalTopK 限制（topK=" + properties.getFinalTopK() + "）");
+                        view.setSelectionReason("超出 finalTopK 限制（topK=" + runtimeOptions(plan).getFinalTopK() + "）");
                     }
 
                     results.add(view);

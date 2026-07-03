@@ -28,6 +28,7 @@ import org.springframework.stereotype.Service;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -95,12 +96,32 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     @Override
     public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
 
-        List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+        return toDescriptors(documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
             .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
             .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
             .isNotNull(SuperAgentDocument::getLastIndexTaskId)
             .orderByDesc(SuperAgentDocument::getEditTime)
-            .orderByDesc(SuperAgentDocument::getId));
+            .orderByDesc(SuperAgentDocument::getId)));
+    }
+
+    @Override
+    public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(Collection<Long> knowledgeBaseIds) {
+        List<Long> ids = knowledgeBaseIds == null
+            ? List.of()
+            : knowledgeBaseIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return toDescriptors(documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+            .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
+            .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
+            .isNotNull(SuperAgentDocument::getLastIndexTaskId)
+            .in(SuperAgentDocument::getKnowledgeBaseId, ids)
+            .orderByDesc(SuperAgentDocument::getEditTime)
+            .orderByDesc(SuperAgentDocument::getId)));
+    }
+
+    private List<KnowledgeDocumentDescriptor> toDescriptors(List<SuperAgentDocument> documents) {
         if (CollUtil.isEmpty(documents)) {
             return List.of();
         }
@@ -110,10 +131,9 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 document.getId(),
                 document.getDocumentName(),
                 document.getLastIndexTaskId(),
-                document.getKnowledgeScopeCode(),
-                document.getKnowledgeScopeName(),
-                document.getBusinessCategory(),
-                document.getDocumentTags()
+                document.getKnowledgeBaseId(),
+                document.getKnowledgeBaseCode(),
+                document.getKnowledgeBaseName()
             ))
             .toList();
     }
@@ -323,10 +343,9 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
 
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, descriptor.getDocumentId());
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(descriptor.getDocumentName()));
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE, safeText(descriptor.getKnowledgeScopeCode()));
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME, safeText(descriptor.getKnowledgeScopeName()));
-            metadata.put(DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY, safeText(descriptor.getBusinessCategory()));
-            metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS, safeText(descriptor.getDocumentTags()));
+            putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_CODE, safeText(descriptor.getKnowledgeBaseCode()));
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(descriptor.getKnowledgeBaseName()));
         }
         graphRagTypedChunkMetadataSupport.enrichMetadata(metadata, chunkType, sourceBlockIds);
 

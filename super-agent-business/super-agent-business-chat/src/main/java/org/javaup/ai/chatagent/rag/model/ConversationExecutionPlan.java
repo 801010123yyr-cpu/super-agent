@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -87,6 +88,20 @@ public class ConversationExecutionPlan {
 
     @Builder.Default
     private List<Long> retrievalTaskIds = new ArrayList<>();
+
+    @Builder.Default
+    private KnowledgeBaseSelectionMode knowledgeBaseSelectionMode = KnowledgeBaseSelectionMode.NONE;
+
+    @Builder.Default
+    private List<Long> selectedKnowledgeBaseIds = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> selectedKnowledgeBaseNames = new ArrayList<>();
+
+    @Builder.Default
+    private List<Long> allowedKnowledgeBaseDocumentIds = new ArrayList<>();
+
+    private RagRuntimeOptions ragRuntimeOptions;
 
     private String clarificationReply;
 

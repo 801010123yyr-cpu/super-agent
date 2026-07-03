@@ -17,7 +17,7 @@ public class KnowledgeDocumentOptionView {
 
     private String documentId;
     private String documentName;
-    private String knowledgeScopeName;
-    private String businessCategory;
-    private String documentTags;
+    private String knowledgeBaseId;
+    private String knowledgeBaseCode;
+    private String knowledgeBaseName;
 }

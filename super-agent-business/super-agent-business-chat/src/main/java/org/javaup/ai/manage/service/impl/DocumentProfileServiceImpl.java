@@ -94,15 +94,11 @@ public class DocumentProfileServiceImpl implements DocumentProfileService {
             documentProfileMapper.updateById(profile);
         }
 
-        backfillDocumentMetadata(document, draft);
-        log.info("文档画像生成完成: documentId={}, documentType={}, graphFriendly={}, supportsItemLookup={}, scopeCode='{}', businessCategory='{}', tags='{}'",
+        log.info("文档画像生成完成: documentId={}, documentType={}, graphFriendly={}, supportsItemLookup={}",
             documentId,
             draft.documentType(),
             draft.graphFriendly(),
-            draft.supportsItemLookup(),
-            draft.knowledgeScopeCode(),
-            draft.businessCategory(),
-            draft.documentTags());
+            draft.supportsItemLookup());
         return profile;
     }
 
@@ -164,10 +160,6 @@ public class DocumentProfileServiceImpl implements DocumentProfileService {
         List<String> coreTopics = buildCoreTopics(document, sectionTitles);
         List<String> exampleQuestions = buildExampleQuestions(documentType, coreTopics);
         String summary = buildSummary(document, sectionTitles, parsedText);
-        String knowledgeScopeCode = inferKnowledgeScopeCode(document, sectionTitles, parsedText);
-        String knowledgeScopeName = inferKnowledgeScopeName(knowledgeScopeCode);
-        String businessCategory = inferBusinessCategory(documentType, parsedText);
-        String documentTags = buildDocumentTags(document, knowledgeScopeCode, documentType, coreTopics);
         return new DocumentProfileDraft(
             summary,
             documentType,
@@ -176,35 +168,8 @@ public class DocumentProfileServiceImpl implements DocumentProfileService {
             graphFriendly,
             supportsGraphOutline,
             supportsItemLookup,
-            true,
-            knowledgeScopeCode,
-            knowledgeScopeName,
-            businessCategory,
-            documentTags
+            true
         );
-    }
-
-    private void backfillDocumentMetadata(SuperAgentDocument document, DocumentProfileDraft draft) {
-        boolean changed = false;
-        if (StrUtil.isBlank(document.getKnowledgeScopeCode()) && StrUtil.isNotBlank(draft.knowledgeScopeCode())) {
-            document.setKnowledgeScopeCode(draft.knowledgeScopeCode());
-            changed = true;
-        }
-        if (StrUtil.isBlank(document.getKnowledgeScopeName()) && StrUtil.isNotBlank(draft.knowledgeScopeName())) {
-            document.setKnowledgeScopeName(draft.knowledgeScopeName());
-            changed = true;
-        }
-        if (StrUtil.isBlank(document.getBusinessCategory()) && StrUtil.isNotBlank(draft.businessCategory())) {
-            document.setBusinessCategory(draft.businessCategory());
-            changed = true;
-        }
-        if (StrUtil.isBlank(document.getDocumentTags()) && StrUtil.isNotBlank(draft.documentTags())) {
-            document.setDocumentTags(draft.documentTags());
-            changed = true;
-        }
-        if (changed) {
-            documentMapper.updateById(document);
-        }
     }
 
     private List<String> extractSectionTitles(List<SuperAgentDocumentStructureNode> structureNodes) {
@@ -294,84 +259,6 @@ public class DocumentProfileServiceImpl implements DocumentProfileService {
         return builder.toString().trim();
     }
 
-    private String inferKnowledgeScopeCode(SuperAgentDocument document,
-                                           List<String> sectionTitles,
-                                           String parsedText) {
-        String combined = combinedText(document, parsedText, sectionTitles);
-        if (containsAny(combined, "上线观察", "值班规则", "观察时长", "运营")) {
-            return "operation_rule";
-        }
-        if (containsAny(combined, "机器人", "知识召回", "意图识别", "策略设计")) {
-            return "robot_strategy";
-        }
-        if (containsAny(combined, "安装", "部署", "默认密码", "访问地址")) {
-            return "deployment";
-        }
-        if (containsAny(combined, "故障", "排查", "异常", "检查顺序")) {
-            return "troubleshooting";
-        }
-        if (containsAny(combined, "产品简介", "核心特性", "技术规格", "产品概述")) {
-            return "product";
-        }
-        return "general_document";
-    }
-
-    private String inferKnowledgeScopeName(String scopeCode) {
-        return switch (StrUtil.blankToDefault(scopeCode, "")) {
-            case "operation_rule" -> "运营规则";
-            case "robot_strategy" -> "机器人策略";
-            case "deployment" -> "安装部署";
-            case "troubleshooting" -> "故障排查";
-            case "product" -> "产品资料";
-            default -> "通用文档";
-        };
-    }
-
-    private String inferBusinessCategory(String documentType, String parsedText) {
-        if ("troubleshooting".equals(documentType)) {
-            return "故障排查";
-        }
-        if ("rule".equals(documentType)) {
-            return "规则";
-        }
-        if ("spec".equals(documentType)) {
-            return "规格说明";
-        }
-        if ("manual".equals(documentType)) {
-            return containsAny(parsedText.toLowerCase(Locale.ROOT), "步骤", "操作", "部署")
-                ? "操作手册"
-                : "手册";
-        }
-        return "介绍";
-    }
-
-    private String buildDocumentTags(SuperAgentDocument document,
-                                     String knowledgeScopeCode,
-                                     String documentType,
-                                     List<String> coreTopics) {
-        LinkedHashSet<String> tags = new LinkedHashSet<>();
-        if (StrUtil.isNotBlank(document.getDocumentTags())) {
-            tags.addAll(List.of(document.getDocumentTags().split(",")));
-        }
-        addTag(tags, knowledgeScopeCode);
-        addTag(tags, documentType);
-        coreTopics.stream().limit(4).forEach(topic -> addTag(tags, topic));
-        return tags.stream()
-            .map(String::trim)
-            .filter(StrUtil::isNotBlank)
-            .distinct()
-            .limit(8)
-            .collect(Collectors.joining(","));
-    }
-
-    private void addTag(Set<String> tags, String tag) {
-        String normalized = StrUtil.blankToDefault(tag, "").trim();
-        if (normalized.isBlank()) {
-            return;
-        }
-        tags.add(normalized);
-    }
-
     private boolean containsAny(String text, String... values) {
         String normalized = StrUtil.blankToDefault(text, "").toLowerCase(Locale.ROOT);
         for (String value : values) {
@@ -420,11 +307,7 @@ public class DocumentProfileServiceImpl implements DocumentProfileService {
         boolean graphFriendly,
         boolean supportsGraphOutline,
         boolean supportsItemLookup,
-        boolean supportsGraphAssist,
-        String knowledgeScopeCode,
-        String knowledgeScopeName,
-        String businessCategory,
-        String documentTags
+        boolean supportsGraphAssist
     ) {
     }
 }

@@ -24,12 +24,6 @@ public class DocumentRetrieveFilters {
     private List<String> documentNameHints = new ArrayList<>();
 
     @Builder.Default
-    private List<String> businessCategoryHints = new ArrayList<>();
-
-    @Builder.Default
-    private List<String> documentTagHints = new ArrayList<>();
-
-    @Builder.Default
     private List<String> sectionPathHints = new ArrayList<>();
 
     @Builder.Default
@@ -46,8 +40,6 @@ public class DocumentRetrieveFilters {
 
     public boolean isEmpty() {
         return documentNameHints.isEmpty()
-            && businessCategoryHints.isEmpty()
-            && documentTagHints.isEmpty()
             && sectionPathHints.isEmpty()
             && canonicalPathHints.isEmpty()
             && structureNodeIdHints.isEmpty()

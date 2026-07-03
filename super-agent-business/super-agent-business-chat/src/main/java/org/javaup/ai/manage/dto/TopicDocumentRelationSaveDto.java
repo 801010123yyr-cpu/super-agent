@@ -10,6 +10,8 @@ import lombok.Data;
 @Data
 public class TopicDocumentRelationSaveDto {
 
+    private String knowledgeBaseId;
+
     private String topicCode;
 
     private String documentId;

@@ -92,6 +92,55 @@
           <span v-if="isStreaming" class="text-[13px] font-semibold text-primary">正在生成回答...</span>
         </div>
 
+        <div class="mb-3 flex flex-wrap items-center gap-2.5">
+          <span class="text-[13px] text-muted-foreground">知识库</span>
+          <div
+            class="relative min-w-[280px] max-w-full"
+            @focusout="handleKnowledgeBaseMenuFocusOut"
+            @keydown.esc.stop.prevent="knowledgeBaseDropdownOpen = false"
+          >
+            <button
+              class="inline-flex min-h-[42px] w-full items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2 text-left text-sm text-foreground shadow-sm transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:bg-secondary disabled:text-muted-foreground"
+              :class="selectedKnowledgeBaseIds.length ? 'border-primary/25 text-primary' : ''"
+              type="button"
+              :aria-expanded="knowledgeBaseDropdownOpen"
+              aria-haspopup="listbox"
+              :disabled="isStreaming || loadingKnowledgeBaseOptions || !knowledgeBaseOptions.length"
+              @click="toggleKnowledgeBaseDropdown"
+            >
+              <span class="truncate">{{ knowledgeBaseTriggerText }}</span>
+              <ChevronDownIcon class="h-4 w-4 shrink-0 text-muted-foreground transition-transform" :class="knowledgeBaseDropdownOpen ? 'rotate-180' : ''" />
+            </button>
+
+            <div
+              v-if="knowledgeBaseDropdownOpen"
+              class="absolute left-0 top-[calc(100%+8px)] z-20 max-h-[260px] w-full min-w-[300px] overflow-y-auto rounded-md border border-border bg-card p-1.5 shadow-lg"
+              role="listbox"
+              aria-multiselectable="true"
+            >
+              <button
+                v-for="item in knowledgeBaseOptions"
+                :key="item.id"
+                class="flex w-full items-center gap-2 rounded-sm px-3 py-2.5 text-left text-sm transition-colors hover:bg-secondary"
+                :class="isKnowledgeBaseSelected(item.id) ? 'bg-primary/[0.08] text-primary' : 'text-foreground'"
+                type="button"
+                role="option"
+                :aria-selected="isKnowledgeBaseSelected(item.id)"
+                :disabled="isStreaming"
+                @mousedown.prevent
+                @click="toggleKnowledgeBaseSelection(item.id)"
+              >
+                <span class="min-w-0 flex-1 truncate font-medium">{{ item.baseName }}</span>
+                <span class="shrink-0 text-xs" :class="isKnowledgeBaseSelected(item.id) ? 'text-primary' : 'text-muted-foreground'">{{ item.retrievableDocumentCount || 0 }} 文档</span>
+                <CheckIcon v-if="isKnowledgeBaseSelected(item.id)" class="h-4 w-4 shrink-0" />
+              </button>
+            </div>
+          </div>
+          <span v-if="!loadingKnowledgeBaseOptions && !knowledgeBaseOptions.length" class="text-[13px] text-muted-foreground">
+            暂无可用知识库，可在管理端创建
+          </span>
+        </div>
+
         <div class="mb-2.5 flex flex-wrap items-center gap-2.5">
           <span class="text-[13px] text-muted-foreground">回答模式</span>
           <div class="inline-flex items-center gap-1.5 rounded-full bg-secondary p-1" role="tablist">
@@ -102,28 +151,15 @@
           </div>
         </div>
 
-        <div class="mb-3 flex flex-wrap items-center gap-2.5">
-          <template v-if="isDocumentMode">
-            <span class="text-[13px] text-muted-foreground">提问文档</span>
-            <select v-model="selectedDocumentId" class="min-w-[240px] max-w-full rounded-[12px] border border-border bg-card px-3 py-2 text-sm text-foreground disabled:bg-secondary" :disabled="isStreaming || loadingDocumentOptions" @change="handleDocumentScopeChange">
-              <option value="">请选择一个文档</option>
-              <option v-for="item in documentOptions" :key="item.documentId" :value="item.documentId">{{ item.documentName }}</option>
-            </select>
-            <span v-if="selectedDocumentName" class="inline-flex items-center rounded-full bg-primary/[0.08] px-3 py-1.5 text-[13px] font-medium text-primary">当前文档：{{ selectedDocumentName }}</span>
-            <span v-else-if="!loadingDocumentOptions" class="inline-flex items-center rounded-full bg-amber-500/[0.14] px-3 py-1.5 text-[13px] font-medium text-amber-700">请先选择一个文档再发送问题</span>
-          </template>
-          <template v-else-if="isAutoDocumentMode">
-            <span class="text-[13px] text-muted-foreground">知识库使用</span>
-            <span class="inline-flex items-center rounded-full bg-primary/[0.08] px-3 py-1.5 text-[13px] font-medium text-primary">系统会先自动预选 3-5 份候选文档</span>
-            <span class="inline-flex items-center rounded-full bg-secondary px-3 py-1.5 text-[13px] text-muted-foreground">候选选择只做预选，后续仍走稳定检索链路</span>
-            <span v-if="latestAssistantRouteExplain?.topDocument" class="inline-flex items-center rounded-full bg-primary/[0.08] px-3 py-1.5 text-[13px] font-medium text-primary">
-              最近主候选：{{ latestAssistantRouteExplain.topDocument.documentName || latestAssistantRouteExplain.topDocument.documentId }}
-            </span>
-          </template>
-          <template v-else>
-            <span class="text-[13px] text-muted-foreground">知识库使用</span>
-            <span class="inline-flex items-center rounded-full bg-secondary px-3 py-1.5 text-[13px] text-muted-foreground">当前不会使用业务知识库文档</span>
-          </template>
+        <div v-if="isDocumentMode" class="mb-3 flex flex-wrap items-center gap-2.5">
+          <span class="text-[13px] text-muted-foreground">提问文档</span>
+          <select v-model="selectedDocumentId" class="min-w-[240px] max-w-full rounded-[12px] border border-border bg-card px-3 py-2 text-sm text-foreground disabled:bg-secondary" :disabled="isStreaming || loadingDocumentOptions" @change="handleDocumentScopeChange">
+            <option value="">请选择一个文档</option>
+            <option v-for="item in filteredDocumentOptions" :key="item.documentId" :value="item.documentId">{{ item.documentName }}</option>
+          </select>
+          <span v-if="selectedDocumentName" class="inline-flex items-center rounded-full bg-primary/[0.08] px-3 py-1.5 text-[13px] font-medium text-primary">当前文档：{{ selectedDocumentName }}</span>
+          <span v-else-if="knowledgeBaseSelectionMode === KB_SELECTION_MODES.NONE" class="inline-flex items-center rounded-full bg-amber-500/[0.14] px-3 py-1.5 text-[13px] font-medium text-amber-700">当前文档模式需要先选择知识库</span>
+          <span v-else-if="!loadingDocumentOptions" class="inline-flex items-center rounded-full bg-amber-500/[0.14] px-3 py-1.5 text-[13px] font-medium text-amber-700">请先选择一个文档再发送问题</span>
         </div>
 
         <textarea ref="composerRef" v-model="userInput"
@@ -154,7 +190,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Bars3Icon, BuildingOffice2Icon, PaperAirplaneIcon, PlusIcon, SparklesIcon, StopIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+import { Bars3Icon, BuildingOffice2Icon, CheckIcon, ChevronDownIcon, PaperAirplaneIcon, PlusIcon, SparklesIcon, StopIcon, TrashIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import Chat from '../components/Chat.vue'
 import { APIError, chatApi, createConversationId, manageApi } from '../api/api'
 import { buildChatRouteExplain, buildRouteTraceLookup } from '../utils/knowledgeRoute'
@@ -171,25 +207,48 @@ const userInput = ref('')
 const loadingSessions = ref(false)
 const loadingConversation = ref(false)
 const loadingDocumentOptions = ref(false)
+const loadingKnowledgeBaseOptions = ref(false)
 const isStreaming = ref(false)
 const isStopping = ref(false)
 const pageError = ref('')
 const currentStreamHandle = ref(null)
 const currentAssistantMessageId = ref('')
 const documentOptions = ref([])
+const knowledgeBaseOptions = ref([])
+const knowledgeBaseDropdownOpen = ref(false)
 const selectedDocumentId = ref('')
 const selectedDocumentName = ref('')
 const CHAT_MODES = Object.freeze({ DOCUMENT: 'DOCUMENT', AUTO_DOCUMENT: 'AUTO_DOCUMENT', OPEN_CHAT: 'OPEN_CHAT' })
+const KB_SELECTION_MODES = Object.freeze({ NONE: 'NONE', SELECTED: 'SELECTED' })
 const chatMode = ref(CHAT_MODES.OPEN_CHAT)
+const knowledgeBaseSelectionMode = ref(KB_SELECTION_MODES.NONE)
+const selectedKnowledgeBaseIds = ref([])
 
 const isDocumentMode = computed(() => chatMode.value === CHAT_MODES.DOCUMENT)
 const isAutoDocumentMode = computed(() => chatMode.value === CHAT_MODES.AUTO_DOCUMENT)
+const selectedKnowledgeBaseSet = computed(() => new Set(selectedKnowledgeBaseIds.value.map((item) => String(item))))
+const hasSelectedKnowledgeBases = computed(() => selectedKnowledgeBaseIds.value.length > 0)
+const filteredDocumentOptions = computed(() => {
+  if (knowledgeBaseSelectionMode.value === KB_SELECTION_MODES.NONE) return []
+  return documentOptions.value.filter((item) => selectedKnowledgeBaseSet.value.has(String(item.knowledgeBaseId || '')))
+})
+const knowledgeBaseTriggerText = computed(() => {
+  if (loadingKnowledgeBaseOptions.value) return '知识库加载中...'
+  if (!knowledgeBaseOptions.value.length) return '暂无可用知识库'
+  if (!selectedKnowledgeBaseIds.value.length) return '选择知识库'
+  const names = knowledgeBaseOptions.value
+    .filter((item) => selectedKnowledgeBaseSet.value.has(String(item.id)))
+    .map((item) => item.baseName)
+  if (names.length === 1) return names[0]
+  return `已选 ${names.length} 个知识库`
+})
 const canSend = computed(() => {
   if (!userInput.value.trim()) return false
-  return !isDocumentMode.value || Boolean(selectedDocumentId.value)
+  if (!isDocumentMode.value) return true
+  return hasSelectedKnowledgeBases.value && Boolean(selectedDocumentId.value)
 })
 const composerPlaceholder = computed(() => {
-  if (isAutoDocumentMode.value) return '请输入你的问题，系统会自动选择最相关的知识文档，例如：上线观察与值班规则中观察时长有哪些？'
+  if (isAutoDocumentMode.value && hasSelectedKnowledgeBases.value) return '请输入你的问题，系统会自动选择最相关的知识文档，例如：上线观察与值班规则中观察时长有哪些？'
   return isDocumentMode.value
     ? '请输入关于当前文档的问题，例如：这份培训手册里的试用期规则是怎么规定的？'
     : '请输入你的问题，例如：帮我分析一下这个智能对话方案应该怎么拆分模块。'
@@ -342,6 +401,17 @@ async function refreshDocumentOptions() {
     loadingDocumentOptions.value = false
   }
 }
+async function refreshKnowledgeBaseOptions() {
+  loadingKnowledgeBaseOptions.value = true
+  try {
+    const data = await chatApi.listKnowledgeBaseOptions()
+    knowledgeBaseOptions.value = Array.isArray(data) ? data : []
+  } catch (error) {
+    pageError.value = normalizeError(error, '加载知识库选项失败')
+  } finally {
+    loadingKnowledgeBaseOptions.value = false
+  }
+}
 async function loadConversation(conversationId) {
   if (!conversationId || isStreaming.value) return
   loadingConversation.value = true
@@ -392,27 +462,85 @@ function startNewConversation() {
   focusComposer()
 }
 function applySessionScope(session) {
-  // 会话详情回放时，前端要完整恢复"这条会话当时走的是哪一种产品能力"。
   chatMode.value = session?.chatMode || CHAT_MODES.OPEN_CHAT
   selectedDocumentId.value = session?.selectedDocumentId || ''
   selectedDocumentName.value = session?.selectedDocumentName || ''
+  selectedKnowledgeBaseIds.value = Array.isArray(session?.selectedKnowledgeBaseIds)
+    ? session.selectedKnowledgeBaseIds.map((item) => String(item))
+    : []
+  knowledgeBaseSelectionMode.value = normalizeKnowledgeBaseSelectionMode(session?.knowledgeBaseSelectionMode)
+  if (knowledgeBaseSelectionMode.value !== KB_SELECTION_MODES.SELECTED) selectedKnowledgeBaseIds.value = []
+  syncKnowledgeBaseSelectionMode()
   syncSelectedDocumentName()
 }
 function syncSelectedDocumentName() {
   if (!selectedDocumentId.value) { selectedDocumentName.value = ''; return }
-  const option = documentOptions.value.find((item) => item.documentId === selectedDocumentId.value)
-  if (option) selectedDocumentName.value = option.documentName
+  const option = filteredDocumentOptions.value.find((item) => String(item.documentId) === String(selectedDocumentId.value))
+  if (option) { selectedDocumentName.value = option.documentName; return }
+  selectedDocumentId.value = ''
+  selectedDocumentName.value = ''
 }
 function handleDocumentScopeChange() {
   syncSelectedDocumentName()
   if (isDocumentMode.value && displayMessages.value.length > 0 && !isStreaming.value) startNewConversation()
 }
+function normalizeKnowledgeBaseSelectionMode(value) {
+  const normalized = String(value || '').trim().toUpperCase()
+  return normalized === KB_SELECTION_MODES.SELECTED ? KB_SELECTION_MODES.SELECTED : KB_SELECTION_MODES.NONE
+}
+function syncKnowledgeBaseSelectionMode() {
+  knowledgeBaseSelectionMode.value = selectedKnowledgeBaseIds.value.length ? KB_SELECTION_MODES.SELECTED : KB_SELECTION_MODES.NONE
+}
+function clearKnowledgeBaseSelection() {
+  selectedKnowledgeBaseIds.value = []
+  knowledgeBaseDropdownOpen.value = false
+  syncKnowledgeBaseSelectionMode()
+  selectedDocumentId.value = ''
+  selectedDocumentName.value = ''
+}
+function toggleKnowledgeBaseDropdown() {
+  if (isStreaming.value || loadingKnowledgeBaseOptions.value || !knowledgeBaseOptions.value.length) return
+  knowledgeBaseDropdownOpen.value = !knowledgeBaseDropdownOpen.value
+}
+function handleKnowledgeBaseMenuFocusOut(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) knowledgeBaseDropdownOpen.value = false
+}
+function isKnowledgeBaseSelected(id) {
+  return selectedKnowledgeBaseSet.value.has(String(id))
+}
+function toggleKnowledgeBaseSelection(id) {
+  if (isStreaming.value) return
+  const nextId = String(id)
+  selectedKnowledgeBaseIds.value = isKnowledgeBaseSelected(nextId)
+    ? selectedKnowledgeBaseIds.value.filter((item) => String(item) !== nextId)
+    : [...selectedKnowledgeBaseIds.value, nextId]
+  handleSelectedKnowledgeBasesChange()
+}
+function handleSelectedKnowledgeBasesChange() {
+  selectedKnowledgeBaseIds.value = [...new Set(selectedKnowledgeBaseIds.value.map((item) => String(item)).filter(Boolean))]
+  syncKnowledgeBaseSelectionMode()
+  if (knowledgeBaseSelectionMode.value === KB_SELECTION_MODES.NONE) {
+    chatMode.value = CHAT_MODES.OPEN_CHAT
+    selectedDocumentId.value = ''
+    selectedDocumentName.value = ''
+  } else if (chatMode.value === CHAT_MODES.OPEN_CHAT) {
+    chatMode.value = CHAT_MODES.AUTO_DOCUMENT
+  }
+  syncSelectedDocumentName()
+}
 function setChatMode(nextMode) {
   if (isStreaming.value || chatMode.value === nextMode) return
+  if (nextMode === CHAT_MODES.AUTO_DOCUMENT && !hasSelectedKnowledgeBases.value) {
+    chatMode.value = CHAT_MODES.OPEN_CHAT
+    pageError.value = ''
+    return
+  }
   chatMode.value = nextMode
   pageError.value = ''
-  // 模式切换代表"回答边界"已经改变，直接起新会话比在老会话里缝补更适合教学项目。
-  if (displayMessages.value.length > 0) startNewConversation()
+  if (nextMode === CHAT_MODES.OPEN_CHAT) {
+    clearKnowledgeBaseSelection()
+    return
+  }
 }
 function handleComposerKeydown(event) {
   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendMessage() }
@@ -434,7 +562,9 @@ function applyStreamEvent(event) {
 async function sendMessage(presetQuestion) {
   const question = (presetQuestion || userInput.value).trim()
   if (!question || isStreaming.value) return
-  if (isDocumentMode.value && !selectedDocumentId.value) { pageError.value = '当前文档问答模式下请先选择一个文档'; return }
+  const payloadScope = buildKnowledgeBasePayload()
+  const payloadChatMode = resolvePayloadChatMode(payloadScope.knowledgeBaseSelectionMode)
+  if (payloadChatMode === CHAT_MODES.DOCUMENT && !selectedDocumentId.value) { pageError.value = '当前文档问答模式下请先选择一个文档'; return }
   const conversationId = currentConversationId.value || createConversationId()
   const assistantMessage = createAssistantMessage()
   currentConversationId.value = conversationId
@@ -446,7 +576,13 @@ async function sendMessage(presetQuestion) {
   if (!presetQuestion) { userInput.value = ''; resizeComposer() }
   await scrollToBottom()
   const streamHandle = chatApi.openStream(
-    { question, conversationId, chatMode: chatMode.value, selectedDocumentId: isDocumentMode.value ? selectedDocumentId.value || null : null },
+    {
+      question,
+      conversationId,
+      chatMode: payloadChatMode,
+      selectedDocumentId: payloadChatMode === CHAT_MODES.DOCUMENT ? selectedDocumentId.value || null : null,
+      ...payloadScope
+    },
     { onEvent: applyStreamEvent }
   )
   currentStreamHandle.value = streamHandle
@@ -469,6 +605,19 @@ async function sendMessage(presetQuestion) {
     } catch { /* 各自方法里已有页面提示 */ }
   }
 }
+function buildKnowledgeBasePayload() {
+  if (knowledgeBaseSelectionMode.value === KB_SELECTION_MODES.SELECTED && selectedKnowledgeBaseIds.value.length) {
+    return {
+      knowledgeBaseSelectionMode: KB_SELECTION_MODES.SELECTED,
+      selectedKnowledgeBaseIds: selectedKnowledgeBaseIds.value.map((item) => String(item))
+    }
+  }
+  return { knowledgeBaseSelectionMode: KB_SELECTION_MODES.NONE, selectedKnowledgeBaseIds: [] }
+}
+function resolvePayloadChatMode(selectionMode) {
+  if (selectionMode === KB_SELECTION_MODES.NONE) return CHAT_MODES.OPEN_CHAT
+  return isDocumentMode.value ? CHAT_MODES.DOCUMENT : CHAT_MODES.AUTO_DOCUMENT
+}
 async function stopStreaming() {
   if (!isStreaming.value || !currentConversationId.value || !currentStreamHandle.value) return
   isStopping.value = true
@@ -488,7 +637,7 @@ function normalizeError(error, fallback) {
   return fallback
 }
 onMounted(async () => {
-  await Promise.all([refreshDocumentOptions(), refreshSessions()])
+  await Promise.all([refreshKnowledgeBaseOptions(), refreshDocumentOptions(), refreshSessions()])
   if (sortedSessions.value.length > 0) { await loadConversation(sortedSessions.value[0].conversationId) } else { startNewConversation() }
 })
 </script>

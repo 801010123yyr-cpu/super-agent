@@ -63,6 +63,14 @@ const router = createRouter({
           }
         },
         {
+          path: 'knowledge-bases',
+          name: 'AdminKnowledgeBases',
+          component: () => import('../views/admin/AdminKnowledgeBaseView.vue'),
+          meta: {
+            title: '知识库管理'
+          }
+        },
+        {
           path: 'knowledge-route',
           name: 'AdminKnowledgeRoute',
           component: () => import('../views/admin/AdminKnowledgeRouteView.vue'),

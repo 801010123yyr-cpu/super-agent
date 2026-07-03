@@ -113,6 +113,11 @@ class DocumentScopeRetrievalChannelTest {
         }
 
         @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
+            return List.of();
+        }
+
+        @Override
         public List<Document> vectorSearch(DocumentRetrieveRequest request) {
             this.vectorRequest = request;
             return List.of(Document.builder()

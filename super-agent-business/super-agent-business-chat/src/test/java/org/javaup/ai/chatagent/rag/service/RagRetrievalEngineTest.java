@@ -130,7 +130,7 @@ class RagRetrievalEngineTest {
             assertThat(documents.get(0).getMetadata())
                 .containsEntry(DocumentKnowledgeMetadataKeys.RETRIEVAL_INTENT, RetrievalIntent.TABLE.name());
             assertThat(((Number) documents.get(0).getMetadata().get(DocumentKnowledgeMetadataKeys.CHANNEL_WEIGHT)).doubleValue())
-                .isCloseTo(1.74D, org.assertj.core.data.Offset.offset(0.0001D));
+                .isCloseTo(1.296D, org.assertj.core.data.Offset.offset(0.0001D));
         }
         finally {
             executorService.shutdownNow();
@@ -1057,6 +1057,11 @@ class RagRetrievalEngineTest {
 
         @Override
         public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
+            return List.of();
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
             return List.of();
         }
 

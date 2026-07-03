@@ -10,5 +10,7 @@ import lombok.Data;
 @Data
 public class KnowledgeTopicQueryDto {
 
+    private String knowledgeBaseId;
+
     private String scopeCode;
 }

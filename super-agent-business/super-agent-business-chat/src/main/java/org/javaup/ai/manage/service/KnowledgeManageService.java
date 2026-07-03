@@ -5,6 +5,7 @@ import org.javaup.ai.manage.dto.DocumentProfileDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentProfileRegenerateDto;
 import org.javaup.ai.manage.dto.KnowledgeRouteTraceQueryDto;
 import org.javaup.ai.manage.dto.KnowledgeScopeDeleteDto;
+import org.javaup.ai.manage.dto.KnowledgeScopeQueryDto;
 import org.javaup.ai.manage.dto.KnowledgeScopeSaveDto;
 import org.javaup.ai.manage.dto.KnowledgeTopicDeleteDto;
 import org.javaup.ai.manage.dto.KnowledgeTopicQueryDto;
@@ -31,7 +32,7 @@ public interface KnowledgeManageService {
 
     boolean deleteScope(KnowledgeScopeDeleteDto dto);
 
-    List<KnowledgeScopeItemVo> listScopes();
+    List<KnowledgeScopeItemVo> listScopes(KnowledgeScopeQueryDto dto);
 
     KnowledgeTopicItemVo saveTopic(KnowledgeTopicSaveDto dto);
 

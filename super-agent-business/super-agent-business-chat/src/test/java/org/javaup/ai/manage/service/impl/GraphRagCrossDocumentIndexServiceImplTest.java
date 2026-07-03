@@ -3,6 +3,7 @@ package org.javaup.ai.manage.service.impl;
 import com.baidu.fsg.uid.UidGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.javaup.ai.manage.data.SuperAgentDocument;
+import org.javaup.ai.manage.data.SuperAgentKnowledgeTopicNode;
 import org.javaup.ai.manage.data.SuperAgentKgCanonicalEntityGroup;
 import org.javaup.ai.manage.data.SuperAgentKgCanonicalEntityMember;
 import org.javaup.ai.manage.data.SuperAgentKgCrossDocumentCommunity;
@@ -12,7 +13,9 @@ import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
 import org.javaup.ai.manage.data.SuperAgentKgRelationGroup;
 import org.javaup.ai.manage.data.SuperAgentKgRelationGroupMember;
+import org.javaup.ai.manage.data.SuperAgentTopicDocumentRelation;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKnowledgeTopicNodeMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityGroupMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityMemberMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCrossDocumentCommunityMapper;
@@ -22,6 +25,7 @@ import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationGroupMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationGroupMemberMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
+import org.javaup.ai.manage.mapper.SuperAgentTopicDocumentRelationMapper;
 import org.javaup.ai.manage.model.graph.GraphRagCrossDocumentIndexBuildResult;
 import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex;
 import org.javaup.ai.manage.support.GraphRagCrossDocumentIndexSupport;
@@ -42,9 +46,9 @@ class GraphRagCrossDocumentIndexServiceImplTest {
     @Test
     void rebuildAllPersistsGlobalAndKnowledgeScopeDerivedIndexThenLoadsKnowledgeScope() {
         InMemoryMapper<SuperAgentDocument> documentStore = new InMemoryMapper<>(List.of(
-            document(10L, "security"),
-            document(11L, "security"),
-            document(12L, "release")
+            document(10L),
+            document(11L),
+            document(12L)
         ));
         InMemoryMapper<SuperAgentKgEntity> entityStore = new InMemoryMapper<>(List.of(
             entity(1001L, 10L, 20L, "AuditTrail", null, "SYSTEM", "{\"aliases\":[\"审计系统\"],\"rankBoost\":0.7}"),
@@ -69,6 +73,15 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         InMemoryMapper<SuperAgentKgRelationGroupMember> relationGroupMemberStore = new InMemoryMapper<>(List.of());
         InMemoryMapper<SuperAgentKgCrossDocumentCommunity> communityStore = new InMemoryMapper<>(List.of());
         InMemoryMapper<SuperAgentKgCrossDocumentCommunityMember> communityMemberStore = new InMemoryMapper<>(List.of());
+        InMemoryMapper<SuperAgentKnowledgeTopicNode> topicStore = new InMemoryMapper<>(List.of(
+            topic(1L, "security-topic", "security"),
+            topic(2L, "release-topic", "release")
+        ));
+        InMemoryMapper<SuperAgentTopicDocumentRelation> topicDocumentRelationStore = new InMemoryMapper<>(List.of(
+            topicRelation(1L, "security-topic", 10L),
+            topicRelation(2L, "security-topic", 11L),
+            topicRelation(3L, "release-topic", 12L)
+        ));
         ObjectMapper objectMapper = new ObjectMapper();
         GraphRagCrossDocumentIndexServiceImpl service = new GraphRagCrossDocumentIndexServiceImpl(
             documentStore.proxy(SuperAgentDocumentMapper.class),
@@ -81,6 +94,8 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             relationGroupMemberStore.proxy(SuperAgentKgRelationGroupMemberMapper.class),
             communityStore.proxy(SuperAgentKgCrossDocumentCommunityMapper.class),
             communityMemberStore.proxy(SuperAgentKgCrossDocumentCommunityMemberMapper.class),
+            topicStore.proxy(SuperAgentKnowledgeTopicNodeMapper.class),
+            topicDocumentRelationStore.proxy(SuperAgentTopicDocumentRelationMapper.class),
             new GraphRagCrossDocumentIndexSupport(objectMapper),
             uidGenerator(),
             objectMapper
@@ -89,17 +104,17 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         List<GraphRagCrossDocumentIndexBuildResult> results = service.rebuildAll();
 
         assertThat(results).extracting(GraphRagCrossDocumentIndexBuildResult::getScopeKey)
-            .containsExactly("global", "knowledge:security", "knowledge:release");
+            .containsExactly("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
         assertThat(canonicalGroupStore.items()).extracting(SuperAgentKgCanonicalEntityGroup::getScopeKey)
-            .contains("global", "knowledge:security", "knowledge:release");
+            .contains("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
         assertThat(canonicalMemberStore.items()).extracting(SuperAgentKgCanonicalEntityMember::getScopeKey)
-            .contains("global", "knowledge:security", "knowledge:release");
+            .contains("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
         assertThat(relationGroupStore.items()).extracting(SuperAgentKgRelationGroup::getScopeKey)
-            .contains("global", "knowledge:security");
+            .contains("global", "kb:1", "kb:1:scope:security");
         assertThat(communityStore.items()).extracting(SuperAgentKgCrossDocumentCommunity::getScopeKey)
-            .contains("global", "knowledge:security");
+            .contains("global", "kb:1", "kb:1:scope:security");
         assertThat(communityMemberStore.items()).extracting(SuperAgentKgCrossDocumentCommunityMember::getScopeKey)
-            .contains("global", "knowledge:security");
+            .contains("global", "kb:1", "kb:1:scope:security");
         assertThat(communityStore.items()).allSatisfy(community -> {
             Map<String, Object> metadata = objectMapper.readValue(community.getMetadataJson(), Map.class);
             assertThat(metadata).containsEntry("sourceType", "java.cross_document_community.v1");
@@ -150,7 +165,7 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         assertThat(communityMemberStore.deleteCount()).isEqualTo(1);
 
         GraphRagCrossDocumentIndexServiceImpl loadService = new GraphRagCrossDocumentIndexServiceImpl(
-            new InMemoryMapper<>(List.of(document(10L, "security"), document(11L, "security"))).proxy(SuperAgentDocumentMapper.class),
+            new InMemoryMapper<>(List.of(document(10L), document(11L))).proxy(SuperAgentDocumentMapper.class),
             new InMemoryMapper<>(entityStore.items()).proxy(SuperAgentKgEntityMapper.class),
             new InMemoryMapper<>(List.of(
                 relation(2001L, 10L, 20L, 1001L, 1002L, "RECORDS"),
@@ -158,23 +173,28 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             )).proxy(SuperAgentKgRelationMapper.class),
             new InMemoryMapper<>(evidenceStore.items()).proxy(SuperAgentKgEvidenceMapper.class),
             new InMemoryMapper<>(canonicalGroupStore.items().stream()
-                .filter(group -> "knowledge:security".equals(group.getScopeKey()))
+                .filter(group -> "kb:1:scope:security".equals(group.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCanonicalEntityGroupMapper.class),
             new InMemoryMapper<>(canonicalMemberStore.items().stream()
-                .filter(member -> "knowledge:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCanonicalEntityMemberMapper.class),
             new InMemoryMapper<>(relationGroupStore.items().stream()
-                .filter(group -> "knowledge:security".equals(group.getScopeKey()))
+                .filter(group -> "kb:1:scope:security".equals(group.getScopeKey()))
                 .toList()).proxy(SuperAgentKgRelationGroupMapper.class),
             new InMemoryMapper<>(relationGroupMemberStore.items().stream()
-                .filter(member -> "knowledge:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgRelationGroupMemberMapper.class),
             new InMemoryMapper<>(communityStore.items().stream()
-                .filter(community -> "knowledge:security".equals(community.getScopeKey()))
+                .filter(community -> "kb:1:scope:security".equals(community.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCrossDocumentCommunityMapper.class),
             new InMemoryMapper<>(communityMemberStore.items().stream()
-                .filter(member -> "knowledge:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCrossDocumentCommunityMemberMapper.class),
+            new InMemoryMapper<>(List.of(topic(1L, "security-topic", "security"))).proxy(SuperAgentKnowledgeTopicNodeMapper.class),
+            new InMemoryMapper<>(List.of(
+                topicRelation(1L, "security-topic", 10L),
+                topicRelation(2L, "security-topic", 11L)
+            )).proxy(SuperAgentTopicDocumentRelationMapper.class),
             new GraphRagCrossDocumentIndexSupport(objectMapper),
             uidGenerator(),
             objectMapper
@@ -220,8 +240,8 @@ class GraphRagCrossDocumentIndexServiceImplTest {
     @Test
     void rebuildAllDoesNotMergeUnrelatedEntitiesByGeneratedCanonicalKeyOnly() {
         InMemoryMapper<SuperAgentDocument> documentStore = new InMemoryMapper<>(List.of(
-            document(10L, "security"),
-            document(11L, "security")
+            document(10L),
+            document(11L)
         ));
         InMemoryMapper<SuperAgentKgEntity> entityStore = new InMemoryMapper<>(List.of(
             entity(1001L, 10L, 20L, "AuditTrail", null, "CONCEPT", "{\"canonicalKey\":\"ENT_SHARED\",\"rankBoost\":0.5}"),
@@ -243,6 +263,8 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             new InMemoryMapper<SuperAgentKgRelationGroupMember>(List.of()).proxy(SuperAgentKgRelationGroupMemberMapper.class),
             new InMemoryMapper<SuperAgentKgCrossDocumentCommunity>(List.of()).proxy(SuperAgentKgCrossDocumentCommunityMapper.class),
             new InMemoryMapper<SuperAgentKgCrossDocumentCommunityMember>(List.of()).proxy(SuperAgentKgCrossDocumentCommunityMemberMapper.class),
+            new InMemoryMapper<SuperAgentKnowledgeTopicNode>(List.of()).proxy(SuperAgentKnowledgeTopicNodeMapper.class),
+            new InMemoryMapper<SuperAgentTopicDocumentRelation>(List.of()).proxy(SuperAgentTopicDocumentRelationMapper.class),
             new GraphRagCrossDocumentIndexSupport(objectMapper),
             uidGenerator(),
             objectMapper
@@ -263,7 +285,7 @@ class GraphRagCrossDocumentIndexServiceImplTest {
     @Test
     void rebuildAllPersistsEntityQualityNoiseReasonsForSentenceLikeNames() throws Exception {
         InMemoryMapper<SuperAgentDocument> documentStore = new InMemoryMapper<>(List.of(
-            document(10L, "security")
+            document(10L)
         ));
         InMemoryMapper<SuperAgentKgEntity> entityStore = new InMemoryMapper<>(List.of(
             entity(
@@ -298,6 +320,8 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             new InMemoryMapper<SuperAgentKgRelationGroupMember>(List.of()).proxy(SuperAgentKgRelationGroupMemberMapper.class),
             new InMemoryMapper<SuperAgentKgCrossDocumentCommunity>(List.of()).proxy(SuperAgentKgCrossDocumentCommunityMapper.class),
             new InMemoryMapper<SuperAgentKgCrossDocumentCommunityMember>(List.of()).proxy(SuperAgentKgCrossDocumentCommunityMemberMapper.class),
+            new InMemoryMapper<SuperAgentKnowledgeTopicNode>(List.of()).proxy(SuperAgentKnowledgeTopicNodeMapper.class),
+            new InMemoryMapper<SuperAgentTopicDocumentRelation>(List.of()).proxy(SuperAgentTopicDocumentRelationMapper.class),
             new GraphRagCrossDocumentIndexSupport(objectMapper),
             uidGenerator(),
             objectMapper
@@ -321,12 +345,36 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         assertThat(sentenceLikeGroup.getRankScore()).isLessThan(auditGroup.getRankScore());
     }
 
-    private static SuperAgentDocument document(Long id, String knowledgeScopeCode) {
+    private static SuperAgentDocument document(Long id) {
         SuperAgentDocument document = new SuperAgentDocument();
         document.setId(id);
-        document.setKnowledgeScopeCode(knowledgeScopeCode);
+        document.setKnowledgeBaseId(1L);
+        document.setKnowledgeBaseCode("kb-test");
+        document.setKnowledgeBaseName("测试知识库");
         document.setStatus(BusinessStatus.YES.getCode());
         return document;
+    }
+
+    private static SuperAgentKnowledgeTopicNode topic(Long id, String topicCode, String scopeCode) {
+        SuperAgentKnowledgeTopicNode topic = new SuperAgentKnowledgeTopicNode();
+        topic.setId(id);
+        topic.setKnowledgeBaseId(1L);
+        topic.setTopicCode(topicCode);
+        topic.setTopicName(topicCode);
+        topic.setScopeCode(scopeCode);
+        topic.setStatus(BusinessStatus.YES.getCode());
+        return topic;
+    }
+
+    private static SuperAgentTopicDocumentRelation topicRelation(Long id, String topicCode, Long documentId) {
+        SuperAgentTopicDocumentRelation relation = new SuperAgentTopicDocumentRelation();
+        relation.setId(id);
+        relation.setKnowledgeBaseId(1L);
+        relation.setTopicCode(topicCode);
+        relation.setDocumentId(documentId);
+        relation.setRelationScore(BigDecimal.ONE);
+        relation.setStatus(BusinessStatus.YES.getCode());
+        return relation;
     }
 
     private static SuperAgentKgEntity entity(Long id,

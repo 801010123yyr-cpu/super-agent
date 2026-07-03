@@ -16,8 +16,10 @@ import org.javaup.ai.chatagent.mapper.SuperAgentChatExchangeMapper;
 import org.javaup.ai.chatagent.model.ConversationExchangeView;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.model.debug.ChatDebugTrace;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.enums.BusinessStatus;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.javaup.enums.ChatSessionStatus;
 import org.javaup.enums.ChatTurnStatus;
 import org.javaup.util.DateUtils;
@@ -70,8 +72,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
                                                   String question,
                                                   ChatQueryMode chatMode,
                                                   Long selectedDocumentId,
-                                                  String selectedDocumentName) {
-        upsertDialogue(conversationId, ChatSessionStatus.RUNNING, chatMode, selectedDocumentId, selectedDocumentName);
+                                                  String selectedDocumentName,
+                                                  KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        upsertDialogue(conversationId, ChatSessionStatus.RUNNING, chatMode, selectedDocumentId, selectedDocumentName, knowledgeBaseSelection);
 
         long exchangeId = uidGenerator.getUid();
 
@@ -90,6 +93,10 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
         exchange.setErrorMessage("");
         exchange.setFirstResponseTimeMs(null);
         exchange.setTotalResponseTimeMs(null);
+        exchange.setKnowledgeBaseSelectionMode(selectionModeName(knowledgeBaseSelection));
+        exchange.setSelectedKnowledgeBaseIdsJson(writeJson(selectionIds(knowledgeBaseSelection)));
+        exchange.setSelectedKnowledgeBaseNamesJson(writeJson(selectionNames(knowledgeBaseSelection)));
+        exchange.setRetrievalConfigSnapshotJson(writeNullableJson(knowledgeBaseSelection == null ? null : knowledgeBaseSelection.getRagRuntimeOptions()));
         exchange.setStatus(BusinessStatus.YES.getCode());
         exchangeMapper.insert(exchange);
 
@@ -106,8 +113,12 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
             "",
             null,
             null,
-             DateUtils.now(),
-             DateUtils.now()
+            selectionModeName(knowledgeBaseSelection),
+            selectionIds(knowledgeBaseSelection),
+            selectionNames(knowledgeBaseSelection),
+            writeNullableJson(knowledgeBaseSelection == null ? null : knowledgeBaseSelection.getRagRuntimeOptions()),
+            DateUtils.now(),
+            DateUtils.now()
         );
     }
 
@@ -116,8 +127,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
     public void refreshSessionScope(String conversationId,
                                     ChatQueryMode chatMode,
                                     Long selectedDocumentId,
-                                    String selectedDocumentName) {
-        upsertDialogue(conversationId, ChatSessionStatus.RUNNING, chatMode, selectedDocumentId, selectedDocumentName);
+                                    String selectedDocumentName,
+                                    KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        upsertDialogue(conversationId, ChatSessionStatus.RUNNING, chatMode, selectedDocumentId, selectedDocumentName, knowledgeBaseSelection);
     }
 
     @Override
@@ -191,6 +203,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
             resolveChatMode(dialogue),
             dialogue.getSelectedDocumentId(),
             safeText(dialogue.getSelectedDocumentName()),
+            safeText(dialogue.getKnowledgeBaseSelectionMode()),
+            readStringList(dialogue.getSelectedKnowledgeBaseIdsJson()),
+            readStringList(dialogue.getSelectedKnowledgeBaseNamesJson()),
             toInstant(dialogue.getCreateTime()),
             toInstant(dialogue.getEditTime()),
             exchanges
@@ -279,6 +294,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
                 resolveChatMode(dialogue),
                 dialogue.getSelectedDocumentId(),
                 safeText(dialogue.getSelectedDocumentName()),
+                safeText(dialogue.getKnowledgeBaseSelectionMode()),
+                readStringList(dialogue.getSelectedKnowledgeBaseIdsJson()),
+                readStringList(dialogue.getSelectedKnowledgeBaseNamesJson()),
                 toInstant(dialogue.getCreateTime()),
                 toInstant(dialogue.getEditTime()),
                 exchangeViewMap.getOrDefault(dialogue.getConversationId(), List.of())
@@ -320,6 +338,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
                 resolveChatMode(dialogue),
                 dialogue.getSelectedDocumentId(),
                 safeText(dialogue.getSelectedDocumentName()),
+                safeText(dialogue.getKnowledgeBaseSelectionMode()),
+                readStringList(dialogue.getSelectedKnowledgeBaseIdsJson()),
+                readStringList(dialogue.getSelectedKnowledgeBaseNamesJson()),
                 toInstant(dialogue.getCreateTime()),
                 toInstant(dialogue.getEditTime()),
                 latestExchangeMap.containsKey(dialogue.getConversationId())
@@ -360,7 +381,8 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
                                 ChatSessionStatus dialogueStage,
                                 ChatQueryMode chatMode,
                                 Long selectedDocumentId,
-                                String selectedDocumentName) {
+                                String selectedDocumentName,
+                                KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
         Objects.requireNonNull(chatMode, "chatMode 不能为空");
         SuperAgentChatDialogue dialogue = dialogueMapper.selectOne(
             activeDialogueByConversation(conversationId)
@@ -376,6 +398,9 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
             newDialogue.setChatMode(chatMode.getCode());
             newDialogue.setSelectedDocumentId(selectedDocumentId);
             newDialogue.setSelectedDocumentName(selectedDocumentName);
+            newDialogue.setKnowledgeBaseSelectionMode(selectionModeName(knowledgeBaseSelection));
+            newDialogue.setSelectedKnowledgeBaseIdsJson(writeJson(selectionIds(knowledgeBaseSelection)));
+            newDialogue.setSelectedKnowledgeBaseNamesJson(writeJson(selectionNames(knowledgeBaseSelection)));
             newDialogue.setStatus(BusinessStatus.YES.getCode());
 
             dialogueMapper.insert(newDialogue);
@@ -386,14 +411,20 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
         boolean chatModeChanged = !Objects.equals(chatMode.getCode(), dialogue.getChatMode());
         boolean documentScopeChanged = !Objects.equals(selectedDocumentId, dialogue.getSelectedDocumentId())
             || !Objects.equals(safeText(selectedDocumentName), safeText(dialogue.getSelectedDocumentName()));
+        boolean knowledgeBaseScopeChanged = !Objects.equals(selectionModeName(knowledgeBaseSelection), safeText(dialogue.getKnowledgeBaseSelectionMode()))
+            || !Objects.equals(selectionIds(knowledgeBaseSelection), readStringList(dialogue.getSelectedKnowledgeBaseIdsJson()))
+            || !Objects.equals(selectionNames(knowledgeBaseSelection), readStringList(dialogue.getSelectedKnowledgeBaseNamesJson()));
 
-        if (stageChanged || chatModeChanged || documentScopeChanged) {
+        if (stageChanged || chatModeChanged || documentScopeChanged || knowledgeBaseScopeChanged) {
             SuperAgentChatDialogue updateDialogue = new SuperAgentChatDialogue();
             updateDialogue.setId(dialogue.getId());
             updateDialogue.setSessionStatus(dialogueStage.getCode());
             updateDialogue.setChatMode(chatMode.getCode());
             updateDialogue.setSelectedDocumentId(selectedDocumentId);
             updateDialogue.setSelectedDocumentName(selectedDocumentName);
+            updateDialogue.setKnowledgeBaseSelectionMode(selectionModeName(knowledgeBaseSelection));
+            updateDialogue.setSelectedKnowledgeBaseIdsJson(writeJson(selectionIds(knowledgeBaseSelection)));
+            updateDialogue.setSelectedKnowledgeBaseNamesJson(writeJson(selectionNames(knowledgeBaseSelection)));
             dialogueMapper.updateById(updateDialogue);
         }
     }
@@ -522,9 +553,40 @@ public class MybatisConversationArchiveStore implements ConversationArchiveStore
             safeText(exchange.getErrorMessage()),
             exchange.getFirstResponseTimeMs(),
             exchange.getTotalResponseTimeMs(),
+            safeText(exchange.getKnowledgeBaseSelectionMode()),
+            readStringList(exchange.getSelectedKnowledgeBaseIdsJson()),
+            readStringList(exchange.getSelectedKnowledgeBaseNamesJson()),
+            safeText(exchange.getRetrievalConfigSnapshotJson()),
             exchange.getCreateTime(),
             exchange.getEditTime()
         );
+    }
+
+    private String selectionModeName(KnowledgeBaseSelectionSnapshot snapshot) {
+        KnowledgeBaseSelectionMode mode = snapshot == null || snapshot.getSelectionMode() == null
+            ? KnowledgeBaseSelectionMode.NONE
+            : snapshot.getSelectionMode();
+        return mode.name();
+    }
+
+    private List<String> selectionIds(KnowledgeBaseSelectionSnapshot snapshot) {
+        if (snapshot == null || snapshot.getSelectedKnowledgeBaseIds() == null) {
+            return List.of();
+        }
+        return snapshot.getSelectedKnowledgeBaseIds().stream()
+            .filter(Objects::nonNull)
+            .map(String::valueOf)
+            .toList();
+    }
+
+    private List<String> selectionNames(KnowledgeBaseSelectionSnapshot snapshot) {
+        if (snapshot == null || snapshot.getSelectedKnowledgeBaseNames() == null) {
+            return List.of();
+        }
+        return snapshot.getSelectedKnowledgeBaseNames().stream()
+            .filter(StrUtil::isNotBlank)
+            .map(String::trim)
+            .toList();
     }
 
     private List<String> readStringList(String json) {

@@ -22,14 +22,6 @@ public class DocumentRouteCandidate {
 
     private String lastIndexTaskId;
 
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
-
-    private String businessCategory;
-
-    private String documentTags;
-
     private BigDecimal score;
 
     private String reason;

@@ -29,6 +29,12 @@ public class SearchReference {
 
     private String documentName;
 
+    private Long knowledgeBaseId;
+
+    private String knowledgeBaseCode;
+
+    private String knowledgeBaseName;
+
     private Long chunkId;
 
     private Long parentBlockId;
@@ -56,10 +62,6 @@ public class SearchReference {
     private String channel;
 
     private String toolName;
-
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
 
     private Integer pageNo;
 

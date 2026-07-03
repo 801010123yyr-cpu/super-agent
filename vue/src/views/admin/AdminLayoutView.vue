@@ -79,6 +79,7 @@ import {
   Bars3Icon,
   ClipboardDocumentListIcon,
   CommandLineIcon,
+  CircleStackIcon,
   HomeModernIcon,
   ShareIcon,
   EyeIcon
@@ -93,6 +94,7 @@ const sidebarOpen = ref(false)
 
 const navItems = [
   { to: '/admin/dashboard', label: '运营总览', icon: HomeModernIcon },
+  { to: '/admin/knowledge-bases', label: '知识库管理', icon: CircleStackIcon },
   { to: '/admin/documents', label: '文档接入', icon: ClipboardDocumentListIcon },
   { to: '/admin/knowledge-route', label: '知识路由', icon: ShareIcon },
   { to: '/admin/knowledge-route/traces', label: '路由追踪', icon: EyeIcon },

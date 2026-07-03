@@ -11,11 +11,14 @@ import org.javaup.ai.chatagent.service.ConversationMemoryService;
 import org.javaup.ai.chatagent.service.TaskInfo;
 import org.javaup.ai.chatagent.support.StreamEventMetadata;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.ai.manage.model.route.DocumentRouteCandidate;
+import org.javaup.ai.manage.model.route.KnowledgeRouteContext;
 import org.javaup.ai.manage.model.route.KnowledgeRouteDecision;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.KnowledgeRouteService;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
@@ -100,10 +103,6 @@ class ChatPreparationOrchestratorTest {
             documentId,
             name,
             taskId,
-            "scope-a",
-            "测试知识范围",
-            "",
-            "",
             BigDecimal.valueOf(score),
             "test"
         );
@@ -119,6 +118,17 @@ class ChatPreparationOrchestratorTest {
             null,
             "",
             null,
+            KnowledgeBaseSelectionSnapshot.builder()
+                .selectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(1L))
+                .selectedKnowledgeBaseNames(List.of("测试知识库"))
+                .allowedDocuments(List.of(
+                    new KnowledgeDocumentDescriptor(1001L, "O6跨文档图谱-审计系统别名说明B.md", 2001L, 1L, "test-kb", "测试知识库"),
+                    new KnowledgeDocumentDescriptor(1002L, "O6跨文档图谱-审计证据规范A.md", 2002L, 1L, "test-kb", "测试知识库")
+                ))
+                .allowedDocumentIds(List.of(1001L, 1002L))
+                .allowedTaskIds(List.of(2001L, 2002L))
+                .build(),
             LocalDate.of(2026, 6, 26),
             "2026年6月26日",
             null,
@@ -192,7 +202,7 @@ class ChatPreparationOrchestratorTest {
     private static class StaticDocumentQuestionRouter extends DocumentQuestionRouter {
 
         StaticDocumentQuestionRouter() {
-            super(null, null, null, null, null);
+            super(null, null, null);
         }
 
         @Override
@@ -219,7 +229,7 @@ class ChatPreparationOrchestratorTest {
         }
 
         @Override
-        public KnowledgeRouteDecision route(String question, String rewriteQuestion) {
+        public KnowledgeRouteDecision route(KnowledgeRouteContext context) {
             return decision;
         }
 
@@ -227,15 +237,13 @@ class ChatPreparationOrchestratorTest {
         public void recordShadowRoute(String conversationId,
                                       long exchangeId,
                                       Long selectedDocumentId,
-                                      String question,
-                                      String rewriteQuestion) {
+                                      KnowledgeRouteContext context) {
         }
 
         @Override
         public void recordAutoRoute(String conversationId,
                                     long exchangeId,
-                                    String question,
-                                    String rewriteQuestion,
+                                    KnowledgeRouteContext context,
                                     KnowledgeRouteDecision decision) {
         }
     }
@@ -244,6 +252,11 @@ class ChatPreparationOrchestratorTest {
 
         @Override
         public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
+            return List.of();
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
             return List.of();
         }
 

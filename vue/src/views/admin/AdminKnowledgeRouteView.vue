@@ -6,6 +6,10 @@
         <p class="mt-1.5 text-sm text-muted-foreground">按 范围 → 主题 → 画像 → 关联 的顺序逐步配置，构建自动知识问答的候选预选体系。</p>
       </div>
       <div class="flex flex-wrap gap-2.5 max-[900px]:w-full">
+        <select v-model="activeKnowledgeBaseId" class="rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground" :disabled="loading || actionLoading" @change="handleKnowledgeBaseChange">
+          <option value="">选择知识库</option>
+          <option v-for="item in knowledgeBaseOptions" :key="item.id" :value="item.id">{{ item.baseName }}</option>
+        </select>
         <button class="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60 disabled:cursor-not-allowed" type="button" :disabled="loading || actionLoading" @click="loadAll">刷新数据</button>
         <button class="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed" type="button" :disabled="!documents.length || batchLoading" @click="regenerateAllProfiles">{{ batchLoading ? '批量重建中...' : '批量重建画像' }}</button>
       </div>
@@ -83,7 +87,7 @@
             <small class="line-clamp-2 text-xs text-muted-foreground">{{ item.description || '暂无描述' }}</small>
             <div class="flex gap-3 text-xs text-muted-foreground">
               <span>主题 {{ topics.filter(t => t.scopeCode === item.scopeCode).length }}</span>
-              <span>文档 {{ documents.filter(d => d.knowledgeScopeCode === item.scopeCode).length }}</span>
+              <span>文档 {{ linkedDocumentCountByScope(item.scopeCode) }}</span>
             </div>
           </article>
           <div v-if="!filteredScopes.length" class="text-sm text-muted-foreground">没有匹配的知识范围。</div>
@@ -126,7 +130,7 @@
         <div class="flex items-start justify-between gap-4 max-[900px]:flex-col">
           <div><h4 class="m-0 text-sm font-semibold text-foreground">文档画像</h4><p class="mt-1 text-sm text-muted-foreground">查看文档的类型、摘要、核心主题和图能力开关，判断自动路由是否有足够信息。</p></div>
         </div>
-        <div class="mt-3.5"><input v-model.trim="documentKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按文档名、范围、业务分类或标签筛选文档" /></div>
+        <div class="mt-3.5"><input v-model.trim="documentKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按文档名、原始文件名或知识库筛选文档" /></div>
 
         <div v-if="profileAnomalyRows.length" class="mt-4 rounded-lg border border-border bg-card p-[18px]">
           <div class="flex cursor-pointer select-none items-start justify-between gap-4" @click="anomalyCollapsed = !anomalyCollapsed">
@@ -201,7 +205,7 @@
             @click="openDrawer('relation', item, 'view')">
             <div class="grid gap-1 min-w-0">
               <strong class="text-sm text-foreground">{{ item.documentName }}</strong>
-              <span class="text-xs text-muted-foreground">{{ item.topicCode }} · 分数 {{ item.relationScore }} · {{ item.knowledgeScopeName || item.knowledgeScopeCode || '未分范围' }}</span>
+              <span class="text-xs text-muted-foreground">{{ item.topicCode }} · 分数 {{ item.relationScore }} · {{ topicScopeText(item.topicCode) }}</span>
               <small class="text-xs text-muted-foreground">{{ item.reason || documentMetaLine(item) }}</small>
             </div>
             <button class="inline-flex shrink-0 items-center rounded-full border border-destructive/[0.14] bg-destructive/[0.06] px-3 py-1.5 text-sm font-semibold text-destructive hover:bg-destructive/10 disabled:opacity-60 disabled:cursor-not-allowed" type="button" :disabled="actionLoading" @click.stop="removeRelation(item)">移除</button>
@@ -237,6 +241,13 @@
             </template>
             <template v-if="drawerMode === 'edit'">
               <div class="mt-4 grid gap-2.5">
+                <select v-model="scopeForm.knowledgeBaseId" class="drawer-input" :disabled="Boolean(drawerTarget)">
+                  <option value="">选择所属知识库</option>
+                  <option v-for="item in knowledgeBaseOptions" :key="item.id" :value="String(item.id)">{{ item.baseName }}</option>
+                </select>
+                <p class="-mt-1 m-0 text-xs text-muted-foreground">
+                  知识范围会绑定到该知识库内，只参与该知识库下的软分类和路由。
+                </p>
                 <input v-model="scopeForm.scopeCode" class="drawer-input" placeholder="范围编码，例如 operation_rule" />
                 <input v-model="scopeForm.scopeName" class="drawer-input" placeholder="范围名称，例如 运营规则" />
                 <input v-model="scopeForm.parentScopeCode" class="drawer-input" placeholder="父级编码，可空" />
@@ -373,6 +384,8 @@ const scopes = ref([])
 const topics = ref([])
 const documents = ref([])
 const allRelations = ref([])
+const knowledgeBaseOptions = ref([])
+const activeKnowledgeBaseId = ref('')
 const profileDocumentId = ref('')
 const profile = ref(null)
 const activeScopeCode = ref('')
@@ -399,12 +412,13 @@ const drawerTarget = ref(null)
 const drawerType = ref('')
 const coveragePanelCollapsed = ref(false)
 const anomalyCollapsed = ref(true)
-const scopeForm = reactive({ scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID })
-const topicForm = reactive({ topicCode: '', topicName: '', scopeCode: '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID })
-const relationForm = reactive({ topicCode: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+const scopeForm = reactive({ knowledgeBaseId: '', scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID })
+const topicForm = reactive({ knowledgeBaseId: '', topicCode: '', topicName: '', scopeCode: '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID })
+const relationForm = reactive({ knowledgeBaseId: '', topicCode: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
 
 const activeScope = computed(() => scopes.value.find((item) => item.scopeCode === activeScopeCode.value) || null)
 const activeTopic = computed(() => topics.value.find((item) => item.topicCode === activeTopicCode.value) || null)
+const knowledgeBaseNameMap = computed(() => Object.fromEntries(knowledgeBaseOptions.value.map((item) => [String(item.id), item.baseName || item.baseCode || item.id])))
 const filteredScopes = computed(() => {
   const keyword = scopeKeyword.value.trim().toLowerCase()
   if (!keyword) return scopes.value
@@ -421,9 +435,8 @@ const filteredTopics = computed(() => {
 const filteredDocuments = computed(() => {
   const keyword = documentKeyword.value.trim().toLowerCase()
   return documents.value.filter((item) => {
-    if (activeScopeCode.value && item.knowledgeScopeCode !== activeScopeCode.value) return false
     if (!keyword) return true
-    return [item.documentName, item.originalFileName, item.knowledgeScopeCode, item.knowledgeScopeName, item.businessCategory, item.documentTags].filter(Boolean).join(' ').toLowerCase().includes(keyword)
+    return [item.documentName, item.originalFileName, item.knowledgeBaseName, item.knowledgeBaseCode].filter(Boolean).join(' ').toLowerCase().includes(keyword)
   })
 })
 const selectedProfileDocument = computed(() => documents.value.find((item) => item.documentId === profileDocumentId.value) || null)
@@ -434,7 +447,8 @@ const selectedScopeStats = computed(() => {
   if (!activeScope.value) return null
   const scopeTopics = topics.value.filter((item) => item.scopeCode === activeScope.value.scopeCode)
   const topicCodes = new Set(scopeTopics.map((item) => item.topicCode))
-  return { topicCount: scopeTopics.length, relationCount: allRelations.value.filter((item) => topicCodes.has(item.topicCode)).length, documentCount: documents.value.filter((item) => item.knowledgeScopeCode === activeScope.value.scopeCode).length }
+  const scopeRelations = allRelations.value.filter((item) => topicCodes.has(item.topicCode))
+  return { topicCount: scopeTopics.length, relationCount: scopeRelations.length, documentCount: new Set(scopeRelations.map((item) => String(item.documentId))).size }
 })
 const selectedTopicRelations = computed(() => activeTopic.value ? allRelations.value.filter((item) => item.topicCode === activeTopic.value.topicCode) : [])
 const selectedTopicStats = computed(() => {
@@ -449,30 +463,22 @@ const relations = computed(() => {
     if (activeScopeCode.value && topic?.scopeCode !== activeScopeCode.value) return false
     if (activeTopicCode.value && item.topicCode !== activeTopicCode.value) return false
     if (!keyword) return true
-    return [item.topicCode, item.documentName, item.reason, item.knowledgeScopeName, item.businessCategory, item.documentTags].filter(Boolean).join(' ').toLowerCase().includes(keyword)
+    return [item.topicCode, topic?.topicName, topic?.scopeCode, item.documentName, item.reason].filter(Boolean).join(' ').toLowerCase().includes(keyword)
   })
-})
-const selectedProfileMetadataMissing = computed(() => {
-  if (!selectedProfileDocument.value) return []
-  const missing = []
-  if (!selectedProfileDocument.value.knowledgeScopeCode && !selectedProfileDocument.value.knowledgeScopeName) missing.push('知识范围')
-  if (!selectedProfileDocument.value.businessCategory) missing.push('业务分类')
-  if (!selectedProfileDocument.value.documentTags) missing.push('文档标签')
-  return missing
 })
 const selectedProfileRelatedTopics = computed(() => {
   if (!selectedProfileDocument.value) return []
   const topicCodes = new Set(allRelations.value.filter((item) => item.documentId === selectedProfileDocument.value.documentId).map((item) => item.topicCode))
   return topics.value.filter((item) => topicCodes.has(item.topicCode))
 })
-const selectedProfileDocumentTags = computed(() => parseTextList(selectedProfileDocument.value?.documentTags))
 const scopeCoverageRows = computed(() => scopes.value.map((scope) => {
   const scopeTopics = topics.value.filter((t) => t.scopeCode === scope.scopeCode)
   const topicCodes = new Set(scopeTopics.map((t) => t.topicCode))
   const scopeRelations = allRelations.value.filter((r) => topicCodes.has(r.topicCode))
   const coveredTopicCodes = new Set(scopeRelations.map((r) => r.topicCode))
+  const linkedDocumentIds = new Set(scopeRelations.map((r) => String(r.documentId)))
   const coverageRate = scopeTopics.length ? (coveredTopicCodes.size / scopeTopics.length) * 100 : 0
-  return { scopeCode: scope.scopeCode, scopeName: scope.scopeName, topicCount: scopeTopics.length, coveredTopicCount: coveredTopicCodes.size, pendingTopicCount: Math.max(0, scopeTopics.length - coveredTopicCodes.size), documentCount: documents.value.filter((d) => d.knowledgeScopeCode === scope.scopeCode).length, relationCount: scopeRelations.length, coverageRate, coverageRateText: `${coverageRate.toFixed(0)}%` }
+  return { scopeCode: scope.scopeCode, scopeName: scope.scopeName, topicCount: scopeTopics.length, coveredTopicCount: coveredTopicCodes.size, pendingTopicCount: Math.max(0, scopeTopics.length - coveredTopicCodes.size), documentCount: linkedDocumentIds.size, relationCount: scopeRelations.length, coverageRate, coverageRateText: `${coverageRate.toFixed(0)}%` }
 }))
 const overallCoverageRateText = computed(() => {
   if (!topics.value.length) return '0%'
@@ -480,32 +486,28 @@ const overallCoverageRateText = computed(() => {
   return `${((coveredTopicCodes.size / topics.value.length) * 100).toFixed(0)}%`
 })
 const profileAnomalyRows = computed(() => {
-  const scopeCodes = new Set(scopes.value.map((s) => s.scopeCode))
   const linkedDocumentIds = new Set(allRelations.value.map((r) => String(r.documentId)))
   return documents.value.map((document) => {
     const problems = []
-    if (!document.knowledgeScopeCode && !document.knowledgeScopeName) problems.push('缺少知识范围')
-    if (document.knowledgeScopeCode && !scopeCodes.has(document.knowledgeScopeCode)) problems.push('范围未建节点')
-    if (!document.businessCategory) problems.push('缺少业务分类')
-    if (!document.documentTags) problems.push('缺少标签')
     if (!linkedDocumentIds.has(String(document.documentId))) problems.push('未绑定主题')
-    return { documentId: String(document.documentId), documentName: document.documentName, scopeText: document.knowledgeScopeName || document.knowledgeScopeCode || '未分配范围', problems, tone: problems.length >= 3 ? 'danger' : 'warning', suggestion: buildAnomalySuggestion(problems) }
+    return { documentId: String(document.documentId), documentName: document.documentName, scopeText: documentMetaLine(document), problems, tone: problems.length >= 2 ? 'danger' : 'warning', suggestion: buildAnomalySuggestion(problems) }
   }).filter((item) => item.problems.length > 0)
 })
 const allVisibleAnomaliesSelected = computed(() => profileAnomalyRows.value.length && profileAnomalyRows.value.every((item) => selectedProfileRepairIds.value.includes(item.documentId)))
 const summaryCards = computed(() => {
-  const documentWithMetaCount = documents.value.filter((item) => Boolean(item.knowledgeScopeCode || item.knowledgeScopeName || item.businessCategory || item.documentTags)).length
+  const linkedDocumentCount = new Set(allRelations.value.map((item) => String(item.documentId))).size
   const pendingTopicCount = topics.value.filter((item) => !allRelations.value.some((r) => r.topicCode === item.topicCode)).length
   return [
     { label: '知识范围', value: String(scopes.value.length), description: '知识范围是自动路由的第一层收敛边界' },
     { label: '知识主题', value: String(topics.value.length), description: '主题是范围里的可回答单元' },
-    { label: '文档数', value: String(documents.value.length), description: '当前可维护画像和路由元数据的文档数量' },
-    { label: '已补元数据文档', value: String(documentWithMetaCount), description: '至少填了范围、业务类目或标签的文档数' },
+    { label: '文档数', value: String(documents.value.length), description: '当前可维护画像和路由关系的文档数量' },
+    { label: '已关联文档', value: String(linkedDocumentCount), description: '至少绑定了一个知识主题的文档数' },
     { label: '已保存关联', value: String(allRelations.value.length), description: '当前所有主题已保存的文档关联数' },
     { label: '未关联主题', value: String(pendingTopicCount), description: '还没有绑定任何文档关系的主题数' }
   ]
 })
 const scopeViewRows = computed(() => !drawerTarget.value ? [] : [
+  { label: '所属知识库', value: knowledgeBaseNameMap.value[String(drawerTarget.value.knowledgeBaseId || activeKnowledgeBaseId.value)] || '-' },
   { label: '范围编码', value: drawerTarget.value.scopeCode },
   { label: '范围名称', value: drawerTarget.value.scopeName },
   { label: '父级编码', value: drawerTarget.value.parentScopeCode || '-' },
@@ -545,12 +547,12 @@ function switchDrawerToEdit() {
   drawerMode.value = 'edit'
   if (drawerType.value === 'scope' && drawerTarget.value) { editScope(drawerTarget.value) }
   else if (drawerType.value === 'topic' && drawerTarget.value) { editTopic(drawerTarget.value) }
-  else if (drawerType.value === 'relation' && drawerTarget.value) { Object.assign(relationForm, { topicCode: drawerTarget.value.topicCode || '', documentId: drawerTarget.value.documentId || '', relationScore: drawerTarget.value.relationScore || '0.9000', relationSource: 'manual', reason: drawerTarget.value.reason || '', operatorId: OPERATOR_ID }) }
+  else if (drawerType.value === 'relation' && drawerTarget.value) { Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: drawerTarget.value.topicCode || '', documentId: drawerTarget.value.documentId || '', relationScore: drawerTarget.value.relationScore || '0.9000', relationSource: 'manual', reason: drawerTarget.value.reason || '', operatorId: OPERATOR_ID }) }
 }
 function openCreateDrawer(type) {
   if (type === 'scope') resetScopeForm()
   else if (type === 'topic') resetTopicForm()
-  else if (type === 'relation') Object.assign(relationForm, { topicCode: activeTopicCode.value || '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+  else if (type === 'relation') Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: activeTopicCode.value || '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
   openDrawer(type, null, 'edit')
 }
 function scrollToSection(section) {
@@ -559,10 +561,20 @@ function scrollToSection(section) {
 }
 function focusCoverageScope(item) { activeScopeCode.value = item.scopeCode; const scope = scopes.value.find((s) => s.scopeCode === item.scopeCode); if (scope) editScope(scope); scrollToSection('scope') }
 function showNotice(message, type = 'info') { notice.message = message; notice.type = type }
-function resetScopeForm() { Object.assign(scopeForm, { scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeScopeCode.value = '' }
-function resetTopicForm() { Object.assign(topicForm, { topicCode: '', topicName: '', scopeCode: activeScopeCode.value || '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeTopicCode.value = '' }
-function editScope(item) { activeScopeCode.value = item.scopeCode; if (activeTopic.value && activeTopic.value.scopeCode !== item.scopeCode) { activeTopicCode.value = ''; relationForm.topicCode = '' }; Object.assign(scopeForm, { ...item, operatorId: OPERATOR_ID }); topicForm.scopeCode = item.scopeCode }
-function editTopic(item) { activeScopeCode.value = item.scopeCode; activeTopicCode.value = item.topicCode; relationForm.topicCode = item.topicCode; Object.assign(topicForm, { ...item, operatorId: OPERATOR_ID }) }
+function topicScopeText(topicCode) {
+  const topic = topics.value.find((item) => item.topicCode === topicCode)
+  if (!topic?.scopeCode) return '未分范围'
+  const scope = scopes.value.find((item) => item.scopeCode === topic.scopeCode)
+  return scope?.scopeName ? `${scope.scopeName} (${topic.scopeCode})` : topic.scopeCode
+}
+function linkedDocumentCountByScope(scopeCode) {
+  const topicCodes = new Set(topics.value.filter((item) => item.scopeCode === scopeCode).map((item) => item.topicCode))
+  return new Set(allRelations.value.filter((item) => topicCodes.has(item.topicCode)).map((item) => String(item.documentId))).size
+}
+function resetScopeForm() { Object.assign(scopeForm, { knowledgeBaseId: activeKnowledgeBaseId.value, scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeScopeCode.value = '' }
+function resetTopicForm() { Object.assign(topicForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '', topicName: '', scopeCode: activeScopeCode.value || '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeTopicCode.value = '' }
+function editScope(item) { activeScopeCode.value = item.scopeCode; if (activeTopic.value && activeTopic.value.scopeCode !== item.scopeCode) { activeTopicCode.value = ''; relationForm.topicCode = '' }; Object.assign(scopeForm, { ...item, knowledgeBaseId: item.knowledgeBaseId || activeKnowledgeBaseId.value, operatorId: OPERATOR_ID }); topicForm.scopeCode = item.scopeCode }
+function editTopic(item) { activeScopeCode.value = item.scopeCode; activeTopicCode.value = item.topicCode; relationForm.topicCode = item.topicCode; Object.assign(topicForm, { ...item, knowledgeBaseId: activeKnowledgeBaseId.value, operatorId: OPERATOR_ID }) }
 function selectDocument(item) { profileDocumentId.value = item.documentId; profile.value = null }
 async function withAction(task, successMessage = '') {
   actionLoading.value = true
@@ -573,25 +585,64 @@ async function withAction(task, successMessage = '') {
 async function loadAll() {
   loading.value = true
   try {
-    const [scopeList, topicList, docPage] = await Promise.all([manageApi.listKnowledgeScopes(), manageApi.listKnowledgeTopics(), manageApi.queryDocumentPage({ pageNo: '1', pageSize: '200', keyword: '' })])
+    if (!knowledgeBaseOptions.value.length) {
+      const bases = await manageApi.listKnowledgeBases()
+      knowledgeBaseOptions.value = Array.isArray(bases) ? bases : []
+    }
+    if (!activeKnowledgeBaseId.value && knowledgeBaseOptions.value.length) {
+      activeKnowledgeBaseId.value = String(knowledgeBaseOptions.value[0].id)
+    }
+    const query = { knowledgeBaseId: activeKnowledgeBaseId.value }
+    const [scopeList, topicList, docPage] = await Promise.all([
+      activeKnowledgeBaseId.value ? manageApi.listKnowledgeScopes(query) : Promise.resolve([]),
+      activeKnowledgeBaseId.value ? manageApi.listKnowledgeTopics(query) : Promise.resolve([]),
+      manageApi.queryDocumentPage({ pageNo: '1', pageSize: '200', keyword: '' })
+    ])
     scopes.value = Array.isArray(scopeList) ? scopeList : []
     topics.value = Array.isArray(topicList) ? topicList : []
-    documents.value = Array.isArray(docPage?.records) ? docPage.records : []
+    documents.value = Array.isArray(docPage?.records)
+      ? docPage.records.filter((item) => String(item.knowledgeBaseId || '') === String(activeKnowledgeBaseId.value || ''))
+      : []
     if (activeScopeCode.value && !scopes.value.some((item) => item.scopeCode === activeScopeCode.value)) activeScopeCode.value = ''
     if (activeTopicCode.value && !topics.value.some((item) => item.topicCode === activeTopicCode.value)) { activeTopicCode.value = ''; relationForm.topicCode = '' }
     await loadRelations()
   } catch (error) { showNotice(error.message || '加载知识路由数据失败', 'danger') }
   finally { loading.value = false }
 }
-async function saveScope() { await withAction(async () => { const data = await manageApi.saveKnowledgeScope(scopeForm); activeScopeCode.value = data?.scopeCode || scopeForm.scopeCode; await loadAll(); closeDrawer() }, '知识范围已保存') }
+function ensureKnowledgeBaseSelected(value = activeKnowledgeBaseId.value) {
+  if (value) return true
+  showNotice('请先选择知识库。', 'danger')
+  return false
+}
+function ensureActiveKnowledgeBase() { return ensureKnowledgeBaseSelected(activeKnowledgeBaseId.value) }
+async function handleKnowledgeBaseChange() {
+  activeScopeCode.value = ''
+  activeTopicCode.value = ''
+  profileDocumentId.value = ''
+  profile.value = null
+  resetScopeForm()
+  resetTopicForm()
+  Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+  await loadAll()
+}
+async function saveScope() {
+  if (!ensureKnowledgeBaseSelected(scopeForm.knowledgeBaseId)) return
+  await withAction(async () => {
+    activeKnowledgeBaseId.value = String(scopeForm.knowledgeBaseId)
+    const data = await manageApi.saveKnowledgeScope(scopeForm)
+    activeScopeCode.value = data?.scopeCode || scopeForm.scopeCode
+    await loadAll()
+    closeDrawer()
+  }, '知识范围已保存')
+}
 async function deleteScope() {
   if (!activeScope.value || !await confirm(`确认删除范围「${activeScope.value.scopeName}」吗？`, '确认删除')) return
-  await withAction(async () => { await manageApi.deleteKnowledgeScope({ scopeCode: activeScope.value.scopeCode, operatorId: OPERATOR_ID }); resetScopeForm(); closeDrawer(); await loadAll() }, '知识范围已删除')
+  await withAction(async () => { await manageApi.deleteKnowledgeScope({ knowledgeBaseId: activeKnowledgeBaseId.value, scopeCode: activeScope.value.scopeCode, operatorId: OPERATOR_ID }); resetScopeForm(); closeDrawer(); await loadAll() }, '知识范围已删除')
 }
-async function saveTopic() { await withAction(async () => { const data = await manageApi.saveKnowledgeTopic(topicForm); activeTopicCode.value = data?.topicCode || topicForm.topicCode; relationForm.topicCode = activeTopicCode.value; await loadAll(); closeDrawer() }, '知识主题已保存') }
+async function saveTopic() { if (!ensureActiveKnowledgeBase()) return; topicForm.knowledgeBaseId = activeKnowledgeBaseId.value; await withAction(async () => { const data = await manageApi.saveKnowledgeTopic(topicForm); activeTopicCode.value = data?.topicCode || topicForm.topicCode; relationForm.topicCode = activeTopicCode.value; await loadAll(); closeDrawer() }, '知识主题已保存') }
 async function deleteTopic() {
   if (!activeTopic.value || !await confirm(`确认删除主题「${activeTopic.value.topicName}」吗？`, '确认删除')) return
-  await withAction(async () => { await manageApi.deleteKnowledgeTopic({ topicCode: activeTopic.value.topicCode, operatorId: OPERATOR_ID }); resetTopicForm(); relationForm.topicCode = ''; closeDrawer(); await loadAll() }, '知识主题已删除')
+  await withAction(async () => { await manageApi.deleteKnowledgeTopic({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: activeTopic.value.topicCode, operatorId: OPERATOR_ID }); resetTopicForm(); relationForm.topicCode = ''; closeDrawer(); await loadAll() }, '知识主题已删除')
 }
 async function loadProfile() { if (!profileDocumentId.value) return; await withAction(async () => { profile.value = await manageApi.queryDocumentProfile({ documentId: profileDocumentId.value }) }) }
 async function regenerateProfile() { if (!profileDocumentId.value) return; await withAction(async () => { profile.value = await manageApi.regenerateDocumentProfile({ documentId: profileDocumentId.value, operatorId: OPERATOR_ID }) }, '文档画像已重新生成') }
@@ -611,12 +662,12 @@ async function batchRepairProfiles() {
   finally { batchLoading.value = false }
 }
 async function loadRelations() {
-  try { allRelations.value = await manageApi.listTopicDocuments({ topicCode: '' }) }
+  try { allRelations.value = activeKnowledgeBaseId.value ? await manageApi.listTopicDocuments({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '' }) : [] }
   catch (error) { showNotice(error.message || '加载主题文档关联失败', 'danger') }
 }
-async function saveRelation() { await withAction(async () => { await manageApi.saveTopicDocumentRelation(relationForm); await loadRelations(); closeDrawer() }, '主题文档关联已保存') }
-async function removeRelation(item) { await withAction(async () => { await manageApi.removeTopicDocumentRelation({ topicCode: item.topicCode, documentId: item.documentId, operatorId: OPERATOR_ID }); await loadRelations() }, '主题文档关联已移除') }
-function documentMetaLine(item = {}) { return [item.knowledgeScopeName || item.knowledgeScopeCode, item.businessCategory, item.documentTags].filter(Boolean).join(' · ') || '还没有范围 / 类目 / 标签元数据' }
+async function saveRelation() { if (!ensureActiveKnowledgeBase()) return; relationForm.knowledgeBaseId = activeKnowledgeBaseId.value; await withAction(async () => { await manageApi.saveTopicDocumentRelation(relationForm); await loadRelations(); closeDrawer() }, '主题文档关联已保存') }
+async function removeRelation(item) { await withAction(async () => { await manageApi.removeTopicDocumentRelation({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: item.topicCode, documentId: item.documentId, operatorId: OPERATOR_ID }); await loadRelations() }, '主题文档关联已移除') }
+function documentMetaLine(item = {}) { return [item.knowledgeBaseName, item.knowledgeBaseCode].filter(Boolean).join(' · ') || '仅绑定知识库' }
 function parseTextList(value) { const n = String(value || '').trim(); if (!n) return []; return n.split(',').map((item) => item.trim()).filter(Boolean) }
 function formatAnswerShapeLabel(value) { return formatMappedLabel(value, ANSWER_SHAPE_LABEL_MAP) }
 function formatExecutionPreferenceLabel(value) { return formatMappedLabel(value, EXECUTION_PREFERENCE_LABEL_MAP) }
@@ -624,8 +675,6 @@ function formatDocumentTypeLabel(value) { return formatMappedLabel(value, DOCUME
 function formatProfileSourceLabel(value) { return formatMappedLabel(value, PROFILE_SOURCE_LABEL_MAP) }
 function formatMappedLabel(value, labelMap) { const n = String(value || '').trim(); if (!n) return '未设置'; return labelMap[n] || n }
 function buildAnomalySuggestion(problems) {
-  if (problems.includes('范围未建节点')) return '建议先在知识范围区补齐对应 scopeCode，再重建画像并复测自动路由。'
-  if (problems.includes('缺少知识范围') || problems.includes('缺少标签')) return '建议重新上传时补齐知识范围和文档标签；当前可先重建画像观察自动补全效果。'
   if (problems.includes('未绑定主题')) return '建议在主题文档关联区为该文档至少绑定 1 个核心主题。'
   return '建议重建画像后查看核心主题、示例问题和图能力是否恢复正常。'
 }

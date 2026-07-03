@@ -50,15 +50,6 @@ public class DocumentKeywordIndexRecord {
 
     private String sourceBlockIds;
 
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
-
-    private String businessCategory;
-
-    @Builder.Default
-    private List<String> documentTags = new ArrayList<>();
-
     private String contentWithWeight;
 
     private String chunkType;

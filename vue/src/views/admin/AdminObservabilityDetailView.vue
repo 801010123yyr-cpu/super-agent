@@ -546,6 +546,9 @@ const ragUserPrompt = computed(() => activeExchange.value?.debugTrace?.ragUserPr
 const hasPromptData = computed(() => Boolean(ragSystemPrompt.value || ragUserPrompt.value))
 const headerMetaPairs = computed(() => activeExchange.value ? [
   { dt: '文档范围', dd: activeSession.value?.selectedDocumentName || '未绑定文档' },
+  { dt: '知识库模式', dd: activeExchange.value.knowledgeBaseSelectionMode || activeSession.value?.knowledgeBaseSelectionMode || 'NONE' },
+  { dt: '已选知识库', dd: selectedKnowledgeBaseText(activeExchange.value) },
+  { dt: '配置快照', dd: activeExchange.value.retrievalConfigSnapshotJson ? '已记录' : '未记录' },
   { dt: '执行时间', dd: formatDateTime(activeExchange.value.editTime || activeExchange.value.createTime) },
   { dt: '总耗时', dd: activeExchange.value.totalResponseTimeMs ? `${activeExchange.value.totalResponseTimeMs} ms` : '无' },
   { dt: '引用 / 推荐', dd: `${activeExchange.value.references?.length || 0} / ${activeExchange.value.recommendations?.length || 0}` },
@@ -612,6 +615,13 @@ function tableEvidencePairs(item) {
     { label: '页码/位置', value: item.locationText },
     { label: 'bbox 状态', value: item.bboxText }
   ]
+}
+function selectedKnowledgeBaseText(exchange) {
+  const names = Array.isArray(exchange?.selectedKnowledgeBaseNames) ? exchange.selectedKnowledgeBaseNames.filter(Boolean) : []
+  if (names.length) return names.join('、')
+  const ids = Array.isArray(exchange?.selectedKnowledgeBaseIds) ? exchange.selectedKnowledgeBaseIds.filter(Boolean) : []
+  if (ids.length) return ids.join('、')
+  return '未选择'
 }
 function tableEvidenceDocumentRoute(item) {
   return {

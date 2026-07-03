@@ -1,5 +1,6 @@
 package org.javaup.ai.manage.service;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -12,7 +13,7 @@ public interface KnowledgeRouteIndexService {
 
     void refreshIfNeeded();
 
-    List<RouteLexicalHit> search(String routingText, String entityType, int size);
+    List<RouteLexicalHit> search(String routingText, String entityType, int size, Collection<Long> knowledgeBaseIds);
 
     void deleteDocumentRoute(Long documentId);
 
@@ -21,6 +22,7 @@ public interface KnowledgeRouteIndexService {
         String entityCode,
         String entityType,
         Long documentId,
+        Long knowledgeBaseId,
         String scopeCode,
         String topicCode,
         String documentName,

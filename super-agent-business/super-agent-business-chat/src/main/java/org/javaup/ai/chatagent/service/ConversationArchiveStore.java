@@ -3,6 +3,7 @@ package org.javaup.ai.chatagent.service;
 import org.javaup.ai.chatagent.model.ConversationExchangeView;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.model.debug.ChatDebugTrace;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.enums.ChatQueryMode;
 import org.javaup.enums.ChatTurnStatus;
 
@@ -22,12 +23,14 @@ public interface ConversationArchiveStore {
                                            String question,
                                            ChatQueryMode chatMode,
                                            Long selectedDocumentId,
-                                           String selectedDocumentName);
+                                           String selectedDocumentName,
+                                           KnowledgeBaseSelectionSnapshot knowledgeBaseSelection);
 
     void refreshSessionScope(String conversationId,
                              ChatQueryMode chatMode,
                              Long selectedDocumentId,
-                             String selectedDocumentName);
+                             String selectedDocumentName,
+                             KnowledgeBaseSelectionSnapshot knowledgeBaseSelection);
 
     void completeExchange(String conversationId,
                           long exchangeId,
@@ -66,6 +69,9 @@ public interface ConversationArchiveStore {
         ChatQueryMode chatMode,
         Long selectedDocumentId,
         String selectedDocumentName,
+        String knowledgeBaseSelectionMode,
+        List<String> selectedKnowledgeBaseIds,
+        List<String> selectedKnowledgeBaseNames,
         Instant createdAt,
         Instant updatedAt,
         List<ConversationExchangeView> exchanges
