@@ -67,6 +67,8 @@ public class DocumentElasticsearchIndexInitializer {
                 .properties("documentName", property -> property.text(text -> text
                     .analyzer(analyzer)
                     .searchAnalyzer(searchAnalyzer)))
+                .properties("knowledgeBaseId", property -> property.long_(number -> number))
+                .properties("knowledgeBaseName", property -> property.keyword(keyword -> keyword))
                 .properties("sectionPath", property -> property.text(text -> text
                     .analyzer(analyzer)
                     .searchAnalyzer(searchAnalyzer)))

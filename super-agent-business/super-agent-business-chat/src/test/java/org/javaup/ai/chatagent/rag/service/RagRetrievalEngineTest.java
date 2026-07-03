@@ -15,6 +15,7 @@ import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.javaup.enums.RetrievalChannelEnum;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
@@ -252,6 +253,65 @@ class RagRetrievalEngineTest {
                     assertThat(reference.getKgRelationGroupRelationCount()).isEqualTo(2);
                     assertThat(reference.getKgRelationGroupEvidenceCount()).isEqualTo(3);
                     assertThat(reference.getKgRelationGroupDocumentCount()).isEqualTo(2);
+                });
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalReferencesFillKnowledgeBaseMetadataFromDocumentDescriptor() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        Document keywordDoc = document("chunk-9001", "值班 SRE 负责执行回滚演练。", 0.91D);
+        keywordDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        keywordDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.KEYWORD.getName());
+        keywordDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1001L);
+        keywordDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, "生产发布回滚规范A.md");
+        keywordDoc.getMetadata().put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, "");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(keywordDoc))),
+                properties,
+                null,
+                new DescriptorDocumentKnowledgeService(List.of(new KnowledgeDocumentDescriptor(
+                    1001L,
+                    "生产发布回滚规范A.md",
+                    2001L,
+                    3001L,
+                    "生产运维知识库"
+                ))),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("值班 SRE 负责什么？")
+                .retrievalSubQuestions(List.of("值班 SRE 负责什么？"))
+                .knowledgeBaseSelectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(3001L))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            Document finalDocument = context.getSubQuestionEvidenceList().get(0).getDocuments().get(0);
+            assertThat(finalDocument.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, 3001L)
+                .containsEntry(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, "生产运维知识库");
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .hasSize(1)
+                .first()
+                .satisfies(reference -> {
+                    assertThat(reference.getKnowledgeBaseId()).isEqualTo(3001L);
+                    assertThat(reference.getKnowledgeBaseName()).isEqualTo("生产运维知识库");
                 });
         }
         finally {
@@ -1078,6 +1138,31 @@ class RagRetrievalEngineTest {
         @Override
         public List<Document> elevateToParentBlocks(List<Document> childDocuments, int maxChars) {
             return childDocuments;
+        }
+    }
+
+    private static class DescriptorDocumentKnowledgeService extends PassThroughDocumentKnowledgeService {
+
+        private final List<KnowledgeDocumentDescriptor> descriptors;
+
+        private DescriptorDocumentKnowledgeService(List<KnowledgeDocumentDescriptor> descriptors) {
+            this.descriptors = descriptors;
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
+            return descriptors;
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
+            if (knowledgeBaseIds == null || knowledgeBaseIds.isEmpty()) {
+                return List.of();
+            }
+            return descriptors.stream()
+                .filter(descriptor -> descriptor.getKnowledgeBaseId() != null
+                    && knowledgeBaseIds.contains(descriptor.getKnowledgeBaseId()))
+                .toList();
         }
     }
 }

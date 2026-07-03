@@ -17,6 +17,7 @@ import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
 import org.javaup.ai.chatagent.rag.support.SearchReferenceMapper;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
+import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.enums.RetrievalChannelEnum;
@@ -129,7 +130,7 @@ public class RagRetrievalEngine {
             evidenceList.size(),
             acceptedCount,
             context.getRetrievalNotes());
-        assignReferenceIds(evidenceList);
+        assignReferenceIds(evidenceList, plan);
         context.setSubQuestionEvidenceList(evidenceList);
         return context;
     }
@@ -1227,12 +1228,14 @@ public class RagRetrievalEngine {
         return number == null ? null : number.intValue();
     }
 
-    private void assignReferenceIds(List<SubQuestionEvidence> evidenceList) {
+    private void assignReferenceIds(List<SubQuestionEvidence> evidenceList, ConversationExecutionPlan plan) {
         final int[] referenceNumber = {1};
         Map<String, String> assignedIds = new LinkedHashMap<>();
+        Map<Long, KnowledgeDocumentDescriptor> descriptorMap = knowledgeBaseReferenceDescriptorMap(evidenceList, plan);
         for (SubQuestionEvidence evidence : evidenceList) {
             List<SearchReference> references = new ArrayList<>();
             for (Document document : evidence.getDocuments()) {
+                enrichKnowledgeBaseReferenceMetadata(document, descriptorMap);
 
                 SearchReference reference = SearchReferenceMapper.fromDocument(
                     document,
@@ -1247,6 +1250,106 @@ public class RagRetrievalEngine {
                 references.add(reference);
             }
             evidence.setReferences(references);
+        }
+    }
+
+    private Map<Long, KnowledgeDocumentDescriptor> knowledgeBaseReferenceDescriptorMap(List<SubQuestionEvidence> evidenceList,
+                                                                                       ConversationExecutionPlan plan) {
+        Set<Long> documentIds = new LinkedHashSet<>();
+        if (evidenceList != null) {
+            for (SubQuestionEvidence evidence : evidenceList) {
+                if (evidence == null || evidence.getDocuments() == null) {
+                    continue;
+                }
+                for (Document document : evidence.getDocuments()) {
+                    Long documentId = metadataLong(document, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+                    if (documentId != null && needsKnowledgeBaseReferenceFallback(document)) {
+                        documentIds.add(documentId);
+                    }
+                }
+            }
+        }
+        if (documentIds.isEmpty()) {
+            return Map.of();
+        }
+
+        List<KnowledgeDocumentDescriptor> descriptors = plan != null
+            && plan.getSelectedKnowledgeBaseIds() != null
+            && !plan.getSelectedKnowledgeBaseIds().isEmpty()
+            ? documentKnowledgeService.listRetrievableDocumentsByKnowledgeBaseIds(plan.getSelectedKnowledgeBaseIds())
+            : documentKnowledgeService.listRetrievableDocuments();
+        if (descriptors == null || descriptors.isEmpty()) {
+            return Map.of();
+        }
+
+        return descriptors.stream()
+            .filter(descriptor -> descriptor.getDocumentId() != null && documentIds.contains(descriptor.getDocumentId()))
+            .collect(java.util.stream.Collectors.toMap(
+                KnowledgeDocumentDescriptor::getDocumentId,
+                descriptor -> descriptor,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+    }
+
+    private boolean needsKnowledgeBaseReferenceFallback(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        return !isMeaningfulMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID))
+            || !isMeaningfulMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME));
+    }
+
+    private void enrichKnowledgeBaseReferenceMetadata(Document document,
+                                                      Map<Long, KnowledgeDocumentDescriptor> descriptorMap) {
+        if (document == null || document.getMetadata() == null || descriptorMap == null || descriptorMap.isEmpty()) {
+            return;
+        }
+        Long documentId = metadataLong(document, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+        if (documentId == null) {
+            return;
+        }
+        KnowledgeDocumentDescriptor descriptor = descriptorMap.get(documentId);
+        if (descriptor == null) {
+            return;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        if (!isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME))
+            && isMeaningfulMetadataValue(descriptor.getDocumentName())) {
+            metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, descriptor.getDocumentName());
+        }
+        if (!isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID))
+            && descriptor.getKnowledgeBaseId() != null) {
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
+        }
+        if (!isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME))
+            && isMeaningfulMetadataValue(descriptor.getKnowledgeBaseName())) {
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, descriptor.getKnowledgeBaseName());
+        }
+    }
+
+    private Long metadataLong(Document document, String key) {
+        if (document == null || document.getMetadata() == null) {
+            return null;
+        }
+        return asLong(document.getMetadata().get(key));
+    }
+
+    private Long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException exception) {
+            return null;
         }
     }
 

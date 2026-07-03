@@ -32,6 +32,10 @@ public class DocumentKeywordIndexRecord {
 
     private String documentName;
 
+    private Long knowledgeBaseId;
+
+    private String knowledgeBaseName;
+
     private String sectionPath;
 
     private Long structureNodeId;

@@ -331,6 +331,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
             .parentBlockId(chunk.getParentBlockId())
             .chunkNo(chunk.getChunkNo())
             .documentName(document == null ? "" : safeText(document.getDocumentName()))
+            .knowledgeBaseId(document == null ? null : document.getKnowledgeBaseId())
+            .knowledgeBaseName(document == null ? "" : safeText(document.getKnowledgeBaseName()))
             .sectionPath(safeText(chunk.getSectionPath()))
             .structureNodeId(chunk.getStructureNodeId())
             .structureNodeType(chunk.getStructureNodeType())
@@ -370,6 +372,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, safeText(source.getBboxJson()));
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(source.getSourceBlockIds()));
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(source.getDocumentName()));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, source.getKnowledgeBaseId());
+        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(source.getKnowledgeBaseName()));
         metadata.put(DocumentKnowledgeMetadataKeys.CONTENT_WITH_WEIGHT, safeText(source.getContentWithWeight()));
         metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, safeText(source.getChunkType()));
         metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(source.getTitle()));
