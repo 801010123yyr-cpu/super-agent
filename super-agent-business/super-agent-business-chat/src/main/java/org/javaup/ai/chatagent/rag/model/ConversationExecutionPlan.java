@@ -55,6 +55,8 @@ public class ConversationExecutionPlan {
 
     private DocumentNavigationDecision navigationDecision;
 
+    private QueryUnderstandingResult queryUnderstanding;
+
     @Builder.Default
     private RetrievalIntent retrievalIntent = RetrievalIntent.GENERAL;
 

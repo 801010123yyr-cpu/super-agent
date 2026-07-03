@@ -299,9 +299,24 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return List.of();
         }
         return results.stream()
-            .sorted(Comparator.comparingDouble(GraphRagSearchResult::getScore).reversed())
+            .sorted(Comparator
+                .comparingInt(this::graphRagResultPriority).reversed()
+                .thenComparing(Comparator.comparingDouble(GraphRagSearchResult::getScore).reversed()))
             .limit(topK)
             .toList();
+    }
+
+    private int graphRagResultPriority(GraphRagSearchResult result) {
+        if (result == null) {
+            return 0;
+        }
+        if (result.getRelationId() != null) {
+            return 3;
+        }
+        if (result.getEntityId() != null) {
+            return 2;
+        }
+        return 1;
     }
 
     private GraphRagCrossDocumentIndex loadCrossDocumentIndex(List<Long> documentIds,
@@ -420,8 +435,16 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         if (index == null || !index.hasCommunities()) {
             return List.of();
         }
-        if (queryProfile == null
-            || (!queryProfile.communityQuestion() && CollUtil.isEmpty(queryProfile.communityIds()))) {
+        if (queryProfile == null) {
+            return List.of();
+        }
+        boolean hasCommunityPlan = queryProfile.communityQuestion()
+            || CollUtil.isNotEmpty(queryProfile.communityIds());
+        boolean hasFocusedTopic = CollUtil.isNotEmpty(queryProfile.focusEntities())
+            || CollUtil.isNotEmpty(queryProfile.entityIds())
+            || CollUtil.isNotEmpty(queryProfile.entityNames())
+            || CollUtil.isNotEmpty(queryProfile.entitiesFromQuery());
+        if (!hasCommunityPlan && !hasFocusedTopic) {
             return List.of();
         }
         if (communityRankContext == null) {
@@ -455,6 +478,10 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             if (representativeEvidence == null) {
                 continue;
             }
+            RelationGroup representativeGroup = representative.relationGroup();
+            if (!hasCommunityPlan && !isStrongCommunitySupplement(representativeGroup)) {
+                continue;
+            }
             double rankBoost = community.rankProfile() == null ? 0D : community.rankProfile().rankBoost();
             GraphRagSearchResult.GraphRagSearchResultBuilder builder = baseResult(representativeEvidence)
                 .communityId(community.id())
@@ -470,13 +497,18 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                     + representative.score());
             builder = withQueryProfile(builder, queryProfile);
             builder = withCommunityRankProfile(builder, scoredCommunity.rankProfile());
-            RelationGroup representativeGroup = representative.relationGroup();
             results.add(withCrossDocumentCommunity(
                     withRelationGroup(builder, representativeGroup),
                     community
                 ).build());
         }
         return results;
+    }
+
+    private boolean isStrongCommunitySupplement(RelationGroup representativeGroup) {
+        return representativeGroup != null
+            && representativeGroup.documentCount() > 1
+            && representativeGroup.evidenceCount() > 1;
     }
 
     private CommunityRankContext communityRankContext(GraphRagCrossDocumentIndex index,
@@ -1970,21 +2002,6 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     }
 
     private QueryProfile analyzeQuery(String question, List<String> terms, int requestedMaxHops) {
-        String normalizedQuestion = normalize(question);
-        boolean relationQuestion = normalizedQuestion.contains("关系")
-            || normalizedQuestion.contains("关联")
-            || normalizedQuestion.contains("上下游")
-            || normalizedQuestion.contains("链路")
-            || normalizedQuestion.contains("路径")
-            || normalizedQuestion.contains("谁")
-            || normalizedQuestion.contains("哪个")
-            || normalizedQuestion.contains("哪些")
-            || normalizedQuestion.contains("要求");
-        boolean communityQuestion = normalizedQuestion.contains("社区")
-            || normalizedQuestion.contains("主题")
-            || normalizedQuestion.contains("整体")
-            || normalizedQuestion.contains("全局")
-            || normalizedQuestion.contains("总结");
         return new QueryProfile(
             "",
             new LinkedHashSet<>(),
@@ -1997,8 +2014,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             new LinkedHashSet<>(),
             new LinkedHashSet<>(),
             new LinkedHashSet<>(),
-            relationQuestion,
-            communityQuestion,
+            false,
+            false,
             normalizeMaxHops(requestedMaxHops),
             JAVA_QUERY_PROFILE_SOURCE
         );
@@ -2008,27 +2025,9 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                                      QueryProfile queryProfile,
                                      List<SuperAgentKgEntity> entities,
                                      List<SuperAgentKgCommunity> communities) {
-        if (queryPlanAdvisor == null
-            || StrUtil.isBlank(question)
-            || (CollUtil.isEmpty(entities) && CollUtil.isEmpty(communities))) {
-            return false;
-        }
-        String normalizedQuestion = normalize(question);
-        boolean graphCue = queryProfile.relationQuestion()
-            || queryProfile.communityQuestion()
-            || !queryProfile.entityTypes().isEmpty()
-            || normalizedQuestion.contains("图谱")
-            || normalizedQuestion.contains("实体")
-            || normalizedQuestion.contains("关系")
-            || normalizedQuestion.contains("上下游")
-            || normalizedQuestion.contains("链路")
-            || normalizedQuestion.contains("路径")
-            || hasQuestionEntityAnchor(normalizedQuestion, entities);
-        if (graphCue) {
-            return true;
-        }
-        return CollUtil.isNotEmpty(communities)
-            && (normalizedQuestion.contains("主题") || normalizedQuestion.contains("总结"));
+        return queryPlanAdvisor != null
+            && StrUtil.isNotBlank(question)
+            && (CollUtil.isNotEmpty(entities) || CollUtil.isNotEmpty(communities));
     }
 
     private QueryProfile applyAdvisorProfile(String question,

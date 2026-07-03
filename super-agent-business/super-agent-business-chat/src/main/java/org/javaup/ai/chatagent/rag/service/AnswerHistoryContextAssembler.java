@@ -3,9 +3,9 @@ package org.javaup.ai.chatagent.rag.service;
 import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.springframework.stereotype.Service;
-
-import java.util.Set;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -16,11 +16,6 @@ import java.util.Set;
 @Service
 public class AnswerHistoryContextAssembler {
 
-    private static final Set<String> FOLLOW_UP_HINTS = Set.of(
-        "刚才", "上面", "前面", "前文", "上一条", "上一个", "上一轮", "这个", "那个", "这条", "那条",
-        "继续", "展开", "补充", "详细", "细说", "进一步", "为什么", "怎么做", "怎么理解", "还有呢"
-    );
-
     private final ChatRagProperties properties;
 
     public AnswerHistoryContextAssembler(ChatRagProperties properties) {
@@ -28,11 +23,17 @@ public class AnswerHistoryContextAssembler {
     }
 
     public AnswerHistoryContext assemble(String question, String answerRecentTranscript) {
+        return assemble(question, answerRecentTranscript, null);
+    }
+
+    public AnswerHistoryContext assemble(String question,
+                                         String answerRecentTranscript,
+                                         QueryUnderstandingResult queryUnderstanding) {
         String normalizedQuestion = safeText(question);
         String recentUserContext = extractRecentUserQuestions(answerRecentTranscript);
         int totalBudget = Math.max(1, properties.getAnswerHistoryMaxChars());
         boolean hasRecentContext = StrUtil.isNotBlank(recentUserContext);
-        boolean followUpQuestion = looksLikeFollowUpQuestion(normalizedQuestion, hasRecentContext);
+        boolean followUpQuestion = looksLikeFollowUpQuestion(normalizedQuestion, hasRecentContext, queryUnderstanding);
 
         if (!followUpQuestion || !hasRecentContext) {
             return emptyContext(totalBudget, followUpQuestion);
@@ -87,20 +88,19 @@ public class AnswerHistoryContextAssembler {
         return builder.toString().trim();
     }
 
-    private boolean looksLikeFollowUpQuestion(String normalizedQuestion, boolean hasRecentContext) {
+    private boolean looksLikeFollowUpQuestion(String normalizedQuestion,
+                                              boolean hasRecentContext,
+                                              QueryUnderstandingResult queryUnderstanding) {
         if (!hasRecentContext || StrUtil.isBlank(normalizedQuestion)) {
             return false;
         }
-        if (FOLLOW_UP_HINTS.stream().anyMatch(normalizedQuestion::contains)) {
+        QueryType queryType = queryUnderstanding == null || queryUnderstanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : queryUnderstanding.getQueryType();
+        if (queryType == QueryType.FOLLOW_UP) {
             return true;
         }
-        if (normalizedQuestion.matches(".*第\\s*[0-9一二三四五六七八九十百]+\\s*(条|点|项).*")) {
-            return true;
-        }
-        if (normalizedQuestion.length() <= 12) {
-            return true;
-        }
-        return normalizedQuestion.length() <= 18 && (normalizedQuestion.endsWith("呢") || normalizedQuestion.endsWith("吗"));
+        return false;
     }
 
     private String renderRecentContext(String recentUserContext, int budget) {

@@ -6,6 +6,8 @@ import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.model.SubQuestionChannelTrace;
@@ -531,36 +533,57 @@ public class RagRetrievalEngine {
 
     private double resolveIntentMultiplier(String channelName, ConversationExecutionPlan plan) {
         RetrievalIntent intent = resolveRetrievalIntent(plan);
+        boolean suggested = isSuggestedChannel(channelName, plan);
         if (intent == RetrievalIntent.TABLE) {
             if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
-                return 1.45D;
-            }
-            if (RetrievalChannelEnum.VECTOR.getName().equals(channelName) || RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
-                return 0.9D;
+                return suggested ? 1.16D : 1.08D;
             }
         }
         if (intent == RetrievalIntent.GRAPH_RAG) {
             if (RetrievalChannelEnum.GRAPH_RAG.getName().equals(channelName)) {
-                return 1.4D;
-            }
-            if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
-                return 1.05D;
+                return suggested ? 1.16D : 1.08D;
             }
         }
         if (intent == RetrievalIntent.RAPTOR) {
             if (RetrievalChannelEnum.RAPTOR.getName().equals(channelName)) {
-                return 1.4D;
-            }
-            if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
-                return 1.1D;
+                return suggested ? 1.16D : 1.08D;
             }
         }
         if (intent == RetrievalIntent.STRUCTURE) {
             if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName) || RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
-                return 1.1D;
+                return 1.05D;
             }
         }
+        if (suggested) {
+            return 1.04D;
+        }
         return 1D;
+    }
+
+    private boolean isSuggestedChannel(String channelName, ConversationExecutionPlan plan) {
+        QueryUnderstandingResult queryUnderstanding = plan == null ? null : plan.getQueryUnderstanding();
+        if (queryUnderstanding == null || queryUnderstanding.getChannels() == null || queryUnderstanding.getChannels().isEmpty()) {
+            return false;
+        }
+        RetrievalIntent channelIntent = channelIntent(channelName);
+        return channelIntent != null && queryUnderstanding.getChannels().contains(channelIntent);
+    }
+
+    private RetrievalIntent channelIntent(String channelName) {
+        if (RetrievalChannelEnum.TABLE.getName().equals(channelName)) {
+            return RetrievalIntent.TABLE;
+        }
+        if (RetrievalChannelEnum.GRAPH_RAG.getName().equals(channelName)) {
+            return RetrievalIntent.GRAPH_RAG;
+        }
+        if (RetrievalChannelEnum.RAPTOR.getName().equals(channelName)) {
+            return RetrievalIntent.RAPTOR;
+        }
+        if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)
+            || RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+            return RetrievalIntent.GENERAL;
+        }
+        return null;
     }
 
     private void mergeGraphRagMetadata(CandidateHolder holder, Document candidate) {
@@ -714,7 +737,7 @@ public class RagRetrievalEngine {
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME) ? 0.08D : 0D;
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY) ? 0.06D : 0D;
         boost += containsAnyMetadataTerm(document, terms, DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS) ? 0.06D : 0D;
-        boost += chunkTypeBoost(document, terms);
+        boost += chunkTypeBoost(document);
         boost += graphRankMetadataBoost(document);
         return Math.min(boost, hybridMaxMetadataBoost());
     }
@@ -727,18 +750,16 @@ public class RagRetrievalEngine {
         return terms.stream().anyMatch(term -> term.length() >= 2 && metadataText.contains(term));
     }
 
-    private double chunkTypeBoost(Document document, List<String> terms) {
+    private double chunkTypeBoost(Document document) {
         String chunkType = normalizeBoostText(safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE)));
         if (chunkType.isBlank()) {
             return 0D;
         }
-        String queryText = String.join(" ", terms);
-        if ("table".equals(chunkType) && (queryText.contains("表") || queryText.contains("字段") || queryText.contains("数据"))) {
-            return 0.08D;
+        if ("table".equals(chunkType)) {
+            return 0.03D;
         }
-        if (("image".equals(chunkType) || "figure".equals(chunkType))
-            && (queryText.contains("图") || queryText.contains("图片") || queryText.contains("截图"))) {
-            return 0.08D;
+        if ("image".equals(chunkType) || "figure".equals(chunkType)) {
+            return 0.02D;
         }
         return 0D;
     }
@@ -800,9 +821,6 @@ public class RagRetrievalEngine {
         if (GRAPH_RAG_ACTION_RELATION_TYPES.contains(relationType)) {
             return true;
         }
-        if (resolveRetrievalIntent(plan) == RetrievalIntent.GRAPH_RAG) {
-            return true;
-        }
         return GRAPH_RAG_WEAK_RELATION_TYPES.contains(relationType)
             && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
     }
@@ -857,41 +875,24 @@ public class RagRetrievalEngine {
     }
 
     private boolean shouldReserveCrossDocumentCommunityEvidence(ConversationExecutionPlan plan) {
-        String normalized = normalizeBoostText(joinSections(
-            plan == null ? "" : plan.getOriginalQuestion(),
-            plan == null ? "" : plan.getAgentQuestion(),
-            plan == null ? "" : plan.getRewriteQuestion(),
-            plan == null ? "" : plan.getRetrievalQuestion(),
-            plan == null || plan.getRetrievalSubQuestions() == null ? "" : String.join(" ", plan.getRetrievalSubQuestions()),
-            plan == null || plan.getNavigationDecision() == null || plan.getNavigationDecision().getQueryContextHints() == null
-                ? "" : String.join(" ", plan.getNavigationDecision().getQueryContextHints()),
-            plan == null || plan.getHistoryPlanningContext() == null || plan.getHistoryPlanningContext().getQueryContextHints() == null
-                ? "" : String.join(" ", plan.getHistoryPlanningContext().getQueryContextHints())
-        ));
-        if (normalized.isBlank()) {
+        if (plan == null) {
             return false;
         }
-        boolean hasCommunitySignal = normalized.contains("community")
-            || normalized.contains("communities")
-            || normalized.contains("社区")
-            || normalized.contains("社群")
-            || normalized.contains("群组")
-            || normalized.contains("cluster")
-            || normalized.contains("clusters");
-        boolean hasReportSignal = normalized.contains("report")
-            || normalized.contains("summary")
-            || normalized.contains("overview")
-            || normalized.contains("总结")
-            || normalized.contains("报告")
-            || normalized.contains("概览")
-            || normalized.contains("摘要");
-        boolean hasGraphScopeSignal = normalized.contains("graphrag")
-            || normalized.contains("graph")
-            || normalized.contains("图谱")
-            || normalized.contains("知识图谱")
-            || normalized.contains("跨文档")
-            || normalized.contains("全局");
-        return hasCommunitySignal && (hasReportSignal || hasGraphScopeSignal);
+        RetrievalIntent intent = resolveRetrievalIntent(plan);
+        if (intent == RetrievalIntent.GRAPH_RAG || intent == RetrievalIntent.RAPTOR) {
+            return true;
+        }
+        QueryUnderstandingResult queryUnderstanding = plan.getQueryUnderstanding();
+        if (queryUnderstanding == null) {
+            return false;
+        }
+        QueryType queryType = queryUnderstanding.getQueryType();
+        if (queryType == QueryType.GRAPH_RELATION || queryType == QueryType.GLOBAL_SUMMARY) {
+            return true;
+        }
+        List<RetrievalIntent> channels = queryUnderstanding.getChannels();
+        return channels != null
+            && (channels.contains(RetrievalIntent.GRAPH_RAG) || channels.contains(RetrievalIntent.RAPTOR));
     }
 
     private double graphRagEvidenceBudgetPriority(Document document, ConversationExecutionPlan plan) {
@@ -937,8 +938,8 @@ public class RagRetrievalEngine {
         if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))) {
             priority += 0.35D;
         }
-        if (resolveRetrievalIntent(plan) == RetrievalIntent.GRAPH_RAG) {
-            priority += 0.25D;
+        if (isSuggestedChannel(RetrievalChannelEnum.GRAPH_RAG.getName(), plan)) {
+            priority += 0.08D;
         }
         Double qualityScore = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE));
         if (qualityScore != null) {

@@ -20,7 +20,9 @@ public enum RetrievalChannelEnum {
 
     GRAPH_RAG(5, "graph-rag", "GraphRAG 图谱检索"),
 
-    RAPTOR(6, "raptor", "RAPTOR 层级摘要检索");
+    RAPTOR(6, "raptor", "RAPTOR 层级摘要检索"),
+
+    STRUCTURE(7, "structure", "文档结构图检索");
 
     @Getter
     private final int code;

@@ -11,6 +11,8 @@ import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
@@ -36,7 +38,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -47,18 +48,6 @@ import java.util.Set;
 @Slf4j
 @Service
 public class ChatPreparationOrchestrator {
-
-    private static final Set<String> CAPABILITY_HINTS = Set.of(
-        "你都能干什么", "你能做什么", "你可以做什么", "你会什么", "你是谁", "怎么用你", "你能帮我什么"
-    );
-
-    private static final Set<String> OPEN_CHAT_HINTS = Set.of(
-        "天气", "温度", "下雨", "新闻", "股价", "汇率", "热搜", "今天", "明天", "最新", "现在"
-    );
-
-    private static final Set<String> CHITCHAT_HINTS = Set.of(
-        "你好", "您好", "hello", "hi", "谢谢", "感谢", "再见", "拜拜"
-    );
 
     private final ChatRagProperties properties;
     private final ConversationMemoryService conversationMemoryService;
@@ -124,7 +113,8 @@ public class ChatPreparationOrchestrator {
         String historySummary = buildPlanningHistory(memoryContext, historyPlanningContext);
         AnswerHistoryContext answerHistoryContext = buildAnswerHistoryContext(
             question,
-            memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript()
+            memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
+            null
         );
 
         boolean requiresCurrentDateAnchoring = TimeSensitiveQueryHelper.requiresCurrentDateAnchoring(question);
@@ -267,7 +257,14 @@ public class ChatPreparationOrchestrator {
             : traceRecorder.startStage(ConversationTraceStageCode.ROUTE, ExecutionMode.RETRIEVAL.name(), "正在判定图查询还是混合检索。", null);
         DocumentNavigationDecision navigationDecision;
         try {
-            navigationDecision = documentQuestionRouter.route(routedDocumentId, question, rewriteResult);
+            navigationDecision = documentQuestionRouter.route(
+                routedDocumentId,
+                question,
+                rewriteResult,
+                historySummary,
+                memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript()
+            );
+            QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
             if (traceRecorder != null) {
                 traceRecorder.completeStage(routeStage, "执行路由完成。", Map.of(
                     "executionMode", navigationDecision == null || navigationDecision.getExecutionMode() == null ? "" : navigationDecision.getExecutionMode().name(),
@@ -278,6 +275,7 @@ public class ChatPreparationOrchestrator {
                     "retrievalIntent", navigationDecision == null || navigationDecision.getRetrievalIntent() == null
                         ? RetrievalIntent.GENERAL.name()
                         : navigationDecision.getRetrievalIntent().name(),
+                    "queryUnderstanding", buildQueryUnderstandingTrace(queryUnderstanding),
                     "navigationSummary", navigationDecision == null ? "" : StrUtil.blankToDefault(navigationDecision.getSummaryText(), "")
                 ));
             }
@@ -302,6 +300,12 @@ public class ChatPreparationOrchestrator {
         RetrievalIntent retrievalIntent = navigationDecision == null || navigationDecision.getRetrievalIntent() == null
             ? RetrievalIntent.GENERAL
             : navigationDecision.getRetrievalIntent();
+        QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
+        AnswerHistoryContext routedAnswerHistoryContext = buildAnswerHistoryContext(
+            question,
+            memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
+            queryUnderstanding
+        );
 
         log.info("聊天编排完成: conversationId={}, chatMode={}, originalQuestion='{}', rewriteQuestion='{}', retrievalQuestion='{}', executionMode={}, retrievalIntent={}, targetSection='{}'",
             conversationId,
@@ -313,10 +317,11 @@ public class ChatPreparationOrchestrator {
             retrievalIntent,
             navigationDecision == null || navigationDecision.getStructureAnchor() == null ? "" : safeText(navigationDecision.getStructureAnchor().getTargetSectionHint()));
 
-        return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
+        return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, routedAnswerHistoryContext, currentDate, currentDateText,
             requiresCurrentDateAnchoring, requiresFreshSearch)
             .mode(executionMode)
             .navigationDecision(navigationDecision)
+            .queryUnderstanding(queryUnderstanding)
             .retrievalIntent(retrievalIntent)
             .rewriteQuestion(rewriteQuestion)
             .rewriteSubQuestions(rewriteSubQuestions)
@@ -327,8 +332,25 @@ public class ChatPreparationOrchestrator {
             .selectedTaskId(routedTaskId)
             .retrievalDocumentIds(routedDocumentIds)
             .retrievalTaskIds(routedTaskIds)
-            .noEvidenceReply(buildDocumentModeNoEvidenceReply(question, requiresFreshSearch))
+            .noEvidenceReply(buildDocumentModeNoEvidenceReply(requiresFreshSearch, queryUnderstanding))
             .build();
+    }
+
+    private Map<String, Object> buildQueryUnderstandingTrace(QueryUnderstandingResult queryUnderstanding) {
+        if (queryUnderstanding == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("queryType", queryUnderstanding.getQueryType() == null ? "" : queryUnderstanding.getQueryType().name());
+        snapshot.put("channels", queryUnderstanding.getChannels() == null ? List.of() : queryUnderstanding.getChannels().stream().map(Enum::name).toList());
+        snapshot.put("entities", queryUnderstanding.getEntities() == null ? List.of() : queryUnderstanding.getEntities());
+        snapshot.put("sectionAnchors", queryUnderstanding.getSectionAnchors() == null ? List.of() : queryUnderstanding.getSectionAnchors());
+        snapshot.put("tableOps", queryUnderstanding.getTableOps() == null ? List.of() : queryUnderstanding.getTableOps());
+        snapshot.put("negativeBoundary", queryUnderstanding.isNegativeBoundary());
+        snapshot.put("confidence", queryUnderstanding.getConfidence());
+        snapshot.put("source", StrUtil.blankToDefault(queryUnderstanding.getSource(), ""));
+        snapshot.put("reasons", queryUnderstanding.getReasons() == null ? List.of() : queryUnderstanding.getReasons());
+        return snapshot;
     }
 
     private ConversationExecutionPlan.ConversationExecutionPlanBuilder basePlan(String question,
@@ -548,8 +570,9 @@ public class ChatPreparationOrchestrator {
     }
 
     private AnswerHistoryContext buildAnswerHistoryContext(String question,
-                                                           String answerRecentTranscript) {
-        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript);
+                                                           String answerRecentTranscript,
+                                                           QueryUnderstandingResult queryUnderstanding) {
+        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript, queryUnderstanding);
     }
 
     private String buildStructuredPlanningHistory(HistoryPlanningContext historyPlanningContext) {
@@ -870,37 +893,20 @@ public class ChatPreparationOrchestrator {
             .toLowerCase(Locale.ROOT);
     }
 
-    private String buildDocumentModeNoEvidenceReply(String question, boolean requiresFreshSearch) {
-        String normalizedQuestion = safeText(question);
-        if (looksLikeCapabilityQuestion(normalizedQuestion)) {
+    private String buildDocumentModeNoEvidenceReply(boolean requiresFreshSearch,
+                                                    QueryUnderstandingResult queryUnderstanding) {
+        QueryType queryType = queryUnderstanding == null || queryUnderstanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : queryUnderstanding.getQueryType();
+        if (queryType == QueryType.CAPABILITY_QUERY) {
             return "当前你正在使用“当前文档问答”模式，我会优先基于所选文档回答。这个问题更像是在询问助手能力，而不是当前文档内容。如果你想了解我能做什么，请切换到“开放式提问”模式。";
         }
-        if (looksLikeOpenChatQuestion(normalizedQuestion, requiresFreshSearch)) {
+        if (queryType == QueryType.OPEN_CHAT || requiresFreshSearch) {
             return "当前你正在使用“当前文档问答”模式，我只能基于所选文档回答。这个问题更像开放式提问，例如天气、最新信息或一般交流。如果你想继续问这类问题，请切换到“开放式提问”模式。";
         }
         return StrUtil.blankToDefault(
             properties.getNoEvidenceReply(),
             "当前没有从当前文档中检索到足够证据，暂时不能给出可靠结论。你可以补充更具体的标题、术语或关键词后再试。"
         );
-    }
-
-    private boolean looksLikeCapabilityQuestion(String normalizedQuestion) {
-        if (StrUtil.isBlank(normalizedQuestion)) {
-            return false;
-        }
-        return CAPABILITY_HINTS.stream().anyMatch(normalizedQuestion::contains);
-    }
-
-    private boolean looksLikeOpenChatQuestion(String normalizedQuestion, boolean requiresFreshSearch) {
-        if (StrUtil.isBlank(normalizedQuestion)) {
-            return false;
-        }
-        if (requiresFreshSearch) {
-            return true;
-        }
-        if (OPEN_CHAT_HINTS.stream().anyMatch(normalizedQuestion::contains)) {
-            return true;
-        }
-        return CHITCHAT_HINTS.stream().anyMatch(normalizedQuestion::contains);
     }
 }

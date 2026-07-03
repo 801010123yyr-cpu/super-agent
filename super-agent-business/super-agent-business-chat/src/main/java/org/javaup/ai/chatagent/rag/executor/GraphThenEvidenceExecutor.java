@@ -9,6 +9,7 @@ import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.service.GraphAnswerRenderer;
 import org.javaup.ai.chatagent.rag.service.StructureGraphQueryEngine;
 import org.javaup.ai.chatagent.rag.support.ExecutorEventSupport;
+import org.javaup.ai.chatagent.rag.support.StructureRetrievalObservationRecorder;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.chatagent.service.TaskInfo;
 import org.javaup.ai.chatagent.support.StreamEventWriter;
@@ -31,13 +32,16 @@ public class GraphThenEvidenceExecutor implements ConversationExecutor {
 
     private final StructureGraphQueryEngine structureGraphQueryEngine;
     private final GraphAnswerRenderer graphAnswerRenderer;
+    private final StructureRetrievalObservationRecorder structureRetrievalObservationRecorder;
     private final StreamEventWriter streamEventWriter;
 
     public GraphThenEvidenceExecutor(StructureGraphQueryEngine structureGraphQueryEngine,
                                      GraphAnswerRenderer graphAnswerRenderer,
+                                     StructureRetrievalObservationRecorder structureRetrievalObservationRecorder,
                                      StreamEventWriter streamEventWriter) {
         this.structureGraphQueryEngine = structureGraphQueryEngine;
         this.graphAnswerRenderer = graphAnswerRenderer;
+        this.structureRetrievalObservationRecorder = structureRetrievalObservationRecorder;
         this.streamEventWriter = streamEventWriter;
     }
 
@@ -66,6 +70,7 @@ public class GraphThenEvidenceExecutor implements ConversationExecutor {
             decision.getStructureAnchor().getStructureNodeId(),
             decision.getItemAnchor() == null ? null : decision.getItemAnchor().getItemIndex(),
             decision.getSummaryText());
+        long queryStartTimeMs = System.currentTimeMillis();
         GraphQueryResult graphResult = buildGraphResult(plan, decision);
         if (!hasGraphEvidence(graphResult, decision)) {
             log.info("GRAPH_THEN_EVIDENCE 证据校验失败: documentId={}, sectionNodeId={}, notes={}",
@@ -82,6 +87,7 @@ public class GraphThenEvidenceExecutor implements ConversationExecutor {
             return Flux.just(StrUtil.blankToDefault(plan.getNoEvidenceReply(), "当前没有足够证据支持明确回答。"));
         }
         String answer = graphAnswerRenderer.renderGraphAnswer(mode(), decision, graphResult);
+        structureRetrievalObservationRecorder.record(taskInfo.traceRecorder(), plan, graphResult, answer, queryStartTimeMs);
         log.info("GRAPH_THEN_EVIDENCE 执行完成: documentId={}, sectionNodeId={}, targetSection='{}', targetItemIndex={}, answerLength={}",
             plan.getSelectedDocumentId(),
             decision.getStructureAnchor().getStructureNodeId(),
@@ -103,35 +109,20 @@ public class GraphThenEvidenceExecutor implements ConversationExecutor {
         Long documentId = plan.getSelectedDocumentId();
         Long sectionNodeId = decision.getStructureAnchor().getStructureNodeId();
         Integer itemIndex = decision.getItemAnchor() == null ? null : decision.getItemAnchor().getItemIndex();
-        String itemKeyword = extractItemKeyword(plan.getOriginalQuestion(), decision);
+        String itemKeyword = extractItemKeyword(decision);
         return structureGraphQueryEngine.buildGraphResult(documentId, sectionNodeId, itemIndex, itemKeyword);
     }
 
-    private String extractItemKeyword(String question, DocumentNavigationDecision decision) {
-        String normalized = StrUtil.blankToDefault(question, "");
-        if (normalized.contains("哪一步") || normalized.contains("哪一项")) {
-            String keyword = normalized.contains("哪一步")
-                ? StrUtil.subAfter(normalized, "哪一步", false)
-                : StrUtil.subAfter(normalized, "哪一项", false);
-            keyword = keyword
-                .replace("要求", "")
-                .replace("需要", "")
-                .replace("执行", "")
-                .replace("进行", "")
-                .replace("包含", "")
-                .replace("的是", "")
-                .replace("是什么", "")
-                .replace("什么", "")
-                .replace("？", "")
-                .replace("?", "")
-                .replace("。", "")
-                .replace("，", "")
-                .trim();
-            if (StrUtil.isNotBlank(keyword)) {
-                return keyword;
-            }
+    private String extractItemKeyword(DocumentNavigationDecision decision) {
+        if (decision == null || decision.getQueryContextHints() == null) {
+            return "";
         }
-        return "";
+        return decision.getQueryContextHints().stream()
+            .filter(StrUtil::isNotBlank)
+            .map(String::trim)
+            .filter(hint -> !hint.matches("第\\s*[0-9一二三四五六七八九十百]+\\s*(步|条|点|项|个)"))
+            .findFirst()
+            .orElse("");
     }
 
     private boolean hasGraphEvidence(GraphQueryResult graphResult, DocumentNavigationDecision decision) {

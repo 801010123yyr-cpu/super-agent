@@ -35,13 +35,10 @@ public class GraphAnswerRenderer {
 
     private String renderGraphOnly(DocumentNavigationDecision decision, GraphQueryResult graphResult) {
         DocumentNavigationAction action = decision == null ? null : decision.getNavigationAction();
-        String question = decision == null || decision.getRetrievalPlan() == null
-            ? ""
-            : StrUtil.blankToDefault(decision.getRetrievalPlan().getRetrievalQuestion(), "");
-        if (action == DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP || asksAdjacency(question)) {
+        if (action == DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP) {
             return renderAdjacency(graphResult);
         }
-        if (asksChildren(question) || !graphResult.getChildren().isEmpty()) {
+        if (action == DocumentNavigationAction.CHILD_SECTION_DESCEND || !graphResult.getChildren().isEmpty()) {
             return renderChildren(graphResult.getTargetSection(), graphResult.getChildren());
         }
         return graphResult.getTargetSection().displayTitle();
@@ -65,7 +62,7 @@ public class GraphAnswerRenderer {
         if (StrUtil.isNotBlank(targetSection.getContentText())) {
             return "“" + targetSection.displayTitle() + "”中的相关内容如下：\n" + targetSection.getContentText().trim();
         }
-        return targetSection.displayTitle();
+        return "";
     }
 
     private String renderAdjacency(GraphQueryResult graphResult) {
@@ -108,18 +105,4 @@ public class GraphAnswerRenderer {
         return section == null ? "未找到相邻章节" : "“" + section.displayTitle() + "”";
     }
 
-    private boolean asksAdjacency(String question) {
-        return question.contains("上一节")
-            || question.contains("下一节")
-            || question.contains("前一节")
-            || question.contains("后一节")
-            || question.contains("属于哪个章节");
-    }
-
-    private boolean asksChildren(String question) {
-        return question.contains("包含哪些章节")
-            || question.contains("都包含哪些章节")
-            || question.contains("有哪些小节")
-            || question.contains("有哪些章节");
-    }
 }

@@ -9,6 +9,7 @@ import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.service.GraphAnswerRenderer;
 import org.javaup.ai.chatagent.rag.service.StructureGraphQueryEngine;
 import org.javaup.ai.chatagent.rag.support.ExecutorEventSupport;
+import org.javaup.ai.chatagent.rag.support.StructureRetrievalObservationRecorder;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.chatagent.service.TaskInfo;
 import org.javaup.ai.chatagent.support.StreamEventWriter;
@@ -33,13 +34,16 @@ public class GraphOnlyExecutor implements ConversationExecutor {
 
     private final StructureGraphQueryEngine structureGraphQueryEngine;
     private final GraphAnswerRenderer graphAnswerRenderer;
+    private final StructureRetrievalObservationRecorder structureRetrievalObservationRecorder;
     private final StreamEventWriter streamEventWriter;
 
     public GraphOnlyExecutor(StructureGraphQueryEngine structureGraphQueryEngine,
                              GraphAnswerRenderer graphAnswerRenderer,
+                             StructureRetrievalObservationRecorder structureRetrievalObservationRecorder,
                              StreamEventWriter streamEventWriter) {
         this.structureGraphQueryEngine = structureGraphQueryEngine;
         this.graphAnswerRenderer = graphAnswerRenderer;
+        this.structureRetrievalObservationRecorder = structureRetrievalObservationRecorder;
         this.streamEventWriter = streamEventWriter;
     }
 
@@ -65,6 +69,7 @@ public class GraphOnlyExecutor implements ConversationExecutor {
             : taskInfo.traceRecorder().startStage(ConversationTraceStageCode.GRAPH_QUERY, mode().name(), "正在执行结构图查询。", null);
         Long documentId = plan.getSelectedDocumentId();
         Long sectionNodeId = decision.getStructureAnchor().getStructureNodeId();
+        long queryStartTimeMs = System.currentTimeMillis();
         log.info("GRAPH_ONLY 执行开始: documentId={}, sectionNodeId={}, action={}, navigationSummary='{}'",
             documentId,
             sectionNodeId,
@@ -88,6 +93,7 @@ public class GraphOnlyExecutor implements ConversationExecutor {
                 .build();
         }
         String answer = graphAnswerRenderer.renderGraphAnswer(mode(), decision, graphResult);
+        structureRetrievalObservationRecorder.record(taskInfo.traceRecorder(), plan, graphResult, answer, queryStartTimeMs);
         log.info("GRAPH_ONLY 执行完成: documentId={}, sectionNodeId={}, targetSection='{}', answerLength={}",
             documentId,
             sectionNodeId,

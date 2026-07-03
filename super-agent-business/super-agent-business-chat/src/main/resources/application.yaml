@@ -135,7 +135,7 @@ app:
       # 是否启用 GraphRAG LLM 受控社区报告增强。
       # 开启后，LLM 只能基于 Java 提供的实体/关系/evidence 上下文返回 JSON 报告建议；
       # Java 会校验 evidenceIds 白名单、置信度和必填字段，通过后才写入 KgCommunity。
-      enabled: ${SUPER_AGENT_GRAPH_RAG_COMMUNITY_REPORT_ENABLED:false}
+      enabled: ${SUPER_AGENT_GRAPH_RAG_COMMUNITY_REPORT_ENABLED:true}
     entity-resolution:
       # 是否启用 GraphRAG LLM 受控实体消歧增强。
       # 开启后，LLM 只能基于 Java 提供的候选实体返回 mergeGroups 建议；

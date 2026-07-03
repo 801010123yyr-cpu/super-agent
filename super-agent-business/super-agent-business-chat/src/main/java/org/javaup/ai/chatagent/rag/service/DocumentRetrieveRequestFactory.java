@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.manage.model.DocumentRetrieveFilters;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.springframework.stereotype.Component;
@@ -12,7 +14,6 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,27 +30,15 @@ public class DocumentRetrieveRequestFactory {
     private static final Pattern YEAR_PATTERN = Pattern.compile("\\b(20\\d{2})\\b");
     private static final Pattern SECTION_PATTERN = Pattern.compile("(第\\s*[一二三四五六七八九十百0-9]+\\s*[章节条部分])|(附录\\s*[A-Za-z一二三四五六七八九十0-9]+)");
 
-    private static final List<String> DOCUMENT_NAME_HINTS = List.of(
-        "部署手册", "配置手册", "操作手册", "用户手册", "快速开始", "接入指南", "FAQ", "常见问题",
-        "说明文档", "说明书", "规范", "指南", "手册", "文档"
-    );
-
-    private static final List<String> BUSINESS_CATEGORY_HINTS = List.of(
-        "流程", "规则", "操作手册", "部署", "配置", "接入", "协议", "故障", "排错", "规范", "说明"
-    );
-
-    private static final List<String> DOCUMENT_TAG_HINTS = List.of(
-        "2024", "2025", "2026", "部署", "配置", "接入", "协议", "FAQ", "故障", "排错", "升级", "兼容"
-    );
-
     public DocumentRetrieveRequest build(String subQuestion, ConversationExecutionPlan plan, int topK) {
         String normalizedQuestion = StrUtil.blankToDefault(subQuestion, "").trim();
         QueryAugmentation augmentation = buildQueryAugmentation(
             normalizedQuestion,
             plan.getHistoryPlanningContext(),
-            plan.getNavigationDecision()
+            plan.getNavigationDecision(),
+            plan.getQueryUnderstanding()
         );
-        DocumentRetrieveFilters filters = buildFilters(normalizedQuestion);
+        DocumentRetrieveFilters filters = buildFilters(normalizedQuestion, plan.getQueryUnderstanding());
         DocumentRetrieveRequest request = new DocumentRetrieveRequest(
             normalizedQuestion,
             augmentation.retrievalQuery(),
@@ -78,7 +67,8 @@ public class DocumentRetrieveRequestFactory {
 
     private QueryAugmentation buildQueryAugmentation(String normalizedQuestion,
                                                      HistoryPlanningContext historyPlanningContext,
-                                                     DocumentNavigationDecision navigationDecision) {
+                                                     DocumentNavigationDecision navigationDecision,
+                                                     QueryUnderstandingResult queryUnderstanding) {
         if (StrUtil.isBlank(normalizedQuestion)) {
             return new QueryAugmentation("", List.of());
         }
@@ -90,7 +80,7 @@ public class DocumentRetrieveRequestFactory {
                 .distinct()
                 .limit(4)
                 .toList();
-        if (!looksLikeShortFollowUp(normalizedQuestion)
+        if (!shouldInheritHistoryContext(normalizedQuestion, queryUnderstanding)
             || historyPlanningContext == null
             || historyPlanningContext.getQueryContextHints() == null
             || historyPlanningContext.getQueryContextHints().isEmpty()) {
@@ -119,11 +109,10 @@ public class DocumentRetrieveRequestFactory {
         return new QueryAugmentation(retrievalQuery, queryContextHints.stream().distinct().limit(8).toList());
     }
 
-    private DocumentRetrieveFilters buildFilters(String question) {
+    private DocumentRetrieveFilters buildFilters(String question, QueryUnderstandingResult queryUnderstanding) {
         if (StrUtil.isBlank(question)) {
             return DocumentRetrieveFilters.builder().build();
         }
-        String normalized = question.toLowerCase(Locale.ROOT);
         LinkedHashSet<String> documentNameHints = new LinkedHashSet<>();
         LinkedHashSet<String> businessCategoryHints = new LinkedHashSet<>();
         LinkedHashSet<String> documentTagHints = new LinkedHashSet<>();
@@ -142,21 +131,7 @@ public class DocumentRetrieveRequestFactory {
             }
         }
 
-        for (String hint : DOCUMENT_NAME_HINTS) {
-            if (normalized.contains(hint.toLowerCase(Locale.ROOT))) {
-                documentNameHints.add(hint);
-            }
-        }
-        for (String hint : BUSINESS_CATEGORY_HINTS) {
-            if (normalized.contains(hint.toLowerCase(Locale.ROOT))) {
-                businessCategoryHints.add(hint);
-            }
-        }
-        for (String hint : DOCUMENT_TAG_HINTS) {
-            if (normalized.contains(hint.toLowerCase(Locale.ROOT))) {
-                documentTagHints.add(hint);
-            }
-        }
+        collectQueryUnderstandingHints(queryUnderstanding, documentNameHints, businessCategoryHints, documentTagHints, sectionPathHints);
 
         return DocumentRetrieveFilters.builder()
             .documentNameHints(new ArrayList<>(documentNameHints))
@@ -167,17 +142,42 @@ public class DocumentRetrieveRequestFactory {
             .build();
     }
 
-    private boolean looksLikeShortFollowUp(String question) {
+    private void collectQueryUnderstandingHints(QueryUnderstandingResult queryUnderstanding,
+                                                LinkedHashSet<String> documentNameHints,
+                                                LinkedHashSet<String> businessCategoryHints,
+                                                LinkedHashSet<String> documentTagHints,
+                                                LinkedHashSet<String> sectionPathHints) {
+        if (queryUnderstanding == null) {
+            return;
+        }
+        if (queryUnderstanding.getEntities() != null) {
+            queryUnderstanding.getEntities().stream()
+                .filter(StrUtil::isNotBlank)
+                .map(String::trim)
+                .limit(8)
+                .forEach(entity -> {
+                    documentNameHints.add(entity);
+                    businessCategoryHints.add(entity);
+                    documentTagHints.add(entity);
+                });
+        }
+        if (queryUnderstanding.getSectionAnchors() != null) {
+            queryUnderstanding.getSectionAnchors().stream()
+                .filter(StrUtil::isNotBlank)
+                .map(item -> item.replaceAll("\\s+", ""))
+                .limit(8)
+                .forEach(sectionPathHints::add);
+        }
+    }
+
+    private boolean shouldInheritHistoryContext(String question, QueryUnderstandingResult queryUnderstanding) {
         if (StrUtil.isBlank(question)) {
             return false;
         }
-        return question.length() < 12
-            || question.contains("它")
-            || question.contains("这个")
-            || question.contains("那个")
-            || question.contains("刚才")
-            || question.contains("前面")
-            || question.contains("上面");
+        QueryType queryType = queryUnderstanding == null || queryUnderstanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : queryUnderstanding.getQueryType();
+        return queryType == QueryType.FOLLOW_UP;
     }
 
     private List<String> extractMeaningfulTerms(String question) {

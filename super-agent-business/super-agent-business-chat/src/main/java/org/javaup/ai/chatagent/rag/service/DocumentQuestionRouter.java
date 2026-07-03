@@ -1,25 +1,21 @@
 package org.javaup.ai.chatagent.rag.service;
 
 import cn.hutool.core.util.StrUtil;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.chatagent.rag.model.ConversationItemAnchor;
 import org.javaup.ai.chatagent.rag.model.ConversationStructureAnchor;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationAction;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalQuestionPlan;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
-import org.javaup.ai.chatagent.service.ObservedChatModelService;
 import org.javaup.ai.manage.model.graph.GraphSection;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentStructureGraphService;
-import org.javaup.ai.prompt.PromptTemplateNames;
-import org.javaup.ai.prompt.PromptTemplateService;
-import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
@@ -53,132 +49,31 @@ public class DocumentQuestionRouter {
     private static final Pattern ORDINAL_REFERENCE_PATTERN = Pattern.compile("第\\s*([0-9一二三四五六七八九十百]+)\\s*(条|点|项|个)");
     // 匹配用户用引号包住的标题短语，例如“上线观察”，用于结构节点定位。
     private static final Pattern QUOTED_TEXT_PATTERN = Pattern.compile("[“\"']([^”\"']{2,40})[”\"']");
-    // 兼容 LLM 偶尔输出代码块或解释文字时，从返回文本里抽取 JSON 对象。
-    private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{.*}", Pattern.DOTALL);
-
-    // LLM 兜底分类只有达到该阈值，才允许进入 GRAPH_ONLY，低置信统一回退 RAG。
-    private static final double GRAPH_ONLY_INTENT_CONFIDENCE_THRESHOLD = 0.75D;
-
-    private static final List<String> ADJACENCY_HINTS = List.of(
-        "上一节", "下一节", "前一节", "后一节", "上一章", "下一章", "前一章", "后一章",
-        "上章", "下章", "上一个章节", "下一个章节", "属于哪个章节", "章节位置"
-    );
-
-    private static final List<String> OUTLINE_HINTS = List.of(
-        "包含哪些章节", "都包含哪些章节", "有哪些章节", "有哪些小节", "包含哪些小节", "章节列表", "目录"
-    );
-
-    // 强目录展开表达可以直接判定为 outline，比单独的“目录/下面/有哪些”更不容易误伤正文问题。
-    private static final List<String> OUTLINE_EXPLICIT_HINTS = List.of(
-        "包含哪些章节", "都包含哪些章节", "有哪些章节", "有哪些小节", "包含哪些小节",
-        "章节列表", "小节列表", "子章节", "子小节", "下级章节", "展开目录", "列出目录"
-    );
-
-    private static final List<String> ITEM_HINTS = List.of(
-        "哪一步", "哪一项", "第几步", "第几项", "具体步骤", "步骤中的"
-    );
-
-    // 强分析词基本都要求解释、推理或对比，命中后通常不适合直接图直答。
-    private static final List<String> ANALYTIC_STRONG_HINTS = List.of(
-        "为什么", "原因", "可能原因", "影响", "区别", "对比", "比较",
-        "如何理解", "怎么理解", "说明了什么", "是否意味着", "是否说明", "分析", "解释"
-    );
-
-    // “关系/关联”这类词有歧义：可能是内容关系，也可能只是章节前后或上下级关系。
-    private static final List<String> ANALYTIC_WEAK_RELATION_HINTS = List.of(
-        "关系", "关联", "联系", "相关"
-    );
-
-    // 这些短语说明用户问的是目录结构关系，不应被“关系/关联”误判为分析型问题。
-    private static final List<String> STRUCTURAL_RELATION_HINTS = List.of(
-        "前后关系", "相邻关系", "上下级关系", "父子关系", "目录关系", "章节关系",
-        "所属关系", "位置关系", "顺序关系", "属于哪个章节", "上级章节", "下级章节",
-        "同级章节", "父章节", "子章节"
-    );
-
-    // 这些分析型词会要求模型解释原因、影响或对比，不适合直接用结构图回答。
-    private static final List<String> GRAPH_ONLY_BLOCKING_ANALYTIC_HINTS = List.of(
-        "为什么", "原因", "可能原因", "影响", "区别", "对比", "比较",
-        "如何理解", "怎么理解", "说明了什么", "是否意味着", "是否说明", "分析", "解释"
-    );
-
-    // 这些正文诉求词说明用户想看内容证据，而不是只看章节前后或目录层级。
-    private static final List<String> GRAPH_ONLY_CONTENT_HINTS = List.of(
-        "内容", "要求", "规定", "流程", "步骤", "处理", "执行",
-        "怎么做", "讲了什么", "写了什么", "说了什么"
-    );
-
-    // 方向/层级线索用于决定是否值得调用 LLM 兜底分类，其中包含一些较模糊的自然表达。
-    private static final List<String> GRAPH_ONLY_DIRECTION_HINTS = List.of(
-        "前面", "后面", "上面", "下面", "之前", "之后", "此前", "随后", "后续", "接着", "紧接着",
-        "往前", "往后",
-        "前一个", "后一个", "上一个", "下一个", "上一", "下一", "相邻", "前后",
-        "顺序", "位置", "属于", "上级", "父章节", "同级"
-    );
-
-    // 明确相邻关系词才用于本地高置信规则，避免“后面是什么”这类歧义问题被规则过早截断。
-    private static final List<String> GRAPH_ONLY_EXPLICIT_ADJACENCY_HINTS = List.of(
-        "前一个", "后一个", "上一个", "下一个", "前一", "后一", "上一", "下一", "相邻",
-        "前后", "顺序", "位置", "属于", "上级", "父章节", "同级"
-    );
-
-    // 这些结构对象词说明问题对象可能是章节、标题、目录节点，而不是普通正文片段。
-    private static final List<String> GRAPH_ONLY_STRUCTURE_OBJECT_HINTS = List.of(
-        "章节", "小节", "这章", "这节", "这部分", "这一章", "该章", "本章", "标题", "目录", "部分", "模块", "节点", "条目"
-    );
-
-    // 这些动作词用于识别“展开目录 / 查看下级章节”类 GRAPH_ONLY 问题。
-    private static final List<String> GRAPH_ONLY_OUTLINE_ACTION_HINTS = List.of(
-        "下面", "下级", "子章节", "子小节", "子项", "展开", "包含哪些", "包括哪些",
-        "有哪些", "列出", "列一下", "组成", "目录"
-    );
-
-    // 这些代词本身不够判断结构意图，但可以和方向/层级词一起触发 LLM 兜底分类。
-    private static final List<String> GRAPH_ONLY_PRONOUN_ANCHOR_HINTS = List.of(
-        "这个", "该", "它", "刚才", "上述", "上面"
-    );
-
-    // 当问题问“哪一节/哪个章节”等目标时，歧义方向词可以提升为高置信相邻章节判断。
-    private static final List<String> GRAPH_ONLY_ADJACENCY_ANSWER_HINTS = List.of(
-        "哪一节", "哪一章", "哪个章节", "哪个小节", "哪个标题", "哪部分", "哪块"
-    );
-
-    private static final List<String> TABLE_INTENT_HINTS = List.of(
-        "表格", "表中", "清单", "列表", "统计", "合计", "总计", "总数", "数量",
-        "求和", "平均", "最大", "最小", "最高", "最低", "排名", "分组", "金额", "费用"
-    );
-
-    private static final List<String> GRAPH_RAG_INTENT_HINTS = List.of(
-        "实体", "关系", "关联", "联系", "依赖", "调用", "影响", "负责", "谁负责",
-        "上下游", "属于", "包含", "连接", "之间", "路径", "链路"
-    );
-
-    private static final List<String> RAPTOR_INTENT_HINTS = List.of(
-        "总结", "概括", "归纳", "整体", "全文", "全局", "主要内容", "主题",
-        "核心观点", "总体", "跨章节", "综合说明", "梳理一下"
-    );
 
     private final DocumentStructureGraphService graphService;
     private final ObjectProvider<DocumentNavigationIndexService> navigationIndexServiceProvider;
-    private final ObservedChatModelService observedChatModelService;
-    private final PromptTemplateService promptTemplateService;
-    private final ObjectMapper objectMapper;
+    private final QueryUnderstandingService queryUnderstandingService;
 
+    @Autowired
     public DocumentQuestionRouter(DocumentStructureGraphService graphService,
                                   ObjectProvider<DocumentNavigationIndexService> navigationIndexServiceProvider,
-                                  ObservedChatModelService observedChatModelService,
-                                  PromptTemplateService promptTemplateService,
-                                  ObjectMapper objectMapper) {
+                                  ObjectProvider<QueryUnderstandingService> queryUnderstandingServiceProvider) {
         this.graphService = graphService;
         this.navigationIndexServiceProvider = navigationIndexServiceProvider;
-        this.observedChatModelService = observedChatModelService;
-        this.promptTemplateService = promptTemplateService;
-        this.objectMapper = objectMapper;
+        this.queryUnderstandingService = queryUnderstandingServiceProvider == null ? null : queryUnderstandingServiceProvider.getIfAvailable();
     }
 
     public DocumentNavigationDecision route(Long documentId,
                                             String originalQuestion,
                                             RagRewriteResult rewriteResult) {
+        return route(documentId, originalQuestion, rewriteResult, "", "");
+    }
+
+    public DocumentNavigationDecision route(Long documentId,
+                                            String originalQuestion,
+                                            RagRewriteResult rewriteResult,
+                                            String historySummary,
+                                            String answerRecentTranscript) {
         String rewrittenQuestion = firstNonBlank(
             rewriteResult == null ? "" : rewriteResult.getRewrittenQuestion(),
             originalQuestion
@@ -186,13 +81,15 @@ public class DocumentQuestionRouter {
         List<String> subQuestions = normalizeSubQuestions(rewriteResult, rewrittenQuestion);
         RetrievalQuestionPlan retrievalPlan = new RetrievalQuestionPlan(rewrittenQuestion, subQuestions);
         String routeText = (safeText(originalQuestion) + " " + rewrittenQuestion).trim();
+        QueryUnderstandingResult queryUnderstanding = understandQuery(originalQuestion, rewrittenQuestion, subQuestions, historySummary, answerRecentTranscript);
         DocumentQuestionIntentDecision questionIntent = detectQuestionIntent(
             routeText,
             originalQuestion,
             rewrittenQuestion,
-            subQuestions
+            subQuestions,
+            queryUnderstanding
         );
-        RetrievalIntent retrievalIntent = detectRetrievalIntent(routeText, questionIntent);
+        RetrievalIntent retrievalIntent = detectRetrievalIntent(questionIntent, queryUnderstanding);
         GraphOnlyIntentDecision graphOnlyIntent = questionIntent.graphOnlyIntent();
         boolean analyticQuestion = questionIntent.analytic();
         
@@ -205,6 +102,7 @@ public class DocumentQuestionRouter {
                 section,
                 null,
                 retrievalPlan,
+                queryUnderstanding,
                 retrievalIntent,
                 graphOnlyIntent.reason()
             );
@@ -221,6 +119,7 @@ public class DocumentQuestionRouter {
                 section,
                 itemIndex,
                 retrievalPlan,
+                queryUnderstanding,
                 retrievalIntent,
                 "编号项或步骤型问题走图定位取证"
             );
@@ -240,6 +139,7 @@ public class DocumentQuestionRouter {
             assistedSection,
             itemIndex,
             retrievalPlan,
+            queryUnderstanding,
             retrievalIntent,
             assistedSection == null
                 ? "普通文档问题走混合检索"
@@ -252,6 +152,7 @@ public class DocumentQuestionRouter {
                                                      GraphSection section,
                                                      Integer itemIndex,
                                                      RetrievalQuestionPlan retrievalPlan,
+                                                     QueryUnderstandingResult queryUnderstanding,
                                                      RetrievalIntent retrievalIntent,
                                                      String reason) {
         ConversationStructureAnchor structureAnchor = section == null
@@ -267,9 +168,11 @@ public class DocumentQuestionRouter {
         ConversationItemAnchor itemAnchor = itemIndex == null
             ? null
             : ConversationItemAnchor.builder().itemIndex(itemIndex).build();
-        List<String> queryHints = buildQueryHints(retrievalPlan, section, itemIndex);
+        List<String> queryHints = buildQueryHints(retrievalPlan, queryUnderstanding, section, itemIndex);
         String summaryText = "mode=" + mode.name()
             + "; retrievalIntent=" + (retrievalIntent == null ? RetrievalIntent.GENERAL.name() : retrievalIntent.name())
+            + "; queryType=" + (queryUnderstanding == null || queryUnderstanding.getQueryType() == null ? "" : queryUnderstanding.getQueryType().name())
+            + "; queryUnderstandingSource=" + (queryUnderstanding == null ? "" : StrUtil.blankToDefault(queryUnderstanding.getSource(), ""))
             + "; reason=" + reason
             + "; section=" + (section == null ? "" : section.displayTitle())
             + "; itemIndex=" + (itemIndex == null ? "" : itemIndex);
@@ -285,6 +188,7 @@ public class DocumentQuestionRouter {
             .structureAnchor(structureAnchor)
             .itemAnchor(itemAnchor)
             .retrievalPlan(retrievalPlan)
+            .queryUnderstanding(queryUnderstanding)
             .retrievalIntent(retrievalIntent == null ? RetrievalIntent.GENERAL : retrievalIntent)
             .summaryText(summaryText)
             .queryContextHints(queryHints)
@@ -292,22 +196,56 @@ public class DocumentQuestionRouter {
             .build();
     }
 
-    private RetrievalIntent detectRetrievalIntent(String routeText, DocumentQuestionIntentDecision questionIntent) {
-        String question = safeText(routeText);
+    private QueryUnderstandingResult understandQuery(String originalQuestion,
+                                                     String rewrittenQuestion,
+                                                     List<String> subQuestions,
+                                                     String historySummary,
+                                                     String answerRecentTranscript) {
+        if (queryUnderstandingService == null) {
+            return null;
+        }
+        return queryUnderstandingService.understand(originalQuestion, rewrittenQuestion, subQuestions, historySummary, answerRecentTranscript);
+    }
+
+    private RetrievalIntent detectRetrievalIntent(DocumentQuestionIntentDecision questionIntent,
+                                                  QueryUnderstandingResult queryUnderstanding) {
         if (questionIntent != null && questionIntent.graphOnlyIntent() != null && questionIntent.graphOnlyIntent().matched()) {
             return RetrievalIntent.STRUCTURE;
         }
-        if (containsAny(question, TABLE_INTENT_HINTS)) {
+        if (questionIntent != null && questionIntent.outline()) {
+            return RetrievalIntent.STRUCTURE;
+        }
+        return primaryRetrievalIntent(queryUnderstanding);
+    }
+
+    private RetrievalIntent primaryRetrievalIntent(QueryUnderstandingResult queryUnderstanding) {
+        if (queryUnderstanding == null) {
+            return RetrievalIntent.GENERAL;
+        }
+        QueryType queryType = queryUnderstanding.getQueryType() == null ? QueryType.DOCUMENT_QA : queryUnderstanding.getQueryType();
+        if (queryType == QueryType.STRUCTURE_NAVIGATION) {
+            return RetrievalIntent.STRUCTURE;
+        }
+        if (queryType == QueryType.TABLE_QUERY) {
             return RetrievalIntent.TABLE;
         }
-        if (containsAny(question, RAPTOR_INTENT_HINTS)) {
-            return RetrievalIntent.RAPTOR;
-        }
-        if (containsAny(question, GRAPH_RAG_INTENT_HINTS)
-            && (questionIntent == null || !questionIntent.contentQuestion() || questionIntent.analytic())) {
+        if (queryType == QueryType.GRAPH_RELATION) {
             return RetrievalIntent.GRAPH_RAG;
         }
-        if (questionIntent != null && questionIntent.outline()) {
+        if (queryType == QueryType.GLOBAL_SUMMARY) {
+            return RetrievalIntent.RAPTOR;
+        }
+        List<RetrievalIntent> channels = queryUnderstanding.getChannels() == null ? List.of() : queryUnderstanding.getChannels();
+        if (channels.contains(RetrievalIntent.TABLE)) {
+            return RetrievalIntent.TABLE;
+        }
+        if (channels.contains(RetrievalIntent.GRAPH_RAG)) {
+            return RetrievalIntent.GRAPH_RAG;
+        }
+        if (channels.contains(RetrievalIntent.RAPTOR)) {
+            return RetrievalIntent.RAPTOR;
+        }
+        if (channels.contains(RetrievalIntent.STRUCTURE)) {
             return RetrievalIntent.STRUCTURE;
         }
         return RetrievalIntent.GENERAL;
@@ -319,29 +257,49 @@ public class DocumentQuestionRouter {
     private DocumentQuestionIntentDecision detectQuestionIntent(String routeText,
                                                                 String originalQuestion,
                                                                 String rewrittenQuestion,
-                                                                List<String> subQuestions) {
+                                                                List<String> subQuestions,
+                                                                QueryUnderstandingResult queryUnderstanding) {
         String normalized = safeText(routeText);
         if (normalized.isBlank()) {
             return noQuestionIntent("问题为空，跳过路由意图判断。");
         }
-        
-        boolean itemLookup = looksExplicitItemQuestion(normalized);
-        boolean analyticQuestion = looksAnalyticQuestion(normalized);
-        boolean outlineQuestion = asksOutline(normalized);
-        boolean contentQuestion = looksGraphOnlyExcludedContentQuestion(normalized);
-        boolean structureHint = mentionsStructure(normalized) || hasGraphOnlyAnchor(normalized) || outlineQuestion;
-        GraphOnlyIntentDecision graphOnlyIntent = noGraphOnlyIntent("本地规则未命中结构图直答意图。");
-        
+
         boolean hasMultipleSubQuestions = subQuestions != null && subQuestions.size() > 1;
-        boolean canTryGraphOnlyRules = !hasMultipleSubQuestions
-            && !itemLookup
-            && !contentQuestion
-            && !(analyticQuestion && looksGraphOnlyBlockingAnalyticQuestion(normalized));
-        if (canTryGraphOnlyRules) {
-            graphOnlyIntent = detectGraphOnlyIntentByRules(normalized);
+        QueryType queryType = queryUnderstanding == null || queryUnderstanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : queryUnderstanding.getQueryType();
+        boolean structureNavigation = queryType == QueryType.STRUCTURE_NAVIGATION;
+        boolean itemLookup = !hasMultipleSubQuestions && resolveExplicitItemIndex(normalized) != null;
+        boolean outlineQuestion = structureNavigation && asksOutlineByAnchors(queryUnderstanding);
+        boolean contentQuestion = queryType == QueryType.DOCUMENT_QA
+            || queryType == QueryType.GRAPH_RELATION
+            || queryType == QueryType.GLOBAL_SUMMARY
+            || queryType == QueryType.TABLE_QUERY;
+        boolean analyticQuestion = contentQuestion && queryType != QueryType.TABLE_QUERY;
+        boolean structureHint = structureNavigation
+            || itemLookup
+            || hasExplicitSectionAnchor(normalized)
+            || hasSectionAnchor(queryUnderstanding);
+        GraphOnlyIntentDecision graphOnlyIntent = noGraphOnlyIntent("本地规则未命中结构图直答意图。");
+
+        if (!hasMultipleSubQuestions && structureNavigation && !itemLookup && !contentQuestion) {
+            graphOnlyIntent = detectGraphOnlyIntentByControlledPlan(normalized, queryUnderstanding);
         }
         
         if (graphOnlyIntent.matched()) {
+            if (!isStrictGraphOnlyAllowed(graphOnlyIntent, normalized, contentQuestion, analyticQuestion)) {
+                return buildQuestionIntentDecision(
+                    noGraphOnlyIntent("命中正文问答诉求，结构线索仅作为混合检索软提示。"),
+                    analyticQuestion,
+                    outlineQuestion,
+                    itemLookup,
+                    true,
+                    contentQuestion,
+                    0.72D,
+                    "正文问答不走结构图直答。",
+                    "local-rules"
+                );
+            }
             return buildQuestionIntentDecision(
                 graphOnlyIntent,
                 analyticQuestion,
@@ -367,106 +325,46 @@ public class DocumentQuestionRouter {
             "local-rules"
         );
        
-        if (!shouldUseLlmQuestionIntent(normalized, subQuestions, localDecision)) {
-            return localDecision;
-        }
- 
-        return classifyQuestionIntentWithModel(originalQuestion, rewrittenQuestion, normalized, localDecision);
+        return localDecision;
     }
 
+    private boolean isStrictGraphOnlyAllowed(GraphOnlyIntentDecision graphOnlyIntent,
+                                             String question,
+                                             boolean contentQuestion,
+                                             boolean analyticQuestion) {
+        if (graphOnlyIntent == null || !graphOnlyIntent.matched()) {
+            return false;
+        }
+        if (graphOnlyIntent.action() == DocumentNavigationAction.CHILD_SECTION_DESCEND) {
+            return !contentQuestion && !analyticQuestion;
+        }
+        if (graphOnlyIntent.action() == DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP) {
+            return !contentQuestion && !analyticQuestion && hasExplicitSectionAnchor(question);
+        }
+        return false;
+    }
 
-    private GraphOnlyIntentDecision detectGraphOnlyIntentByRules(String question) {
-        if (asksAdjacency(question)) {
-            return new GraphOnlyIntentDecision(
-                true,
-                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
-                "命中明确相邻章节表达，结构型问题直接走图查询。",
-                1.0D,
-                "rule-adjacency-hint"
-            );
-        }
-        boolean hasSectionCode = SECTION_CODE_PATTERN.matcher(question).find();
-        boolean hasChineseSectionReference = CHINESE_SECTION_REFERENCE_PATTERN.matcher(question).find();
-        boolean hasSectionReference = hasSectionCode || hasChineseSectionReference;
-        boolean hasExplicitAdjacencyCue = containsAny(question, GRAPH_ONLY_EXPLICIT_ADJACENCY_HINTS);
-        boolean hasAdjacencyAnswerTarget = containsAny(question, GRAPH_ONLY_ADJACENCY_ANSWER_HINTS);
-        boolean hasAdjacencyIntentCue = hasExplicitAdjacencyCue || hasAdjacencyAnswerTarget;
-        boolean sectionReferenceAdjacencyMatched = hasSectionReference && hasAdjacencyIntentCue;
-        if (sectionReferenceAdjacencyMatched) {
-            return new GraphOnlyIntentDecision(
-                true,
-                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
-                "命中章节编号与方向词组合，结构相邻关系问题走图查询。",
-                0.92D,
-                "rule-section-code-direction"
-            );
-        }
-        boolean hasQuotedTitle = QUOTED_TEXT_PATTERN.matcher(question).find();
-        boolean quotedTitleAdjacencyMatched = hasQuotedTitle && hasAdjacencyIntentCue;
-        if (quotedTitleAdjacencyMatched) {
-            return new GraphOnlyIntentDecision(
-                true,
-                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
-                "命中标题锚点与方向词组合，结构相邻关系问题走图查询。",
-                0.9D,
-                "rule-quoted-title-direction"
-            );
-        }
-        if (containsAny(question, GRAPH_ONLY_PRONOUN_ANCHOR_HINTS)
-            && containsAny(question, GRAPH_ONLY_DIRECTION_HINTS)
-            && containsAny(question, GRAPH_ONLY_ADJACENCY_ANSWER_HINTS)) {
-            return new GraphOnlyIntentDecision(
-                true,
-                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
-                "命中指代锚点、方向词和章节答案目标，结构相邻关系问题走图查询。",
-                0.88D,
-                "rule-pronoun-direction-answer"
-            );
-        }
-        if (containsAny(question, GRAPH_ONLY_STRUCTURE_OBJECT_HINTS)
-            && containsAny(question, GRAPH_ONLY_EXPLICIT_ADJACENCY_HINTS)) {
-            return new GraphOnlyIntentDecision(
-                true,
-                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
-                "命中结构对象与方向关系组合，结构相邻关系问题走图查询。",
-                0.86D,
-                "rule-structure-direction"
-            );
-        }
-        if (asksOutline(question)) {
+    private GraphOnlyIntentDecision detectGraphOnlyIntentByControlledPlan(String question,
+                                                                         QueryUnderstandingResult queryUnderstanding) {
+        if (asksOutlineByAnchors(queryUnderstanding)) {
             return new GraphOnlyIntentDecision(
                 true,
                 DocumentNavigationAction.CHILD_SECTION_DESCEND,
-                "命中明确章节展开表达，结构型问题直接走图查询。",
-                1.0D,
-                "rule-outline-hint"
+                "QueryUnderstanding 判定为高置信目录/结构导航。",
+                confidence(queryUnderstanding),
+                "query-understanding-structure-outline"
             );
         }
-        if (hasGraphOnlyAnchor(question) && containsAny(question, GRAPH_ONLY_OUTLINE_ACTION_HINTS)) {
+        if (hasExplicitSectionAnchor(question) || hasSectionAnchor(queryUnderstanding)) {
             return new GraphOnlyIntentDecision(
                 true,
-                DocumentNavigationAction.CHILD_SECTION_DESCEND,
-                "命中章节锚点与目录展开动作，结构型问题直接走图查询。",
-                0.86D,
-                "rule-outline-action"
+                DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP,
+                "QueryUnderstanding 判定为高置信章节导航。",
+                confidence(queryUnderstanding),
+                "query-understanding-structure-navigation"
             );
         }
         return noGraphOnlyIntent("本地规则未命中结构图直答意图。");
-    }
-    
-    private boolean looksExplicitItemQuestion(String question) {
-        if (asksItemLookup(question)) {
-            return true;
-        }
-        return resolveExplicitItemIndex(question) != null;
-    }
-    
-    private boolean looksGraphOnlyBlockingAnalyticQuestion(String question) {
-        return containsAny(question, GRAPH_ONLY_BLOCKING_ANALYTIC_HINTS);
-    }
-    
-    private boolean looksGraphOnlyExcludedContentQuestion(String question) {
-        return containsAny(question, GRAPH_ONLY_CONTENT_HINTS);
     }
     
     private DocumentQuestionIntentDecision buildQuestionIntentDecision(GraphOnlyIntentDecision graphOnlyIntent,
@@ -494,30 +392,7 @@ public class DocumentQuestionRouter {
         );
     }
     
-    private boolean shouldUseLlmQuestionIntent(String question,
-                                               List<String> subQuestions,
-                                               DocumentQuestionIntentDecision localDecision) {
-        boolean hasMultipleSubQuestions = subQuestions != null && subQuestions.size() > 1;
-        if (hasMultipleSubQuestions) {
-            return false;
-        }
-        boolean localDecisionAlreadyEvidenceBased = localDecision.itemLookup() || localDecision.contentQuestion();
-        if (localDecisionAlreadyEvidenceBased) {
-            return false;
-        }
-        boolean localDecisionIsStrongAnalytic = localDecision.analytic() && looksGraphOnlyBlockingAnalyticQuestion(question);
-        if (localDecisionIsStrongAnalytic) {
-            return false;
-        }
-        boolean hasStructuralNavigationClue = hasGraphOnlyAnchor(question) && hasGraphOnlyNavigationCue(question);
-        if (hasStructuralNavigationClue) {
-            return true;
-        }
-        return containsAny(question, ANALYTIC_WEAK_RELATION_HINTS)
-            && localDecision.structureHint();
-    }
-    
-    private boolean hasGraphOnlyAnchor(String question) {
+    private boolean hasExplicitSectionAnchor(String question) {
         if (SECTION_CODE_PATTERN.matcher(question).find()) {
             return true;
         }
@@ -527,144 +402,7 @@ public class DocumentQuestionRouter {
         if (QUOTED_TEXT_PATTERN.matcher(question).find()) {
             return true;
         }
-        if (containsAny(question, GRAPH_ONLY_STRUCTURE_OBJECT_HINTS)) {
-            return true;
-        }
-        return containsAny(question, GRAPH_ONLY_PRONOUN_ANCHOR_HINTS);
-    }
-    
-    private boolean hasGraphOnlyNavigationCue(String question) {
-        if (containsAny(question, GRAPH_ONLY_DIRECTION_HINTS)) {
-            return true;
-        }
-        return containsAny(question, GRAPH_ONLY_OUTLINE_ACTION_HINTS);
-    }
-    
-    private DocumentQuestionIntentDecision classifyQuestionIntentWithModel(String originalQuestion,
-                                                                           String rewrittenQuestion,
-                                                                           String routeText,
-                                                                           DocumentQuestionIntentDecision localDecision) {
-        try {
-            // prompt 模板仍然复用 document-graph-only-intent，只是扩展为路由意图 JSON，避免新增第二次 LLM 调用。
-            String prompt = promptTemplateService.render(PromptTemplateNames.DOCUMENT_GRAPH_ONLY_INTENT, Map.of(
-                "originalQuestion", StrUtil.blankToDefault(originalQuestion, ""),
-                "rewrittenQuestion", StrUtil.blankToDefault(rewrittenQuestion, ""),
-                "routeText", StrUtil.blankToDefault(routeText, "")
-            ));
-            String raw = observedChatModelService.callText(
-                "document_question_intent",
-                null,
-                prompt,
-                buildGraphOnlyIntentCallOptions(),
-                null
-            );
-            DocumentQuestionIntentDecision decision = parseQuestionIntentResult(raw, localDecision);
-            log.info("文档路由 LLM 兜底判断完成: graphOnly={}, action={}, analytic={}, outline={}, itemLookup={}, structureHint={}, confidence={}, source={}, reason={}, raw={}",
-                decision.graphOnlyIntent().matched(),
-                decision.graphOnlyIntent().action(),
-                decision.analytic(),
-                decision.outline(),
-                decision.itemLookup(),
-                decision.structureHint(),
-                decision.confidence(),
-                decision.source(),
-                decision.reason(),
-                StrUtil.blankToDefault(raw, ""));
-            return decision;
-        }
-        catch (Exception exception) {
-            log.warn("文档路由 LLM 兜底判断失败，回退本地路由意图: question='{}', message={}",
-                routeText,
-                exception.getMessage());
-            return localDecision;
-        }
-    }
-
-
-    private ChatOptions buildGraphOnlyIntentCallOptions() {
-        return OpenAiChatOptions.builder()
-            .temperature(0.0D)
-            .topP(0.1D)
-            .extraBody(Map.of("thinking", false))
-            .build();
-    }
-
-
-    private DocumentQuestionIntentDecision parseQuestionIntentResult(String raw,
-                                                                     DocumentQuestionIntentDecision localDecision) {
-        if (StrUtil.isBlank(raw)) {
-            return localDecision;
-        }
-        try {
-            JsonNode root = objectMapper.readTree(extractJsonObject(raw));
-            String intentType = root.path("intent_type").asText("").trim().toUpperCase(Locale.ROOT);
-            double confidence = normalizeConfidence(root.path("confidence").asDouble(0D));
-            if (confidence < GRAPH_ONLY_INTENT_CONFIDENCE_THRESHOLD) {
-                return localDecision;
-            }
-            String reason = StrUtil.blankToDefault(root.path("reason").asText(""), "LLM 判定完成。");
-            boolean graphOnly = root.path("graph_only").asBoolean(false);
-            DocumentNavigationAction action = resolveModelGraphOnlyAction(root.path("action").asText(""), intentType);
-            boolean analytic = root.path("analytic").asBoolean("ANALYTIC".equals(intentType));
-            boolean outline = root.path("outline").asBoolean("OUTLINE".equals(intentType));
-            boolean itemLookup = root.path("item_lookup").asBoolean("ITEM_LOOKUP".equals(intentType));
-            boolean contentQuestion = root.path("content_qa").asBoolean("CONTENT_QA".equals(intentType));
-            boolean structureHint = root.path("structure_hint").asBoolean(
-                localDecision.structureHint() || "ADJACENCY".equals(intentType) || "OUTLINE".equals(intentType)
-            );
-            boolean modelGraphOnlyAccepted = graphOnly && action != null
-                && ("ADJACENCY".equals(intentType) || "OUTLINE".equals(intentType));
-            GraphOnlyIntentDecision graphOnlyIntent = modelGraphOnlyAccepted
-                ? new GraphOnlyIntentDecision(
-                    true,
-                    action,
-                    "LLM 兜底判定为结构图直答: " + reason,
-                    confidence,
-                    "llm-" + intentType
-                )
-                : noGraphOnlyIntent("LLM 判定不适合结构图直答: " + reason);
-            return buildQuestionIntentDecision(
-                graphOnlyIntent,
-                analytic,
-                outline,
-                itemLookup,
-                structureHint,
-                contentQuestion,
-                confidence,
-                "LLM 兜底路由意图判断: " + reason,
-                "llm-" + intentType
-            );
-        }
-        catch (Exception exception) {
-            log.warn("解析文档路由 LLM 输出失败: raw='{}', message={}", raw, exception.getMessage());
-            return localDecision;
-        }
-    }
-    
-    private DocumentNavigationAction resolveModelGraphOnlyAction(String rawAction, String intentType) {
-        String action = StrUtil.blankToDefault(rawAction, "").trim().toUpperCase(Locale.ROOT);
-        if (DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP.name().equals(action)) {
-            return DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP;
-        }
-        if (DocumentNavigationAction.CHILD_SECTION_DESCEND.name().equals(action)) {
-            return DocumentNavigationAction.CHILD_SECTION_DESCEND;
-        }
-        if ("ADJACENCY".equals(intentType)) {
-            return DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP;
-        }
-        if ("OUTLINE".equals(intentType)) {
-            return DocumentNavigationAction.CHILD_SECTION_DESCEND;
-        }
-        return null;
-    }
-    
-    private String extractJsonObject(String raw) {
-        // 正常情况下 prompt 已要求只返回 JSON；这里是为了防御模型偶发的格式漂移。
-        Matcher matcher = JSON_OBJECT_PATTERN.matcher(raw.trim());
-        if (matcher.find()) {
-            return matcher.group();
-        }
-        return raw.trim();
+        return false;
     }
     
     private double normalizeConfidence(double confidence) {
@@ -673,16 +411,6 @@ public class DocumentQuestionRouter {
             return confidence / 100D;
         }
         return confidence;
-    }
-    
-    private boolean containsAny(String text, List<String> candidates) {
-        String normalized = safeText(text);
-        if (normalized.isBlank() || candidates == null || candidates.isEmpty()) {
-            return false;
-        }
-        return candidates.stream()
-            .filter(StrUtil::isNotBlank)
-            .anyMatch(normalized::contains);
     }
     
     private GraphOnlyIntentDecision noGraphOnlyIntent(String reason) {
@@ -712,6 +440,11 @@ public class DocumentQuestionRouter {
             return byCode;
         }
 
+        GraphSection byQuotedTitle = resolveByQuotedTitle(documentId, originalQuestion, rewrittenQuestion);
+        if (byQuotedTitle != null) {
+            return byQuotedTitle;
+        }
+
         GraphSection indexedMatch = resolveByNavigationIndex(documentId, originalQuestion, rewrittenQuestion);
         if (indexedMatch != null) {
             return indexedMatch;
@@ -730,6 +463,35 @@ public class DocumentQuestionRouter {
             GraphSection section = graphService.findSectionByCode(documentId, matcher.group(1));
             if (section != null) {
                 return section;
+            }
+        }
+        return null;
+    }
+
+    private GraphSection resolveByQuotedTitle(Long documentId, String originalQuestion, String rewrittenQuestion) {
+        LinkedHashSet<String> quotedPhrases = new LinkedHashSet<>();
+        collectQuotedPhrases(quotedPhrases, originalQuestion);
+        collectQuotedPhrases(quotedPhrases, rewrittenQuestion);
+        if (quotedPhrases.isEmpty()) {
+            return null;
+        }
+        List<GraphSection> sections = graphService.listSections(documentId);
+        if (sections == null || sections.isEmpty()) {
+            return null;
+        }
+        for (String phrase : quotedPhrases) {
+            String normalizedPhrase = normalize(phrase);
+            if (normalizedPhrase.length() < 2) {
+                continue;
+            }
+            GraphSection exactTitle = sections.stream()
+                .filter(section -> normalize(section.getTitle()).equals(normalizedPhrase)
+                    || normalize(section.displayTitle()).equals(normalizedPhrase)
+                    || normalize(section.getSectionPath()).endsWith(normalizedPhrase))
+                .findFirst()
+                .orElse(null);
+            if (exactTitle != null) {
+                return exactTitle;
             }
         }
         return null;
@@ -804,14 +566,6 @@ public class DocumentQuestionRouter {
         addCleanPhrase(phrases, rewrittenQuestion);
         addQuotedPhrases(phrases, originalQuestion);
         addQuotedPhrases(phrases, rewrittenQuestion);
-        for (String marker : ADJACENCY_HINTS) {
-            addTextBefore(phrases, originalQuestion, marker);
-            addTextBefore(phrases, rewrittenQuestion, marker);
-        }
-        for (String marker : OUTLINE_HINTS) {
-            addTextBefore(phrases, originalQuestion, marker);
-            addTextBefore(phrases, rewrittenQuestion, marker);
-        }
         Matcher stepMatcher = STEP_REFERENCE_PATTERN.matcher(safeText(originalQuestion) + " " + safeText(rewrittenQuestion));
         while (stepMatcher.find()) {
             String all = stepMatcher.group();
@@ -836,6 +590,10 @@ public class DocumentQuestionRouter {
     }
 
     private void addQuotedPhrases(LinkedHashSet<String> phrases, String text) {
+        collectQuotedPhrases(phrases, text);
+    }
+
+    private void collectQuotedPhrases(LinkedHashSet<String> phrases, String text) {
         Matcher matcher = QUOTED_TEXT_PATTERN.matcher(safeText(text));
         while (matcher.find()) {
             addCleanPhrase(phrases, matcher.group(1));
@@ -880,63 +638,33 @@ public class DocumentQuestionRouter {
             .trim();
     }
 
-    private boolean asksAdjacency(String question) {
-        return ADJACENCY_HINTS.stream().anyMatch(question::contains);
-    }
-
-    private boolean asksOutline(String question) {
-        String normalized = safeText(question);
-        if (normalized.isBlank()) {
-            return false;
-        }
-        if (looksGraphOnlyExcludedContentQuestion(normalized)) {
-            return false;
-        }
-        boolean hasExplicitOutlineExpression = containsAny(normalized, OUTLINE_EXPLICIT_HINTS);
-        boolean hasStructureAnchor = hasGraphOnlyAnchor(normalized);
-        boolean hasOutlineAction = containsAny(normalized, GRAPH_ONLY_OUTLINE_ACTION_HINTS);
-        return hasExplicitOutlineExpression || (hasStructureAnchor && hasOutlineAction);
-    }
-
-    private boolean asksItemLookup(String question) {
-        return ITEM_HINTS.stream().anyMatch(question::contains);
-    }
-
-    private boolean looksAnalyticQuestion(String question) {
-        String normalized = safeText(question);
-        if (normalized.isBlank()) {
-            return false;
-        }
-        if (containsAny(normalized, ANALYTIC_STRONG_HINTS)) {
-            return true;
-        }
-        if (!containsAny(normalized, ANALYTIC_WEAK_RELATION_HINTS)) {
-            return false;
-        }
-        return !looksStructuralRelationQuestion(normalized);
-    }
-
-    private boolean looksStructuralRelationQuestion(String question) {
-        String normalized = safeText(question);
-        if (containsAny(normalized, STRUCTURAL_RELATION_HINTS)) {
-            return true;
-        }
-        if (!hasGraphOnlyAnchor(normalized)) {
-            return false;
-        }
-        return containsAny(normalized, GRAPH_ONLY_EXPLICIT_ADJACENCY_HINTS)
-            || containsAny(normalized, GRAPH_ONLY_DIRECTION_HINTS);
-    }
-
     private boolean mentionsStructure(String question) {
         String normalized = safeText(question);
-        return normalized.contains("章节")
-            || normalized.contains("小节")
-            || normalized.contains("条目")
-            || normalized.contains("步骤")
-            || normalized.contains("项")
-            || QUOTED_TEXT_PATTERN.matcher(normalized).find()
+        return QUOTED_TEXT_PATTERN.matcher(normalized).find()
             || SECTION_CODE_PATTERN.matcher(normalized).find();
+    }
+
+    private boolean asksOutlineByAnchors(QueryUnderstandingResult queryUnderstanding) {
+        if (queryUnderstanding == null || queryUnderstanding.getSectionAnchors() == null) {
+            return false;
+        }
+        return queryUnderstanding.getSectionAnchors().stream()
+            .filter(StrUtil::isNotBlank)
+            .map(String::trim)
+            .anyMatch(anchor -> "目录".equals(anchor) || "章节列表".equals(anchor) || "展开目录".equals(anchor));
+    }
+
+    private boolean hasSectionAnchor(QueryUnderstandingResult queryUnderstanding) {
+        return queryUnderstanding != null
+            && queryUnderstanding.getSectionAnchors() != null
+            && queryUnderstanding.getSectionAnchors().stream().anyMatch(StrUtil::isNotBlank);
+    }
+
+    private double confidence(QueryUnderstandingResult queryUnderstanding) {
+        if (queryUnderstanding == null) {
+            return 0D;
+        }
+        return normalizeConfidence(queryUnderstanding.getConfidence());
     }
 
     private Integer resolveExplicitItemIndex(String question) {
@@ -1003,11 +731,20 @@ public class DocumentQuestionRouter {
     }
 
     private List<String> buildQueryHints(RetrievalQuestionPlan retrievalPlan,
+                                         QueryUnderstandingResult queryUnderstanding,
                                          GraphSection section,
                                          Integer itemIndex) {
         LinkedHashSet<String> hints = new LinkedHashSet<>();
         if (retrievalPlan != null) {
             hints.addAll(extractQueryHints(retrievalPlan.getRetrievalQuestion()));
+        }
+        if (queryUnderstanding != null) {
+            if (queryUnderstanding.getEntities() != null) {
+                queryUnderstanding.getEntities().forEach(item -> addHint(hints, item));
+            }
+            if (queryUnderstanding.getSectionAnchors() != null) {
+                queryUnderstanding.getSectionAnchors().forEach(item -> addHint(hints, item));
+            }
         }
         if (section != null) {
             addHint(hints, section.displayTitle());
@@ -1033,13 +770,14 @@ public class DocumentQuestionRouter {
     }
 
     private String detectFacet(String question) {
-        if (asksAdjacency(question)) {
-            return "章节位置";
-        }
-        if (asksOutline(question)) {
+        String normalized = safeText(question);
+        if (SECTION_CODE_PATTERN.matcher(normalized).find()
+            || CHINESE_SECTION_REFERENCE_PATTERN.matcher(normalized).find()
+            || QUOTED_TEXT_PATTERN.matcher(normalized).find()) {
             return "章节";
         }
-        if (asksItemLookup(question)) {
+        if (STEP_REFERENCE_PATTERN.matcher(normalized).find()
+            || ORDINAL_REFERENCE_PATTERN.matcher(normalized).find()) {
             return "步骤";
         }
         return "";

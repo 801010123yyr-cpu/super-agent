@@ -301,10 +301,10 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
         double boost = 0D;
         for (String term : terms) {
             if (term.length() >= 2 && text.contains(term)) {
-                boost += 0.08D;
+                boost += 0.03D;
             }
         }
-        return Math.min(boost, 0.32D);
+        return Math.min(boost, 0.12D);
     }
 
     private List<String> extractTerms(String question) {

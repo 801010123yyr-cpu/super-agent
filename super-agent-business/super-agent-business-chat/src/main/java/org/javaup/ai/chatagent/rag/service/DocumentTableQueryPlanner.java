@@ -24,20 +24,6 @@ public class DocumentTableQueryPlanner {
 
     private static final double ADVISOR_CONFIDENCE_THRESHOLD = 0.72D;
     private static final int ADVISOR_FILTER_LIMIT = 6;
-    private static final List<String> TABLE_INTENT_TERMS = List.of(
-        "表", "表格", "数据", "统计", "总数", "数量", "个数", "多少", "合计", "总和", "求和",
-        "汇总", "平均", "最大", "最高", "最小", "最低", "分组", "按", "每个", "各"
-    );
-    private static final List<String> ADVISOR_CUE_TERMS = List.of(
-        "筛选", "过滤", "条件", "等于", "包含", "大于", "超过", "小于", "低于",
-        "不小于", "不大于", "分别", "分类", "每个", "各", "按"
-    );
-    private static final List<String> GROUP_TERMS = List.of("按", "每个", "各", "分组", "分别", "分类");
-    private static final List<String> SUM_TERMS = List.of("合计", "总和", "求和", "总额", "累计", "汇总");
-    private static final List<String> MAX_TERMS = List.of("最大", "最高", "最多", "峰值");
-    private static final List<String> MIN_TERMS = List.of("最小", "最低", "最少");
-    private static final List<String> COUNT_TERMS = List.of("数量", "个数", "多少", "几条", "多少条", "总数", "记录数");
-    private static final List<String> FILTER_CONNECTORS = List.of("为", "是", "等于", "包含", "大于等于", "不小于", "小于等于", "不大于", "大于", "超过", "小于", "低于");
 
     private final DocumentTableQueryPlanAdvisor planAdvisor;
 
@@ -58,37 +44,40 @@ public class DocumentTableQueryPlanner {
         if (StrUtil.isBlank(question) || tables == null || tables.isEmpty()) {
             return Optional.empty();
         }
-        boolean tableQuestion = looksLikeTableQuestion(question);
-        boolean advisorCuedTableSignal = containsAny(normalize(question), ADVISOR_CUE_TERMS)
-            && mentionsKnownTableSignal(question, tables);
-        if (!tableQuestion && !advisorCuedTableSignal) {
+        Optional<ScoredPlan> advisorCandidate = askAdvisor(question, tables);
+        if (advisorCandidate.isPresent()) {
+            return Optional.of(advisorCandidate.get().plan());
+        }
+        if (planAdvisor != null) {
             return Optional.empty();
         }
-        List<ScoredPlan> candidates = buildRuleCandidates(question, tables);
-        if (shouldAskAdvisor(question, tables, candidates)) {
-            Optional<DocumentTableQueryPlanAdvice> advice;
-            try {
-                advice = planAdvisor.advise(question, tables);
-            }
-            catch (RuntimeException exception) {
-                log.warn("表格查询受控计划 advisor 失败，planner 拒绝本次表格计划: question='{}', message={}",
-                    question,
-                    exception.getMessage());
-                return Optional.empty();
-            }
-            if (advice.isEmpty()) {
-                return Optional.empty();
-            }
-            Optional<ScoredPlan> advisorCandidate = buildAdvisorCandidate(question, tables, advice.get());
-            if (advisorCandidate.isEmpty()) {
-                return Optional.empty();
-            }
-            addOrReplaceCandidate(candidates, advisorCandidate.get());
+        if (!mentionsKnownTableSignal(question, tables)) {
+            return Optional.empty();
         }
-        return candidates.stream()
+        return buildRuleCandidates(question, tables).stream()
             .filter(candidate -> candidate.score() > 0)
             .max(Comparator.comparingInt(ScoredPlan::score))
             .map(ScoredPlan::plan);
+    }
+
+    private Optional<ScoredPlan> askAdvisor(String question, List<DocumentTableDescriptor> tables) {
+        if (planAdvisor == null) {
+            return Optional.empty();
+        }
+        Optional<DocumentTableQueryPlanAdvice> advice;
+        try {
+            advice = planAdvisor.advise(question, tables);
+        }
+        catch (RuntimeException exception) {
+            log.warn("表格查询受控计划 advisor 失败，planner 拒绝本次表格计划: question='{}', message={}",
+                question,
+                exception.getMessage());
+            return Optional.empty();
+        }
+        if (advice.isEmpty()) {
+            return Optional.empty();
+        }
+        return buildAdvisorCandidate(question, tables, advice.get());
     }
 
     private List<ScoredPlan> buildRuleCandidates(String question, List<DocumentTableDescriptor> tables) {
@@ -98,25 +87,6 @@ public class DocumentTableQueryPlanner {
             plan.ifPresent(value -> candidates.add(new ScoredPlan(value, scorePlan(question, table, value.getQuery()))));
         }
         return candidates;
-    }
-
-    private boolean shouldAskAdvisor(String question,
-                                     List<DocumentTableDescriptor> tables,
-                                     List<ScoredPlan> ruleCandidates) {
-        if (planAdvisor == null) {
-            return false;
-        }
-        if (ruleCandidates.isEmpty()) {
-            return true;
-        }
-        String normalized = normalize(question);
-        boolean hasAdvisorCue = containsAny(normalized, ADVISOR_CUE_TERMS);
-        boolean hasMultipleTables = tables.stream().filter(table -> table != null && table.getTableId() != null).count() > 1;
-        boolean hasFilterCueWithoutRuleFilter = hasAdvisorCue && ruleCandidates.stream()
-            .map(ScoredPlan::plan)
-            .map(DocumentTableQueryPlan::getQuery)
-            .noneMatch(query -> query.getFilters() != null && !query.getFilters().isEmpty());
-        return hasFilterCueWithoutRuleFilter || (hasMultipleTables && hasAdvisorCue);
     }
 
     private Optional<ScoredPlan> buildAdvisorCandidate(String question,
@@ -323,10 +293,15 @@ public class DocumentTableQueryPlanner {
         if (table == null || table.getTableId() == null || table.getColumns() == null || table.getColumns().isEmpty()) {
             return Optional.empty();
         }
-        DocumentTableQuery.Operation operation = resolveOperation(question);
+        if (textMentionScore(question, table.getTitle()) <= 0
+            && textMentionScore(question, table.getSectionPath()) <= 0
+            && table.getColumns().stream().noneMatch(column -> columnMentionScore(question, column) > 0)) {
+            return Optional.empty();
+        }
+        DocumentTableQuery.Operation operation = DocumentTableQuery.Operation.COUNT;
         Optional<DocumentTableDescriptor.Column> metricColumn = resolveMetricColumn(question, table);
-        Optional<DocumentTableDescriptor.Column> groupColumn = resolveGroupColumn(question, table, metricColumn.orElse(null));
-        List<DocumentTableQuery.Filter> filters = resolveFilters(question, table);
+        Optional<DocumentTableDescriptor.Column> groupColumn = Optional.empty();
+        List<DocumentTableQuery.Filter> filters = List.of();
 
         if (operation == DocumentTableQuery.Operation.COUNT && groupColumn.isPresent()) {
             operation = DocumentTableQuery.Operation.GROUP_COUNT;
@@ -359,11 +334,6 @@ public class DocumentTableQueryPlanner {
             .build());
     }
 
-    private boolean looksLikeTableQuestion(String question) {
-        String normalized = normalize(question);
-        return TABLE_INTENT_TERMS.stream().anyMatch(normalized::contains);
-    }
-
     private boolean mentionsKnownTableSignal(String question, List<DocumentTableDescriptor> tables) {
         return tables.stream()
             .filter(table -> table != null)
@@ -371,20 +341,6 @@ public class DocumentTableQueryPlanner {
                 || textMentionScore(question, table.getSectionPath()) > 0
                 || (table.getColumns() != null && table.getColumns().stream()
                 .anyMatch(column -> columnMentionScore(question, column) > 0)));
-    }
-
-    private DocumentTableQuery.Operation resolveOperation(String question) {
-        String normalized = normalize(question);
-        if (containsAny(normalized, MAX_TERMS)) {
-            return DocumentTableQuery.Operation.MAX;
-        }
-        if (containsAny(normalized, MIN_TERMS)) {
-            return DocumentTableQuery.Operation.MIN;
-        }
-        if (containsAny(normalized, SUM_TERMS)) {
-            return DocumentTableQuery.Operation.SUM;
-        }
-        return DocumentTableQuery.Operation.COUNT;
     }
 
     private Optional<DocumentTableDescriptor.Column> resolveMetricColumn(String question, DocumentTableDescriptor table) {
@@ -397,81 +353,6 @@ public class DocumentTableQueryPlanner {
             .or(() -> table.getColumns().stream()
                 .filter(column -> "NUMBER".equalsIgnoreCase(StrUtil.blankToDefault(column.getValueType(), "")))
                 .findFirst());
-    }
-
-    private Optional<DocumentTableDescriptor.Column> resolveGroupColumn(String question,
-                                                                       DocumentTableDescriptor table,
-                                                                       DocumentTableDescriptor.Column metricColumn) {
-        String normalized = normalize(question);
-        boolean hasGroupIntent = containsAny(normalized, GROUP_TERMS);
-        if (!hasGroupIntent) {
-            return Optional.empty();
-        }
-        return table.getColumns().stream()
-            .filter(column -> metricColumn == null || !StrUtil.equals(column.getColumnName(), metricColumn.getColumnName()))
-            .map(column -> new ColumnScore(column, columnMentionScore(question, column)))
-            .filter(item -> item.score() > 0)
-            .max(Comparator.comparingInt(ColumnScore::score))
-            .map(ColumnScore::column)
-            .or(() -> table.getColumns().stream()
-                .filter(column -> !"NUMBER".equalsIgnoreCase(StrUtil.blankToDefault(column.getValueType(), "")))
-                .findFirst());
-    }
-
-    private List<DocumentTableQuery.Filter> resolveFilters(String question, DocumentTableDescriptor table) {
-        Map<String, DocumentTableQuery.Filter> filters = new LinkedHashMap<>();
-        for (DocumentTableDescriptor.Column column : table.getColumns()) {
-            String columnName = StrUtil.blankToDefault(column.getColumnName(), "");
-            if (StrUtil.isBlank(columnName)) {
-                continue;
-            }
-            for (String connector : FILTER_CONNECTORS) {
-                String rawPattern = columnName + connector;
-                int index = question.indexOf(rawPattern);
-                if (index < 0) {
-                    continue;
-                }
-                String value = readFilterValue(question.substring(index + rawPattern.length()));
-                if (StrUtil.isBlank(value)) {
-                    continue;
-                }
-                DocumentTableQuery.Operator operator = resolveOperator(connector);
-                filters.put(columnName, DocumentTableQuery.Filter.builder()
-                    .column(columnName)
-                    .operator(operator)
-                    .value(value)
-                    .build());
-                break;
-            }
-        }
-        return new ArrayList<>(filters.values());
-    }
-
-    private String readFilterValue(String remaining) {
-        String value = StrUtil.blankToDefault(remaining, "")
-            .replaceFirst("^[\\s：:，,。；;为是]+", "");
-        if (value.isBlank()) {
-            return "";
-        }
-        int end = value.length();
-        for (String separator : List.of("，", ",", "。", "；", ";", "且", "并且", "的", "中")) {
-            int index = value.indexOf(separator);
-            if (index > 0) {
-                end = Math.min(end, index);
-            }
-        }
-        return value.substring(0, end).trim();
-    }
-
-    private DocumentTableQuery.Operator resolveOperator(String connector) {
-        return switch (connector) {
-            case "包含" -> DocumentTableQuery.Operator.CONTAINS;
-            case "大于", "超过" -> DocumentTableQuery.Operator.GT;
-            case "大于等于", "不小于" -> DocumentTableQuery.Operator.GTE;
-            case "小于", "低于" -> DocumentTableQuery.Operator.LT;
-            case "小于等于", "不大于" -> DocumentTableQuery.Operator.LTE;
-            default -> DocumentTableQuery.Operator.EQ;
-        };
     }
 
     private int scorePlan(String question, DocumentTableDescriptor table, DocumentTableQuery query) {
