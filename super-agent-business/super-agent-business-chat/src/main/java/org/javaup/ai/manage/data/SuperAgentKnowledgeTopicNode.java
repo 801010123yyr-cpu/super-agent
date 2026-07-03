@@ -26,11 +26,9 @@ public class SuperAgentKnowledgeTopicNode extends BaseTableData {
 
     private Long knowledgeBaseId;
 
-    private String topicCode;
-
     private String topicName;
 
-    private String scopeCode;
+    private Long scopeId;
 
     private String description;
 

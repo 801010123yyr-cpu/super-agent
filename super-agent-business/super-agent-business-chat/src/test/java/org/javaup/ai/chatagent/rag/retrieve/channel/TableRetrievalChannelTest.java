@@ -150,7 +150,6 @@ class TableRetrievalChannelTest {
                 "费用报销制度.xlsx",
                 20L,
                 1L,
-                "test-kb",
                 "测试知识库"
             ));
         }

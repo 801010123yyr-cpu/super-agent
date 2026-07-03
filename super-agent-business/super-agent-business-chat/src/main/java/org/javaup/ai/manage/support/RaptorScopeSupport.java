@@ -5,7 +5,6 @@ import org.javaup.ai.manage.data.SuperAgentDocument;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 
 public final class RaptorScopeSupport {
 
@@ -26,8 +25,8 @@ public final class RaptorScopeSupport {
         return "kb:" + knowledgeBaseId;
     }
 
-    public static String knowledgeScopeKey(Long knowledgeBaseId, String knowledgeScopeCode) {
-        return knowledgeBaseScopeKey(knowledgeBaseId) + ":scope:" + normalizeScopeCode(knowledgeScopeCode);
+    public static String knowledgeScopeKey(Long knowledgeBaseId, Long scopeId) {
+        return knowledgeBaseScopeKey(knowledgeBaseId) + ":scope:" + scopeId;
     }
 
     public static List<String> searchScopeKeys(List<SuperAgentDocument> documents) {
@@ -48,10 +47,4 @@ public final class RaptorScopeSupport {
         return SCOPE_TYPE_DATASET.equalsIgnoreCase(scopeType == null ? "" : scopeType);
     }
 
-    public static String normalizeScopeCode(String knowledgeScopeCode) {
-        return (knowledgeScopeCode == null ? "" : knowledgeScopeCode)
-            .trim()
-            .toLowerCase(Locale.ROOT)
-            .replaceAll("[^a-z0-9._-]+", "_");
-    }
 }

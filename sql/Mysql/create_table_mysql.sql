@@ -113,7 +113,6 @@ CREATE TABLE IF NOT EXISTS GRAPH_CHECKPOINT (
 
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_base` (
     `id` bigint NOT NULL COMMENT '主键id',
-    `base_code` varchar(64) NOT NULL COMMENT '知识库编码',
     `base_name` varchar(128) NOT NULL COMMENT '知识库名称',
     `description` varchar(1024) DEFAULT NULL COMMENT '知识库描述',
     `embedding_model` varchar(128) DEFAULT NULL COMMENT '向量模型快照',
@@ -127,7 +126,6 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_base` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_knowledge_base_code` (`base_code`),
     KEY `idx_knowledge_base_default` (`is_default`, `status`),
     KEY `idx_knowledge_base_sort` (`sort_order`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='轻量知识库表';
@@ -154,7 +152,6 @@ CREATE TABLE IF NOT EXISTS `super_agent_document` (
     `parse_text_path` varchar(512) DEFAULT NULL COMMENT '解析文本存储路径',
     `parse_error_msg` varchar(1000) DEFAULT NULL COMMENT '解析失败原因',
     `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
-    `knowledge_base_code` varchar(64) NOT NULL COMMENT '所属知识库编码快照',
     `knowledge_base_name` varchar(128) NOT NULL COMMENT '所属知识库名称快照',
     `current_plan_id` bigint DEFAULT NULL COMMENT '当前策略方案id',
     `last_parse_task_id` bigint DEFAULT NULL COMMENT '最近一次成功解析任务id',
@@ -745,9 +742,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_raptor_node` (
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
     `id` bigint NOT NULL COMMENT '主键id',
     `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
-    `scope_code` varchar(64) NOT NULL COMMENT '知识范围编码',
     `scope_name` varchar(128) NOT NULL COMMENT '知识范围名称',
-    `parent_scope_code` varchar(64) DEFAULT NULL COMMENT '父级知识范围编码',
+    `parent_scope_id` bigint DEFAULT NULL COMMENT '父级知识范围id',
     `description` varchar(1024) DEFAULT NULL COMMENT '范围描述',
     `aliases` varchar(512) DEFAULT NULL COMMENT '别名，英文逗号分隔',
     `examples` text COMMENT '典型问题 JSON 数组',
@@ -756,9 +752,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_scope_base_code` (`knowledge_base_id`, `scope_code`),
     KEY `idx_knowledge_base_id` (`knowledge_base_id`),
-    KEY `idx_parent_scope_code` (`parent_scope_code`),
+    KEY `idx_parent_scope_id` (`parent_scope_id`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识范围节点表';
 
@@ -766,9 +761,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_scope_node` (
 CREATE TABLE IF NOT EXISTS `super_agent_knowledge_topic_node` (
     `id` bigint NOT NULL COMMENT '主键id',
     `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
-    `topic_code` varchar(64) NOT NULL COMMENT '主题编码',
     `topic_name` varchar(128) NOT NULL COMMENT '主题名称',
-    `scope_code` varchar(64) NOT NULL COMMENT '所属知识范围编码',
+    `scope_id` bigint NOT NULL COMMENT '所属知识范围id',
     `description` varchar(1024) DEFAULT NULL COMMENT '主题描述',
     `aliases` varchar(512) DEFAULT NULL COMMENT '别名，英文逗号分隔',
     `examples` text COMMENT '典型问题 JSON 数组',
@@ -779,9 +773,8 @@ CREATE TABLE IF NOT EXISTS `super_agent_knowledge_topic_node` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_topic_base_code` (`knowledge_base_id`, `topic_code`),
     KEY `idx_knowledge_base_id` (`knowledge_base_id`),
-    KEY `idx_scope_code` (`scope_code`),
+    KEY `idx_scope_id` (`scope_id`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='知识主题节点表';
 
@@ -815,7 +808,7 @@ CREATE TABLE IF NOT EXISTS `super_agent_document_profile` (
 CREATE TABLE IF NOT EXISTS `super_agent_topic_document_relation` (
     `id` bigint NOT NULL COMMENT '主键id',
     `knowledge_base_id` bigint NOT NULL COMMENT '所属知识库id',
-    `topic_code` varchar(64) NOT NULL COMMENT '主题编码',
+    `topic_id` bigint NOT NULL COMMENT '主题id',
     `document_id` bigint NOT NULL COMMENT '文档id',
     `relation_score` decimal(8,4) DEFAULT '0.0000' COMMENT '关联分数',
     `relation_source` varchar(64) DEFAULT NULL COMMENT '关联来源 auto/manual/mixed',
@@ -824,10 +817,10 @@ CREATE TABLE IF NOT EXISTS `super_agent_topic_document_relation` (
     `edit_time` datetime DEFAULT NULL COMMENT '编辑时间',
     `status` tinyint(1) DEFAULT '1' COMMENT '1:正常 0:删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_base_topic_document` (`knowledge_base_id`, `topic_code`, `document_id`),
+    UNIQUE KEY `uk_base_topic_document` (`knowledge_base_id`, `topic_id`, `document_id`),
     KEY `idx_knowledge_base_id` (`knowledge_base_id`),
     KEY `idx_document_id` (`document_id`),
-    KEY `idx_topic_code` (`topic_code`),
+    KEY `idx_topic_id` (`topic_id`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='主题文档关联表';
 

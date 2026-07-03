@@ -81,7 +81,6 @@ public class RaptorRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, documentName);
         if (descriptor != null) {
             putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_CODE, StrUtil.blankToDefault(descriptor.getKnowledgeBaseCode(), ""));
             metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, StrUtil.blankToDefault(descriptor.getKnowledgeBaseName(), ""));
         }
         metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());

@@ -19,12 +19,12 @@ public interface KnowledgeRouteIndexService {
 
     record RouteLexicalHit(
         String routeId,
-        String entityCode,
+        Long entityId,
         String entityType,
         Long documentId,
         Long knowledgeBaseId,
-        String scopeCode,
-        String topicCode,
+        Long scopeId,
+        Long topicId,
         String documentName,
         double score
     ) {

@@ -48,16 +48,13 @@ public class KnowledgeBaseManageServiceImpl implements KnowledgeBaseManageServic
         validateSave(dto);
         Long id = parseOptionalLong(dto.getId());
         SuperAgentKnowledgeBase entity = id == null ? null : knowledgeBaseMapper.selectById(id);
-        if (entity == null) {
-            entity = knowledgeBaseMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeBase>()
-                .eq(SuperAgentKnowledgeBase::getBaseCode, safeText(dto.getBaseCode()))
-                .eq(SuperAgentKnowledgeBase::getStatus, BusinessStatus.YES.getCode())
-                .last("LIMIT 1"));
+        if (id != null && (entity == null || !Objects.equals(entity.getStatus(), BusinessStatus.YES.getCode()))) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "知识库不存在或已停用。");
         }
+        ensureUniqueBaseName(id, safeText(dto.getBaseName()));
         if (entity == null) {
             entity = new SuperAgentKnowledgeBase();
             entity.setId(uidGenerator.getUid());
-            entity.setBaseCode(safeText(dto.getBaseCode()));
             entity.setStatus(BusinessStatus.YES.getCode());
         }
         entity.setBaseName(safeText(dto.getBaseName()));
@@ -124,7 +121,6 @@ public class KnowledgeBaseManageServiceImpl implements KnowledgeBaseManageServic
         return bases.stream()
             .map(base -> new KnowledgeBaseOptionVo(
                 String.valueOf(base.getId()),
-                safeText(base.getBaseCode()),
                 safeText(base.getBaseName()),
                 safeText(base.getDescription()),
                 String.valueOf(nullToZero(base.getIsDefault())),
@@ -214,7 +210,6 @@ public class KnowledgeBaseManageServiceImpl implements KnowledgeBaseManageServic
                                          Map<Long, Long> retrievableCounts) {
         return new KnowledgeBaseItemVo(
             String.valueOf(entity.getId()),
-            safeText(entity.getBaseCode()),
             safeText(entity.getBaseName()),
             safeText(entity.getDescription()),
             safeText(entity.getEmbeddingModel()),
@@ -230,8 +225,18 @@ public class KnowledgeBaseManageServiceImpl implements KnowledgeBaseManageServic
     }
 
     private void validateSave(KnowledgeBaseSaveDto dto) {
-        if (dto == null || safeText(dto.getBaseCode()).isBlank() || safeText(dto.getBaseName()).isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "baseCode 和 baseName 不能为空。");
+        if (dto == null || safeText(dto.getBaseName()).isBlank()) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "baseName 不能为空。");
+        }
+    }
+
+    private void ensureUniqueBaseName(Long currentId, String baseName) {
+        SuperAgentKnowledgeBase sameName = knowledgeBaseMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeBase>()
+            .eq(SuperAgentKnowledgeBase::getBaseName, baseName)
+            .eq(SuperAgentKnowledgeBase::getStatus, BusinessStatus.YES.getCode())
+            .last("LIMIT 1"));
+        if (sameName != null && !Objects.equals(sameName.getId(), currentId)) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "知识库名称已存在。");
         }
     }
 

@@ -31,8 +31,6 @@ public class SearchReference {
 
     private Long knowledgeBaseId;
 
-    private String knowledgeBaseCode;
-
     private String knowledgeBaseName;
 
     private Long chunkId;

@@ -12,5 +12,5 @@ public class KnowledgeTopicQueryDto {
 
     private String knowledgeBaseId;
 
-    private String scopeCode;
+    private String scopeId;
 }

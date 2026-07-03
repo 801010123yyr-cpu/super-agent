@@ -132,7 +132,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 document.getDocumentName(),
                 document.getLastIndexTaskId(),
                 document.getKnowledgeBaseId(),
-                document.getKnowledgeBaseCode(),
                 document.getKnowledgeBaseName()
             ))
             .toList();
@@ -344,7 +343,6 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, descriptor.getDocumentId());
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(descriptor.getDocumentName()));
             putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_CODE, safeText(descriptor.getKnowledgeBaseCode()));
             metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(descriptor.getKnowledgeBaseName()));
         }
         graphRagTypedChunkMetadataSupport.enrichMetadata(metadata, chunkType, sourceBlockIds);

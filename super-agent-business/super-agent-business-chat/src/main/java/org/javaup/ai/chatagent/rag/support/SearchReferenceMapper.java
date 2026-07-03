@@ -45,7 +45,6 @@ public final class SearchReferenceMapper {
         reference.setDocumentId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID)));
         reference.setDocumentName(asText(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME), ""));
         reference.setKnowledgeBaseId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID)));
-        reference.setKnowledgeBaseCode(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_CODE), ""));
         reference.setKnowledgeBaseName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME), ""));
         reference.setParentBlockId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID)));
         reference.setParentBlockNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO)));

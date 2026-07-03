@@ -30,7 +30,7 @@ class RaptorScopeSupportTest {
     void keepsDocumentScopeSeparateFromDatasetScope() {
         assertThat(RaptorScopeSupport.documentScopeKey(99L)).isEqualTo("document:99");
         assertThat(RaptorScopeSupport.knowledgeBaseScopeKey(10L)).isEqualTo("kb:10");
-        assertThat(RaptorScopeSupport.knowledgeScopeKey(10L, " Release Ops ")).isEqualTo("kb:10:scope:release_ops");
+        assertThat(RaptorScopeSupport.knowledgeScopeKey(10L, 30L)).isEqualTo("kb:10:scope:30");
         assertThat(RaptorScopeSupport.isDatasetScope(RaptorScopeSupport.SCOPE_TYPE_DATASET)).isTrue();
         assertThat(RaptorScopeSupport.isDatasetScope(RaptorScopeSupport.SCOPE_TYPE_DOCUMENT)).isFalse();
     }

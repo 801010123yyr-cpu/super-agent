@@ -74,13 +74,13 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         InMemoryMapper<SuperAgentKgCrossDocumentCommunity> communityStore = new InMemoryMapper<>(List.of());
         InMemoryMapper<SuperAgentKgCrossDocumentCommunityMember> communityMemberStore = new InMemoryMapper<>(List.of());
         InMemoryMapper<SuperAgentKnowledgeTopicNode> topicStore = new InMemoryMapper<>(List.of(
-            topic(1L, "security-topic", "security"),
-            topic(2L, "release-topic", "release")
+            topic(1L, "security-topic", 101L),
+            topic(2L, "release-topic", 102L)
         ));
         InMemoryMapper<SuperAgentTopicDocumentRelation> topicDocumentRelationStore = new InMemoryMapper<>(List.of(
-            topicRelation(1L, "security-topic", 10L),
-            topicRelation(2L, "security-topic", 11L),
-            topicRelation(3L, "release-topic", 12L)
+            topicRelation(1L, 1L, 10L),
+            topicRelation(2L, 1L, 11L),
+            topicRelation(3L, 2L, 12L)
         ));
         ObjectMapper objectMapper = new ObjectMapper();
         GraphRagCrossDocumentIndexServiceImpl service = new GraphRagCrossDocumentIndexServiceImpl(
@@ -104,17 +104,17 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         List<GraphRagCrossDocumentIndexBuildResult> results = service.rebuildAll();
 
         assertThat(results).extracting(GraphRagCrossDocumentIndexBuildResult::getScopeKey)
-            .containsExactly("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
+            .containsExactly("global", "kb:1", "kb:1:scope:101", "kb:1:scope:102");
         assertThat(canonicalGroupStore.items()).extracting(SuperAgentKgCanonicalEntityGroup::getScopeKey)
-            .contains("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
+            .contains("global", "kb:1", "kb:1:scope:101", "kb:1:scope:102");
         assertThat(canonicalMemberStore.items()).extracting(SuperAgentKgCanonicalEntityMember::getScopeKey)
-            .contains("global", "kb:1", "kb:1:scope:security", "kb:1:scope:release");
+            .contains("global", "kb:1", "kb:1:scope:101", "kb:1:scope:102");
         assertThat(relationGroupStore.items()).extracting(SuperAgentKgRelationGroup::getScopeKey)
-            .contains("global", "kb:1", "kb:1:scope:security");
+            .contains("global", "kb:1", "kb:1:scope:101");
         assertThat(communityStore.items()).extracting(SuperAgentKgCrossDocumentCommunity::getScopeKey)
-            .contains("global", "kb:1", "kb:1:scope:security");
+            .contains("global", "kb:1", "kb:1:scope:101");
         assertThat(communityMemberStore.items()).extracting(SuperAgentKgCrossDocumentCommunityMember::getScopeKey)
-            .contains("global", "kb:1", "kb:1:scope:security");
+            .contains("global", "kb:1", "kb:1:scope:101");
         assertThat(communityStore.items()).allSatisfy(community -> {
             Map<String, Object> metadata = objectMapper.readValue(community.getMetadataJson(), Map.class);
             assertThat(metadata).containsEntry("sourceType", "java.cross_document_community.v1");
@@ -173,27 +173,27 @@ class GraphRagCrossDocumentIndexServiceImplTest {
             )).proxy(SuperAgentKgRelationMapper.class),
             new InMemoryMapper<>(evidenceStore.items()).proxy(SuperAgentKgEvidenceMapper.class),
             new InMemoryMapper<>(canonicalGroupStore.items().stream()
-                .filter(group -> "kb:1:scope:security".equals(group.getScopeKey()))
+                .filter(group -> "kb:1:scope:101".equals(group.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCanonicalEntityGroupMapper.class),
             new InMemoryMapper<>(canonicalMemberStore.items().stream()
-                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:101".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCanonicalEntityMemberMapper.class),
             new InMemoryMapper<>(relationGroupStore.items().stream()
-                .filter(group -> "kb:1:scope:security".equals(group.getScopeKey()))
+                .filter(group -> "kb:1:scope:101".equals(group.getScopeKey()))
                 .toList()).proxy(SuperAgentKgRelationGroupMapper.class),
             new InMemoryMapper<>(relationGroupMemberStore.items().stream()
-                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:101".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgRelationGroupMemberMapper.class),
             new InMemoryMapper<>(communityStore.items().stream()
-                .filter(community -> "kb:1:scope:security".equals(community.getScopeKey()))
+                .filter(community -> "kb:1:scope:101".equals(community.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCrossDocumentCommunityMapper.class),
             new InMemoryMapper<>(communityMemberStore.items().stream()
-                .filter(member -> "kb:1:scope:security".equals(member.getScopeKey()))
+                .filter(member -> "kb:1:scope:101".equals(member.getScopeKey()))
                 .toList()).proxy(SuperAgentKgCrossDocumentCommunityMemberMapper.class),
-            new InMemoryMapper<>(List.of(topic(1L, "security-topic", "security"))).proxy(SuperAgentKnowledgeTopicNodeMapper.class),
+            new InMemoryMapper<>(List.of(topic(1L, "security-topic", 101L))).proxy(SuperAgentKnowledgeTopicNodeMapper.class),
             new InMemoryMapper<>(List.of(
-                topicRelation(1L, "security-topic", 10L),
-                topicRelation(2L, "security-topic", 11L)
+                topicRelation(1L, 1L, 10L),
+                topicRelation(2L, 1L, 11L)
             )).proxy(SuperAgentTopicDocumentRelationMapper.class),
             new GraphRagCrossDocumentIndexSupport(objectMapper),
             uidGenerator(),
@@ -349,28 +349,26 @@ class GraphRagCrossDocumentIndexServiceImplTest {
         SuperAgentDocument document = new SuperAgentDocument();
         document.setId(id);
         document.setKnowledgeBaseId(1L);
-        document.setKnowledgeBaseCode("kb-test");
         document.setKnowledgeBaseName("测试知识库");
         document.setStatus(BusinessStatus.YES.getCode());
         return document;
     }
 
-    private static SuperAgentKnowledgeTopicNode topic(Long id, String topicCode, String scopeCode) {
+    private static SuperAgentKnowledgeTopicNode topic(Long id, String topicName, Long scopeId) {
         SuperAgentKnowledgeTopicNode topic = new SuperAgentKnowledgeTopicNode();
         topic.setId(id);
         topic.setKnowledgeBaseId(1L);
-        topic.setTopicCode(topicCode);
-        topic.setTopicName(topicCode);
-        topic.setScopeCode(scopeCode);
+        topic.setTopicName(topicName);
+        topic.setScopeId(scopeId);
         topic.setStatus(BusinessStatus.YES.getCode());
         return topic;
     }
 
-    private static SuperAgentTopicDocumentRelation topicRelation(Long id, String topicCode, Long documentId) {
+    private static SuperAgentTopicDocumentRelation topicRelation(Long id, Long topicId, Long documentId) {
         SuperAgentTopicDocumentRelation relation = new SuperAgentTopicDocumentRelation();
         relation.setId(id);
         relation.setKnowledgeBaseId(1L);
-        relation.setTopicCode(topicCode);
+        relation.setTopicId(topicId);
         relation.setDocumentId(documentId);
         relation.setRelationScore(BigDecimal.ONE);
         relation.setStatus(BusinessStatus.YES.getCode());

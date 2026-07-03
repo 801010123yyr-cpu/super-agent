@@ -12,5 +12,5 @@ public class TopicDocumentRelationListQueryDto {
 
     private String knowledgeBaseId;
 
-    private String topicCode;
+    private String topicId;
 }

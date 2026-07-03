@@ -368,29 +368,26 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         if (relations.isEmpty()) {
             return Map.of();
         }
-        Map<String, SuperAgentKnowledgeTopicNode> topicByKey = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+        Map<Long, SuperAgentKnowledgeTopicNode> topicById = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
                 .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()))
             .stream()
+            .filter(topic -> topic.getId() != null)
             .collect(Collectors.toMap(
-                topic -> topicRouteKey(topic.getKnowledgeBaseId(), topic.getTopicCode()),
+                SuperAgentKnowledgeTopicNode::getId,
                 topic -> topic,
                 (left, right) -> left,
                 LinkedHashMap::new));
         Map<Long, LinkedHashSet<String>> grouped = new LinkedHashMap<>();
         for (SuperAgentTopicDocumentRelation relation : relations) {
-            SuperAgentKnowledgeTopicNode topic = topicByKey.get(topicRouteKey(relation.getKnowledgeBaseId(), relation.getTopicCode()));
-            if (topic == null || topic.getKnowledgeBaseId() == null || StrUtil.isBlank(topic.getScopeCode())) {
+            SuperAgentKnowledgeTopicNode topic = topicById.get(relation.getTopicId());
+            if (topic == null || topic.getKnowledgeBaseId() == null || topic.getScopeId() == null) {
                 continue;
             }
             grouped.computeIfAbsent(relation.getDocumentId(), ignored -> new LinkedHashSet<>())
-                .add(RaptorScopeSupport.knowledgeScopeKey(topic.getKnowledgeBaseId(), topic.getScopeCode()));
+                .add(RaptorScopeSupport.knowledgeScopeKey(topic.getKnowledgeBaseId(), topic.getScopeId()));
         }
         return grouped.entrySet().stream()
             .collect(Collectors.toMap(Map.Entry::getKey, entry -> List.copyOf(entry.getValue()), (left, right) -> left, LinkedHashMap::new));
-    }
-
-    private String topicRouteKey(Long knowledgeBaseId, String topicCode) {
-        return (knowledgeBaseId == null ? "none" : String.valueOf(knowledgeBaseId)) + ":" + StrUtil.blankToDefault(topicCode, "");
     }
 
     private List<SuperAgentKgEntity> listEntities(List<Long> documentIds, List<Long> taskIds) {

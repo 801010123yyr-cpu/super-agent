@@ -289,7 +289,6 @@ class GraphRagRetrievalChannelTest {
                 "星联智服全渠道客服平台上线与运营管理手册.md",
                 900L,
                 1L,
-                "test-kb",
                 "测试知识库"
             ));
         }

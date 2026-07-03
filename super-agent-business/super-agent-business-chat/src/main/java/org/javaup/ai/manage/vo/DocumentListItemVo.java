@@ -49,8 +49,6 @@ public class DocumentListItemVo {
 
     private Long knowledgeBaseId;
 
-    private String knowledgeBaseCode;
-
     private String knowledgeBaseName;
 
     private Long currentPlanId;

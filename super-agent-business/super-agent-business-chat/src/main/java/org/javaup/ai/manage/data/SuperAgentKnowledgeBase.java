@@ -19,8 +19,6 @@ public class SuperAgentKnowledgeBase extends BaseTableData {
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
 
-    private String baseCode;
-
     private String baseName;
 
     private String description;

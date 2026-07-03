@@ -16,7 +16,13 @@ public class TopicDocumentRelationItemVo {
 
     private String knowledgeBaseId;
 
-    private String topicCode;
+    private String topicId;
+
+    private String topicName;
+
+    private String scopeId;
+
+    private String scopeName;
 
     private String documentId;
 

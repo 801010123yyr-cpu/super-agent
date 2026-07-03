@@ -40,7 +40,6 @@
               <tr v-for="item in knowledgeBases" :key="item.id" class="border-b border-border last:border-0">
                 <td class="px-4 py-3">
                   <strong class="block text-foreground">{{ item.baseName }}</strong>
-                  <span class="text-xs text-muted-foreground">{{ item.baseCode }}</span>
                 </td>
                 <td class="px-4 py-3 text-muted-foreground">{{ item.description || '-' }}</td>
                 <td class="px-4 py-3 text-foreground">{{ item.documentCount || 0 }} / {{ item.retrievableDocumentCount || 0 }}</td>
@@ -63,10 +62,6 @@
       <Card class="p-5">
         <h4 class="m-0 text-sm font-semibold text-foreground">{{ form.id ? '编辑知识库' : '新建知识库' }}</h4>
         <div class="mt-4 grid gap-3">
-          <div class="grid gap-2">
-            <Label class="text-[13px] font-bold text-[var(--color-muted-strong)]">知识库编码</Label>
-            <Input v-model="form.baseCode" class="h-9 text-sm" placeholder="例如 hr_policy" />
-          </div>
           <div class="grid gap-2">
             <Label class="text-[13px] font-bold text-[var(--color-muted-strong)]">知识库名称</Label>
             <Input v-model="form.baseName" class="h-9 text-sm" placeholder="例如 人事制度库" />
@@ -128,7 +123,6 @@ const form = reactive(emptyForm())
 function emptyForm() {
   return {
     id: '',
-    baseCode: '',
     baseName: '',
     description: '',
     embeddingModel: '',
@@ -174,8 +168,8 @@ async function loadKnowledgeBases() {
 }
 
 async function saveKnowledgeBase() {
-  if (!form.baseCode.trim() || !form.baseName.trim()) {
-    showNotice('知识库编码和名称不能为空。', 'danger')
+  if (!form.baseName.trim()) {
+    showNotice('知识库名称不能为空。', 'danger')
     return
   }
   actionLoading.value = true

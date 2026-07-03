@@ -16,7 +16,6 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String DOCUMENT_ID = "documentId";
     public static final String DOCUMENT_NAME = "documentName";
     public static final String KNOWLEDGE_BASE_ID = "knowledgeBaseId";
-    public static final String KNOWLEDGE_BASE_CODE = "knowledgeBaseCode";
     public static final String KNOWLEDGE_BASE_NAME = "knowledgeBaseName";
     public static final String TASK_ID = "taskId";
     public static final String PARENT_BLOCK_ID = "parentBlockId";

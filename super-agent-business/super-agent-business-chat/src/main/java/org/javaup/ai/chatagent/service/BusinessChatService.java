@@ -1114,7 +1114,6 @@ public class BusinessChatService {
             descriptor.getDocumentId() == null ? "" : String.valueOf(descriptor.getDocumentId()),
             descriptor.getDocumentName(),
             descriptor.getKnowledgeBaseId() == null ? "" : String.valueOf(descriptor.getKnowledgeBaseId()),
-            descriptor.getKnowledgeBaseCode(),
             descriptor.getKnowledgeBaseName()
         );
     }

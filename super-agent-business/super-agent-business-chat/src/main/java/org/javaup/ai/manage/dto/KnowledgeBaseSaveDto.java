@@ -7,8 +7,6 @@ public class KnowledgeBaseSaveDto {
 
     private String id;
 
-    private String baseCode;
-
     private String baseName;
 
     private String description;

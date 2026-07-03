@@ -229,29 +229,28 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public RaptorBuildResult rebuildKnowledgeScopeTree(Long knowledgeBaseId, String knowledgeScopeCode) {
-        String normalizedScopeCode = RaptorScopeSupport.normalizeScopeCode(knowledgeScopeCode);
-        if (knowledgeBaseId == null || StrUtil.isBlank(normalizedScopeCode)) {
+    public RaptorBuildResult rebuildKnowledgeScopeTree(Long knowledgeBaseId, Long scopeId) {
+        if (knowledgeBaseId == null || scopeId == null || scopeId <= 0) {
             return RaptorBuildResult.builder().build();
         }
-        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(knowledgeBaseId, normalizedScopeCode);
-        List<String> topicCodes = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(knowledgeBaseId, scopeId);
+        List<Long> topicIds = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
                 .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
-                .eq(SuperAgentKnowledgeTopicNode::getScopeCode, knowledgeScopeCode)
+                .eq(SuperAgentKnowledgeTopicNode::getScopeId, scopeId)
                 .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()))
             .stream()
-            .map(SuperAgentKnowledgeTopicNode::getTopicCode)
-            .filter(StrUtil::isNotBlank)
+            .map(SuperAgentKnowledgeTopicNode::getId)
+            .filter(Objects::nonNull)
             .distinct()
             .toList();
-        if (topicCodes.isEmpty()) {
+        if (topicIds.isEmpty()) {
             deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
             log.info("跳过 RAPTOR dataset-level 构建，知识范围没有可用主题: scopeKey={}", scopeKey);
             return RaptorBuildResult.builder().build();
         }
         List<Long> documentIds = topicDocumentRelationMapper.selectList(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
                 .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
-                .in(SuperAgentTopicDocumentRelation::getTopicCode, topicCodes)
+                .in(SuperAgentTopicDocumentRelation::getTopicId, topicIds)
                 .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()))
             .stream()
             .map(SuperAgentTopicDocumentRelation::getDocumentId)
@@ -261,7 +260,7 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         if (documentIds.isEmpty()) {
             deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
             log.info("跳过 RAPTOR dataset-level 构建，知识范围没有主题文档关联: scopeKey={}, topicCount={}",
-                scopeKey, topicCodes.size());
+                scopeKey, topicIds.size());
             return RaptorBuildResult.builder().build();
         }
         List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()

@@ -23,7 +23,5 @@ public class KnowledgeDocumentDescriptor {
 
     private Long knowledgeBaseId;
 
-    private String knowledgeBaseCode;
-
     private String knowledgeBaseName;
 }

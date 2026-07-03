@@ -10,9 +10,9 @@ import lombok.Data;
 @Data
 public class KnowledgeScopeDeleteDto {
 
-    private String knowledgeBaseId;
+    private String id;
 
-    private String scopeCode;
+    private String knowledgeBaseId;
 
     private String operatorId;
 }

@@ -44,6 +44,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -69,20 +70,24 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         validateScope(dto);
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
         knowledgeBaseManageService.requireEnabled(knowledgeBaseId);
-        SuperAgentKnowledgeScopeNode entity = scopeNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeScopeNode>()
-            .eq(SuperAgentKnowledgeScopeNode::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentKnowledgeScopeNode::getScopeCode, dto.getScopeCode().trim())
-            .eq(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.YES.getCode())
-            .last("LIMIT 1"));
+        Long id = parseOptionalPositiveLong(dto.getId());
+        Long parentScopeId = parseOptionalPositiveLong(dto.getParentScopeId());
+        if (parentScopeId != null) {
+            requireScopeInBase(parentScopeId, knowledgeBaseId, "父级知识范围不存在或不属于当前知识库。");
+            if (Objects.equals(id, parentScopeId)) {
+                throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "父级知识范围不能是自己。");
+            }
+        }
+        SuperAgentKnowledgeScopeNode entity = id == null ? null : requireScopeInBase(id, knowledgeBaseId, "知识范围不存在或不属于当前知识库。");
+        ensureUniqueScopeName(knowledgeBaseId, safeText(dto.getScopeName()), id);
         if (entity == null) {
             entity = new SuperAgentKnowledgeScopeNode();
             entity.setId(uidGenerator.getUid());
             entity.setStatus(BusinessStatus.YES.getCode());
             entity.setKnowledgeBaseId(knowledgeBaseId);
-            entity.setScopeCode(dto.getScopeCode().trim());
         }
         entity.setScopeName(safeText(dto.getScopeName()));
-        entity.setParentScopeCode(safeText(dto.getParentScopeCode()));
+        entity.setParentScopeId(parentScopeId);
         entity.setDescription(safeText(dto.getDescription()));
         entity.setAliases(safeText(dto.getAliases()));
         entity.setExamples(safeText(dto.getExamples()));
@@ -98,14 +103,26 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
 
     @Override
     public boolean deleteScope(KnowledgeScopeDeleteDto dto) {
+        Long id = parseRequiredLong(dto == null ? null : dto.getId(), "id");
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
-        String scopeCode = safeText(dto.getScopeCode());
-        if (scopeCode.isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "scopeCode 不能为空。");
+        requireScopeInBase(id, knowledgeBaseId, "知识范围不存在或不属于当前知识库。");
+        Long childCount = scopeNodeMapper.selectCount(new LambdaQueryWrapper<SuperAgentKnowledgeScopeNode>()
+            .eq(SuperAgentKnowledgeScopeNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeScopeNode::getParentScopeId, id)
+            .eq(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.YES.getCode()));
+        if (childCount != null && childCount > 0) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "请先删除或调整子级知识范围。");
+        }
+        Long topicCount = topicNodeMapper.selectCount(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+            .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeTopicNode::getScopeId, id)
+            .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()));
+        if (topicCount != null && topicCount > 0) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "请先删除或调整该范围下的知识主题。");
         }
         return scopeNodeMapper.update(null, new LambdaUpdateWrapper<SuperAgentKnowledgeScopeNode>()
             .eq(SuperAgentKnowledgeScopeNode::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentKnowledgeScopeNode::getScopeCode, scopeCode)
+            .eq(SuperAgentKnowledgeScopeNode::getId, id)
             .eq(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.YES.getCode())
             .set(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.NO.getCode())) > 0;
     }
@@ -130,20 +147,19 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         validateTopic(dto);
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
         knowledgeBaseManageService.requireEnabled(knowledgeBaseId);
-        SuperAgentKnowledgeTopicNode entity = topicNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
-            .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentKnowledgeTopicNode::getTopicCode, dto.getTopicCode().trim())
-            .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode())
-            .last("LIMIT 1"));
+        Long id = parseOptionalPositiveLong(dto.getId());
+        Long scopeId = parseRequiredLong(dto.getScopeId(), "scopeId");
+        requireScopeInBase(scopeId, knowledgeBaseId, "所属知识范围不存在或不属于当前知识库。");
+        SuperAgentKnowledgeTopicNode entity = id == null ? null : requireTopicInBase(id, knowledgeBaseId, "知识主题不存在或不属于当前知识库。");
+        ensureUniqueTopicName(knowledgeBaseId, scopeId, safeText(dto.getTopicName()), id);
         if (entity == null) {
             entity = new SuperAgentKnowledgeTopicNode();
             entity.setId(uidGenerator.getUid());
             entity.setStatus(BusinessStatus.YES.getCode());
             entity.setKnowledgeBaseId(knowledgeBaseId);
-            entity.setTopicCode(dto.getTopicCode().trim());
         }
         entity.setTopicName(safeText(dto.getTopicName()));
-        entity.setScopeCode(safeText(dto.getScopeCode()));
+        entity.setScopeId(scopeId);
         entity.setDescription(safeText(dto.getDescription()));
         entity.setAliases(safeText(dto.getAliases()));
         entity.setExamples(safeText(dto.getExamples()));
@@ -161,21 +177,26 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
 
     @Override
     public boolean deleteTopic(KnowledgeTopicDeleteDto dto) {
+        Long id = parseRequiredLong(dto == null ? null : dto.getId(), "id");
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
-        String topicCode = safeText(dto.getTopicCode());
-        if (topicCode.isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "topicCode 不能为空。");
+        requireTopicInBase(id, knowledgeBaseId, "知识主题不存在或不属于当前知识库。");
+        Long relationCount = topicDocumentRelationMapper.selectCount(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
+            .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentTopicDocumentRelation::getTopicId, id)
+            .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()));
+        if (relationCount != null && relationCount > 0) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "请先移除该主题下的文档关联。");
         }
         return topicNodeMapper.update(null, new LambdaUpdateWrapper<SuperAgentKnowledgeTopicNode>()
             .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentKnowledgeTopicNode::getTopicCode, topicCode)
+            .eq(SuperAgentKnowledgeTopicNode::getId, id)
             .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode())
             .set(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.NO.getCode())) > 0;
     }
 
     @Override
     public List<KnowledgeTopicItemVo> listTopics(KnowledgeTopicQueryDto dto) {
-        String scopeCode = dto == null ? "" : safeText(dto.getScopeCode());
+        Long scopeId = parseOptionalPositiveLong(dto == null ? null : dto.getScopeId());
         Long knowledgeBaseId = parseOptionalPositiveLong(dto == null ? null : dto.getKnowledgeBaseId());
         LambdaQueryWrapper<SuperAgentKnowledgeTopicNode> wrapper = new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
             .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode())
@@ -183,8 +204,8 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         if (knowledgeBaseId != null) {
             wrapper.eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId);
         }
-        if (scopeCode != null && !scopeCode.isBlank()) {
-            wrapper.eq(SuperAgentKnowledgeTopicNode::getScopeCode, scopeCode);
+        if (scopeId != null) {
+            wrapper.eq(SuperAgentKnowledgeTopicNode::getScopeId, scopeId);
         }
         return topicNodeMapper.selectList(wrapper).stream().map(this::toTopicVo).toList();
     }
@@ -215,7 +236,7 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
 
     @Override
     public List<TopicDocumentRelationItemVo> listTopicDocuments(TopicDocumentRelationListQueryDto dto) {
-        String topicCode = dto == null ? "" : safeText(dto.getTopicCode());
+        Long topicId = parseOptionalPositiveLong(dto == null ? null : dto.getTopicId());
         Long knowledgeBaseId = parseOptionalPositiveLong(dto == null ? null : dto.getKnowledgeBaseId());
         LambdaQueryWrapper<SuperAgentTopicDocumentRelation> wrapper = new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
             .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode())
@@ -223,8 +244,8 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         if (knowledgeBaseId != null) {
             wrapper.eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId);
         }
-        if (topicCode != null && !topicCode.isBlank()) {
-            wrapper.eq(SuperAgentTopicDocumentRelation::getTopicCode, topicCode);
+        if (topicId != null) {
+            wrapper.eq(SuperAgentTopicDocumentRelation::getTopicId, topicId);
         }
         return topicDocumentRelationMapper.selectList(wrapper).stream()
             .map(this::toRelationVo)
@@ -235,18 +256,16 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
     public TopicDocumentRelationItemVo saveTopicDocumentRelation(TopicDocumentRelationSaveDto dto) {
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
         knowledgeBaseManageService.requireEnabled(knowledgeBaseId);
-        String topicCode = safeText(dto.getTopicCode());
+        Long topicId = parseRequiredLong(dto.getTopicId(), "topicId");
+        requireTopicInBase(topicId, knowledgeBaseId, "知识主题不存在或不属于当前知识库。");
         Long documentId = parseRequiredLong(dto.getDocumentId(), "documentId");
-        if (topicCode.isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "topicCode 不能为空。");
-        }
         SuperAgentDocument document = documentMapper.selectById(documentId);
         if (document == null || !Long.valueOf(knowledgeBaseId).equals(document.getKnowledgeBaseId())) {
             throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "文档不属于当前知识库。");
         }
         SuperAgentTopicDocumentRelation relation = topicDocumentRelationMapper.selectOne(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
             .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentTopicDocumentRelation::getTopicCode, topicCode)
+            .eq(SuperAgentTopicDocumentRelation::getTopicId, topicId)
             .eq(SuperAgentTopicDocumentRelation::getDocumentId, documentId)
             .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode())
             .last("LIMIT 1"));
@@ -254,7 +273,7 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
             relation = new SuperAgentTopicDocumentRelation();
             relation.setId(uidGenerator.getUid());
             relation.setKnowledgeBaseId(knowledgeBaseId);
-            relation.setTopicCode(topicCode);
+            relation.setTopicId(topicId);
             relation.setDocumentId(documentId);
             relation.setStatus(BusinessStatus.YES.getCode());
         }
@@ -273,14 +292,11 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
     @Override
     public boolean removeTopicDocumentRelation(TopicDocumentRelationRemoveDto dto) {
         Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
-        String topicCode = safeText(dto.getTopicCode());
+        Long topicId = parseRequiredLong(dto.getTopicId(), "topicId");
         Long documentId = parseRequiredLong(dto.getDocumentId(), "documentId");
-        if (topicCode.isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "topicCode 不能为空。");
-        }
         return topicDocumentRelationMapper.update(null, new LambdaUpdateWrapper<SuperAgentTopicDocumentRelation>()
             .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
-            .eq(SuperAgentTopicDocumentRelation::getTopicCode, topicCode)
+            .eq(SuperAgentTopicDocumentRelation::getTopicId, topicId)
             .eq(SuperAgentTopicDocumentRelation::getDocumentId, documentId)
             .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode())
             .set(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.NO.getCode())) > 0;
@@ -342,14 +358,14 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
     }
 
     private void validateScope(KnowledgeScopeSaveDto dto) {
-        if (dto == null || safeText(dto.getScopeCode()).isBlank() || safeText(dto.getScopeName()).isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "scopeCode 和 scopeName 不能为空。");
+        if (dto == null || safeText(dto.getScopeName()).isBlank()) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "scopeName 不能为空。");
         }
     }
 
     private void validateTopic(KnowledgeTopicSaveDto dto) {
-        if (dto == null || safeText(dto.getTopicCode()).isBlank() || safeText(dto.getTopicName()).isBlank() || safeText(dto.getScopeCode()).isBlank()) {
-            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "topicCode、topicName、scopeCode 不能为空。");
+        if (dto == null || safeText(dto.getTopicName()).isBlank() || parseOptionalPositiveLong(dto.getScopeId()) == null) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "topicName 和 scopeId 不能为空。");
         }
     }
 
@@ -357,9 +373,8 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         return new KnowledgeScopeItemVo(
             String.valueOf(node.getId()),
             node.getKnowledgeBaseId() == null ? "" : String.valueOf(node.getKnowledgeBaseId()),
-            safeText(node.getScopeCode()),
             safeText(node.getScopeName()),
-            safeText(node.getParentScopeCode()),
+            node.getParentScopeId() == null ? "" : String.valueOf(node.getParentScopeId()),
             safeText(node.getDescription()),
             safeText(node.getAliases()),
             safeText(node.getExamples()),
@@ -371,9 +386,8 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
         return new KnowledgeTopicItemVo(
             String.valueOf(node.getId()),
             node.getKnowledgeBaseId() == null ? "" : String.valueOf(node.getKnowledgeBaseId()),
-            safeText(node.getTopicCode()),
             safeText(node.getTopicName()),
-            safeText(node.getScopeCode()),
+            node.getScopeId() == null ? "" : String.valueOf(node.getScopeId()),
             safeText(node.getDescription()),
             safeText(node.getAliases()),
             safeText(node.getExamples()),
@@ -402,15 +416,67 @@ public class KnowledgeManageServiceImpl implements KnowledgeManageService {
 
     private TopicDocumentRelationItemVo toRelationVo(SuperAgentTopicDocumentRelation relation) {
         SuperAgentDocument document = documentMapper.selectById(relation.getDocumentId());
+        SuperAgentKnowledgeTopicNode topic = relation.getTopicId() == null ? null : topicNodeMapper.selectById(relation.getTopicId());
+        SuperAgentKnowledgeScopeNode scope = topic == null || topic.getScopeId() == null ? null : scopeNodeMapper.selectById(topic.getScopeId());
         return new TopicDocumentRelationItemVo(
             relation.getKnowledgeBaseId() == null ? "" : String.valueOf(relation.getKnowledgeBaseId()),
-            safeText(relation.getTopicCode()),
+            relation.getTopicId() == null ? "" : String.valueOf(relation.getTopicId()),
+            topic == null ? "" : safeText(topic.getTopicName()),
+            scope == null ? "" : String.valueOf(scope.getId()),
+            scope == null ? "" : safeText(scope.getScopeName()),
             String.valueOf(relation.getDocumentId()),
             document == null ? "" : safeText(document.getDocumentName()),
             relation.getRelationScore() == null ? "0.0000" : relation.getRelationScore().toPlainString(),
             safeText(relation.getRelationSource()),
             safeText(relation.getReason())
         );
+    }
+
+    private SuperAgentKnowledgeScopeNode requireScopeInBase(Long scopeId, Long knowledgeBaseId, String message) {
+        SuperAgentKnowledgeScopeNode scope = scopeNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeScopeNode>()
+            .eq(SuperAgentKnowledgeScopeNode::getId, scopeId)
+            .eq(SuperAgentKnowledgeScopeNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.YES.getCode())
+            .last("LIMIT 1"));
+        if (scope == null) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), message);
+        }
+        return scope;
+    }
+
+    private SuperAgentKnowledgeTopicNode requireTopicInBase(Long topicId, Long knowledgeBaseId, String message) {
+        SuperAgentKnowledgeTopicNode topic = topicNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+            .eq(SuperAgentKnowledgeTopicNode::getId, topicId)
+            .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode())
+            .last("LIMIT 1"));
+        if (topic == null) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), message);
+        }
+        return topic;
+    }
+
+    private void ensureUniqueScopeName(Long knowledgeBaseId, String scopeName, Long currentId) {
+        SuperAgentKnowledgeScopeNode existing = scopeNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeScopeNode>()
+            .eq(SuperAgentKnowledgeScopeNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeScopeNode::getScopeName, scopeName)
+            .eq(SuperAgentKnowledgeScopeNode::getStatus, BusinessStatus.YES.getCode())
+            .last("LIMIT 1"));
+        if (existing != null && !Objects.equals(existing.getId(), currentId)) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "知识范围名称已存在。");
+        }
+    }
+
+    private void ensureUniqueTopicName(Long knowledgeBaseId, Long scopeId, String topicName, Long currentId) {
+        SuperAgentKnowledgeTopicNode existing = topicNodeMapper.selectOne(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+            .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
+            .eq(SuperAgentKnowledgeTopicNode::getScopeId, scopeId)
+            .eq(SuperAgentKnowledgeTopicNode::getTopicName, topicName)
+            .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode())
+            .last("LIMIT 1"));
+        if (existing != null && !Objects.equals(existing.getId(), currentId)) {
+            throw new SuperAgentFrameException(BaseCode.PARAMETER_ERROR.getCode(), "知识主题名称已存在。");
+        }
     }
 
     private Long parseRequiredLong(String rawValue, String fieldName) {

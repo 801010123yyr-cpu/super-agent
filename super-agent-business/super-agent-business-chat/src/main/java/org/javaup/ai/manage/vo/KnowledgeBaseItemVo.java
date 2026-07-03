@@ -11,8 +11,6 @@ public class KnowledgeBaseItemVo {
 
     private String id;
 
-    private String baseCode;
-
     private String baseName;
 
     private String description;

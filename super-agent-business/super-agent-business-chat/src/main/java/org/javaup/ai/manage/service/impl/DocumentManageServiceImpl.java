@@ -248,7 +248,6 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         document.setTokenCount(0);
 
         document.setKnowledgeBaseId(knowledgeBase.getId());
-        document.setKnowledgeBaseCode(knowledgeBase.getBaseCode());
         document.setKnowledgeBaseName(knowledgeBase.getBaseName());
         document.setStatus(BusinessStatus.YES.getCode());
 
@@ -1343,7 +1342,6 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             enumMsg(DocumentIndexStatusEnum.getRc(document.getIndexStatus())),
             document.getParseErrorMsg(),
             document.getKnowledgeBaseId(),
-            document.getKnowledgeBaseCode(),
             document.getKnowledgeBaseName(),
             document.getCurrentPlanId(),
             document.getLastIndexTaskId(),

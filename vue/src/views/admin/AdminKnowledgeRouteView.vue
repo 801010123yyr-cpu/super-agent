@@ -36,13 +36,12 @@
         </div>
       </div>
       <div v-show="!coveragePanelCollapsed" class="mt-4 grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-        <article v-for="item in scopeCoverageRows" :key="item.scopeCode"
+        <article v-for="item in scopeCoverageRows" :key="item.scopeId"
           class="grid gap-2.5 rounded-xl border border-border p-3.5"
           :class="item.pendingTopicCount > 0 ? 'bg-gradient-to-br from-amber-500/[0.07] to-white/90' : 'bg-card'">
           <div class="flex items-start justify-between gap-2">
             <div>
               <strong class="block text-sm text-foreground">{{ item.scopeName }}</strong>
-              <span class="text-xs text-muted-foreground">{{ item.scopeCode }}</span>
             </div>
             <span class="text-sm font-bold text-foreground">{{ item.coverageRateText }}</span>
           </div>
@@ -77,17 +76,17 @@
           <div><h4 class="m-0 text-sm font-semibold text-foreground">知识范围</h4><p class="mt-1 text-sm text-muted-foreground">先把大范围定清楚，自动知识问答才能稳定地在正确文档池里预选。</p></div>
           <button class="inline-flex items-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90" type="button" @click="openCreateDrawer('scope')">新建范围</button>
         </div>
-        <div class="mt-3.5"><input v-model.trim="scopeKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按范围编码、名称或描述筛选" /></div>
+        <div class="mt-3.5"><input v-model.trim="scopeKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按范围名称、别名或描述筛选" /></div>
         <div class="mt-4 grid max-h-[520px] gap-3 overflow-y-auto" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))">
-          <article v-for="item in filteredScopes" :key="item.scopeCode"
+          <article v-for="item in filteredScopes" :key="item.scopeId"
             class="grid cursor-pointer gap-2 rounded-xl border p-3.5 transition-all"
-            :class="item.scopeCode === activeScopeCode ? 'border-primary/30 bg-primary/[0.04]' : 'border-border bg-secondary hover:border-primary/20 hover:shadow-sm'"
+            :class="sameId(item.scopeId, activeScopeId) ? 'border-primary/30 bg-primary/[0.04]' : 'border-border bg-secondary hover:border-primary/20 hover:shadow-sm'"
             @click="openDrawer('scope', item, 'view')">
             <div class="flex items-center justify-between gap-2"><strong class="text-sm text-foreground">{{ item.scopeName }}</strong></div>
             <small class="line-clamp-2 text-xs text-muted-foreground">{{ item.description || '暂无描述' }}</small>
             <div class="flex gap-3 text-xs text-muted-foreground">
-              <span>主题 {{ topics.filter(t => t.scopeCode === item.scopeCode).length }}</span>
-              <span>文档 {{ linkedDocumentCountByScope(item.scopeCode) }}</span>
+              <span>主题 {{ topics.filter(t => sameId(t.scopeId, item.scopeId)).length }}</span>
+              <span>文档 {{ linkedDocumentCountByScope(item.scopeId) }}</span>
             </div>
           </article>
           <div v-if="!filteredScopes.length" class="text-sm text-muted-foreground">没有匹配的知识范围。</div>
@@ -102,16 +101,16 @@
           <button class="inline-flex items-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90" type="button" @click="openCreateDrawer('topic')">新建主题</button>
         </div>
         <div class="mt-3.5 grid items-center gap-2.5 max-[1080px]:grid-cols-1" style="grid-template-columns:180px minmax(0,1fr)">
-          <select v-model="activeScopeCode" class="rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+          <select v-model="activeScopeId" class="rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
             <option value="">全部范围</option>
-            <option v-for="item in scopes" :key="item.scopeCode" :value="item.scopeCode">{{ item.scopeName }}</option>
+            <option v-for="item in scopes" :key="item.scopeId" :value="String(item.scopeId)">{{ item.scopeName }}</option>
           </select>
-          <input v-model.trim="topicKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按主题编码、名称、别名或描述筛选" />
+          <input v-model.trim="topicKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按主题名称、别名或描述筛选" />
         </div>
         <div class="mt-4 grid max-h-[520px] gap-3 overflow-y-auto" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))">
-          <article v-for="item in filteredTopics" :key="item.topicCode"
+          <article v-for="item in filteredTopics" :key="item.topicId"
             class="grid cursor-pointer gap-2 rounded-xl border p-3.5 transition-all"
-            :class="item.topicCode === activeTopicCode ? 'border-primary/30 bg-primary/[0.04]' : 'border-border bg-secondary hover:border-primary/20 hover:shadow-sm'"
+            :class="sameId(item.topicId, activeTopicId) ? 'border-primary/30 bg-primary/[0.04]' : 'border-border bg-secondary hover:border-primary/20 hover:shadow-sm'"
             @click="openDrawer('topic', item, 'view')">
             <strong class="text-sm text-foreground">{{ item.topicName }}</strong>
             <div class="flex flex-wrap gap-2">
@@ -189,9 +188,9 @@
           <button class="inline-flex items-center rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90" type="button" @click="openCreateDrawer('relation')">新建关联</button>
         </div>
         <div class="mt-3.5 grid items-center gap-2.5 max-[1080px]:grid-cols-1" style="grid-template-columns:180px minmax(0,1fr) auto">
-          <select v-model="activeScopeCode" class="rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
+          <select v-model="activeScopeId" class="rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring/20">
             <option value="">全部范围</option>
-            <option v-for="item in scopes" :key="item.scopeCode" :value="item.scopeCode">{{ item.scopeName }}</option>
+            <option v-for="item in scopes" :key="item.scopeId" :value="String(item.scopeId)">{{ item.scopeName }}</option>
           </select>
           <input v-model.trim="relationKeyword" class="w-full rounded-md border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/20" placeholder="按主题、文档、原因筛选关联结果" />
           <button class="inline-flex items-center rounded-full border border-border bg-card px-3 py-2.5 text-sm font-semibold text-foreground hover:bg-secondary disabled:opacity-60" type="button" :disabled="actionLoading" @click="loadRelations">刷新</button>
@@ -200,12 +199,12 @@
           <span class="inline-flex items-center rounded-full bg-secondary px-3 py-1.5 text-xs text-foreground">{{ relations.length }} 条可见关联</span>
         </div>
         <div class="mt-3.5 grid max-h-[520px] gap-2 overflow-y-auto">
-          <article v-for="item in relations" :key="`${item.topicCode}-${item.documentId}`"
+          <article v-for="item in relations" :key="`${item.topicId}-${item.documentId}`"
             class="flex cursor-pointer items-center justify-between gap-3 rounded-xl border border-border bg-secondary p-3 transition-colors hover:border-primary/20 max-[900px]:flex-col max-[900px]:items-start"
             @click="openDrawer('relation', item, 'view')">
             <div class="grid gap-1 min-w-0">
               <strong class="text-sm text-foreground">{{ item.documentName }}</strong>
-              <span class="text-xs text-muted-foreground">{{ item.topicCode }} · 分数 {{ item.relationScore }} · {{ topicScopeText(item.topicCode) }}</span>
+              <span class="text-xs text-muted-foreground">{{ item.topicName || topicNameText(item.topicId) }} · 分数 {{ item.relationScore }} · {{ item.scopeName || topicScopeText(item.topicId) }}</span>
               <small class="text-xs text-muted-foreground">{{ item.reason || documentMetaLine(item) }}</small>
             </div>
             <button class="inline-flex shrink-0 items-center rounded-full border border-destructive/[0.14] bg-destructive/[0.06] px-3 py-1.5 text-sm font-semibold text-destructive hover:bg-destructive/10 disabled:opacity-60 disabled:cursor-not-allowed" type="button" :disabled="actionLoading" @click.stop="removeRelation(item)">移除</button>
@@ -248,9 +247,11 @@
                 <p class="-mt-1 m-0 text-xs text-muted-foreground">
                   知识范围会绑定到该知识库内，只参与该知识库下的软分类和路由。
                 </p>
-                <input v-model="scopeForm.scopeCode" class="drawer-input" placeholder="范围编码，例如 operation_rule" />
                 <input v-model="scopeForm.scopeName" class="drawer-input" placeholder="范围名称，例如 运营规则" />
-                <input v-model="scopeForm.parentScopeCode" class="drawer-input" placeholder="父级编码，可空" />
+                <select v-model="scopeForm.parentScopeId" class="drawer-input">
+                  <option value="">不设置父级范围</option>
+                  <option v-for="item in scopeParentOptions" :key="item.scopeId" :value="String(item.scopeId)">{{ item.scopeName }}</option>
+                </select>
                 <input v-model="scopeForm.aliases" class="drawer-input" placeholder="别名，英文逗号分隔" />
                 <input v-model="scopeForm.sortOrder" class="drawer-input" placeholder="排序值" />
                 <textarea v-model="scopeForm.description" class="drawer-input min-h-[74px] resize-y" placeholder="范围描述"></textarea>
@@ -269,9 +270,8 @@
             </template>
             <template v-if="drawerMode === 'edit'">
               <div class="mt-4 grid gap-2.5">
-                <input v-model="topicForm.topicCode" class="drawer-input" placeholder="主题编码" />
                 <input v-model="topicForm.topicName" class="drawer-input" placeholder="主题名称" />
-                <select v-model="topicForm.scopeCode" class="drawer-input"><option value="">选择所属范围</option><option v-for="item in scopes" :key="item.scopeCode" :value="item.scopeCode">{{ item.scopeName }}</option></select>
+                <select v-model="topicForm.scopeId" class="drawer-input"><option value="">选择所属范围</option><option v-for="item in scopes" :key="item.scopeId" :value="String(item.scopeId)">{{ item.scopeName }}</option></select>
                 <input v-model="topicForm.aliases" class="drawer-input" placeholder="别名，英文逗号分隔" />
                 <select v-model="topicForm.answerShape" class="drawer-input"><option value="">选择回答形态</option><option v-for="item in ANSWER_SHAPE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option></select>
                 <select v-model="topicForm.executionPreference" class="drawer-input"><option value="">选择执行偏好</option><option v-for="item in EXECUTION_PREFERENCE_OPTIONS" :key="item.value" :value="item.value">{{ item.label }}</option></select>
@@ -310,7 +310,7 @@
           <template v-if="drawerType === 'relation'">
             <template v-if="drawerMode === 'view' && drawerTarget">
               <div class="grid gap-3.5">
-                <div class="grid gap-1"><span class="text-xs text-muted-foreground">主题编码</span><strong class="text-sm text-foreground">{{ drawerTarget.topicCode }}</strong></div>
+                <div class="grid gap-1"><span class="text-xs text-muted-foreground">主题</span><strong class="text-sm text-foreground">{{ drawerTarget.topicName || topicNameText(drawerTarget.topicId) }}</strong></div>
                 <div class="grid gap-1"><span class="text-xs text-muted-foreground">文档名称</span><strong class="text-sm text-foreground">{{ drawerTarget.documentName }}</strong></div>
                 <div class="grid gap-1"><span class="text-xs text-muted-foreground">关联分数</span><strong class="text-sm text-foreground">{{ drawerTarget.relationScore }}</strong></div>
                 <div class="grid gap-1"><span class="text-xs text-muted-foreground">关联来源</span><strong class="text-sm text-foreground">{{ drawerTarget.relationSource || '-' }}</strong></div>
@@ -319,7 +319,7 @@
             </template>
             <template v-if="drawerMode === 'edit'">
               <div class="mt-4 grid gap-2.5">
-                <select v-model="relationForm.topicCode" class="drawer-input"><option value="">选择主题</option><option v-for="item in topics" :key="item.topicCode" :value="item.topicCode">{{ item.topicName }}</option></select>
+                <select v-model="relationForm.topicId" class="drawer-input"><option value="">选择主题</option><option v-for="item in relationTopicOptions" :key="item.topicId" :value="String(item.topicId)">{{ item.topicName }}</option></select>
                 <select v-model="relationForm.documentId" class="drawer-input"><option value="">选择文档</option><option v-for="item in documents" :key="item.documentId" :value="item.documentId">{{ item.documentName }}</option></select>
                 <input v-model="relationForm.relationScore" class="drawer-input" placeholder="关联分数，例如 0.9200" />
                 <input v-model="relationForm.reason" class="drawer-input" placeholder="关联原因" />
@@ -388,8 +388,8 @@ const knowledgeBaseOptions = ref([])
 const activeKnowledgeBaseId = ref('')
 const profileDocumentId = ref('')
 const profile = ref(null)
-const activeScopeCode = ref('')
-const activeTopicCode = ref('')
+const activeScopeId = ref('')
+const activeTopicId = ref('')
 const scopeKeyword = ref('')
 const topicKeyword = ref('')
 const documentKeyword = ref('')
@@ -412,31 +412,35 @@ const drawerTarget = ref(null)
 const drawerType = ref('')
 const coveragePanelCollapsed = ref(false)
 const anomalyCollapsed = ref(true)
-const scopeForm = reactive({ knowledgeBaseId: '', scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID })
-const topicForm = reactive({ knowledgeBaseId: '', topicCode: '', topicName: '', scopeCode: '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID })
-const relationForm = reactive({ knowledgeBaseId: '', topicCode: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+const scopeForm = reactive({ id: '', knowledgeBaseId: '', scopeName: '', parentScopeId: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID })
+const topicForm = reactive({ id: '', knowledgeBaseId: '', topicName: '', scopeId: '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID })
+const relationForm = reactive({ knowledgeBaseId: '', topicId: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
 
-const activeScope = computed(() => scopes.value.find((item) => item.scopeCode === activeScopeCode.value) || null)
-const activeTopic = computed(() => topics.value.find((item) => item.topicCode === activeTopicCode.value) || null)
-const knowledgeBaseNameMap = computed(() => Object.fromEntries(knowledgeBaseOptions.value.map((item) => [String(item.id), item.baseName || item.baseCode || item.id])))
+const activeScope = computed(() => scopes.value.find((item) => sameId(item.scopeId, activeScopeId.value)) || null)
+const activeTopic = computed(() => topics.value.find((item) => sameId(item.topicId, activeTopicId.value)) || null)
+const knowledgeBaseNameMap = computed(() => Object.fromEntries(knowledgeBaseOptions.value.map((item) => [String(item.id), item.baseName || item.id])))
+const scopeParentOptions = computed(() => scopes.value.filter((item) => !scopeForm.id || !sameId(item.scopeId, scopeForm.id)))
+const relationTopicOptions = computed(() => activeScopeId.value
+  ? topics.value.filter((item) => sameId(item.scopeId, activeScopeId.value))
+  : topics.value)
 const filteredScopes = computed(() => {
   const keyword = scopeKeyword.value.trim().toLowerCase()
   if (!keyword) return scopes.value
-  return scopes.value.filter((item) => [item.scopeCode, item.scopeName, item.description, item.aliases].filter(Boolean).join(' ').toLowerCase().includes(keyword))
+  return scopes.value.filter((item) => [item.scopeId, item.scopeName, item.description, item.aliases].filter(Boolean).join(' ').toLowerCase().includes(keyword))
 })
 const filteredTopics = computed(() => {
   const keyword = topicKeyword.value.trim().toLowerCase()
   return topics.value.filter((item) => {
-    if (activeScopeCode.value && item.scopeCode !== activeScopeCode.value) return false
+    if (activeScopeId.value && !sameId(item.scopeId, activeScopeId.value)) return false
     if (!keyword) return true
-    return [item.topicCode, item.topicName, item.description, item.aliases].filter(Boolean).join(' ').toLowerCase().includes(keyword)
+    return [item.topicId, item.topicName, item.description, item.aliases].filter(Boolean).join(' ').toLowerCase().includes(keyword)
   })
 })
 const filteredDocuments = computed(() => {
   const keyword = documentKeyword.value.trim().toLowerCase()
   return documents.value.filter((item) => {
     if (!keyword) return true
-    return [item.documentName, item.originalFileName, item.knowledgeBaseName, item.knowledgeBaseCode].filter(Boolean).join(' ').toLowerCase().includes(keyword)
+    return [item.documentName, item.originalFileName, item.knowledgeBaseName].filter(Boolean).join(' ').toLowerCase().includes(keyword)
   })
 })
 const selectedProfileDocument = computed(() => documents.value.find((item) => item.documentId === profileDocumentId.value) || null)
@@ -445,12 +449,12 @@ const selectedScopeAliases = computed(() => parseTextList(activeScope.value?.ali
 const selectedScopeExamples = computed(() => parseJsonArray(activeScope.value?.examples))
 const selectedScopeStats = computed(() => {
   if (!activeScope.value) return null
-  const scopeTopics = topics.value.filter((item) => item.scopeCode === activeScope.value.scopeCode)
-  const topicCodes = new Set(scopeTopics.map((item) => item.topicCode))
-  const scopeRelations = allRelations.value.filter((item) => topicCodes.has(item.topicCode))
+  const scopeTopics = topics.value.filter((item) => sameId(item.scopeId, activeScope.value.scopeId))
+  const topicIds = new Set(scopeTopics.map((item) => item.topicId))
+  const scopeRelations = allRelations.value.filter((item) => topicIds.has(String(item.topicId)))
   return { topicCount: scopeTopics.length, relationCount: scopeRelations.length, documentCount: new Set(scopeRelations.map((item) => String(item.documentId))).size }
 })
-const selectedTopicRelations = computed(() => activeTopic.value ? allRelations.value.filter((item) => item.topicCode === activeTopic.value.topicCode) : [])
+const selectedTopicRelations = computed(() => activeTopic.value ? allRelations.value.filter((item) => sameId(item.topicId, activeTopic.value.topicId)) : [])
 const selectedTopicStats = computed(() => {
   if (!activeTopic.value) return null
   const scores = selectedTopicRelations.value.map((item) => Number(item.relationScore)).filter((item) => Number.isFinite(item))
@@ -459,31 +463,31 @@ const selectedTopicStats = computed(() => {
 const relations = computed(() => {
   const keyword = relationKeyword.value.trim().toLowerCase()
   return allRelations.value.filter((item) => {
-    const topic = topics.value.find((t) => t.topicCode === item.topicCode)
-    if (activeScopeCode.value && topic?.scopeCode !== activeScopeCode.value) return false
-    if (activeTopicCode.value && item.topicCode !== activeTopicCode.value) return false
+    const topic = topics.value.find((t) => sameId(t.topicId, item.topicId))
+    if (activeScopeId.value && !sameId(topic?.scopeId, activeScopeId.value)) return false
+    if (activeTopicId.value && !sameId(item.topicId, activeTopicId.value)) return false
     if (!keyword) return true
-    return [item.topicCode, topic?.topicName, topic?.scopeCode, item.documentName, item.reason].filter(Boolean).join(' ').toLowerCase().includes(keyword)
+    return [item.topicName, topic?.topicName, item.scopeName, scopeNameText(topic?.scopeId), item.documentName, item.reason].filter(Boolean).join(' ').toLowerCase().includes(keyword)
   })
 })
 const selectedProfileRelatedTopics = computed(() => {
   if (!selectedProfileDocument.value) return []
-  const topicCodes = new Set(allRelations.value.filter((item) => item.documentId === selectedProfileDocument.value.documentId).map((item) => item.topicCode))
-  return topics.value.filter((item) => topicCodes.has(item.topicCode))
+  const topicIds = new Set(allRelations.value.filter((item) => sameId(item.documentId, selectedProfileDocument.value.documentId)).map((item) => String(item.topicId)))
+  return topics.value.filter((item) => topicIds.has(String(item.topicId)))
 })
 const scopeCoverageRows = computed(() => scopes.value.map((scope) => {
-  const scopeTopics = topics.value.filter((t) => t.scopeCode === scope.scopeCode)
-  const topicCodes = new Set(scopeTopics.map((t) => t.topicCode))
-  const scopeRelations = allRelations.value.filter((r) => topicCodes.has(r.topicCode))
-  const coveredTopicCodes = new Set(scopeRelations.map((r) => r.topicCode))
+  const scopeTopics = topics.value.filter((t) => sameId(t.scopeId, scope.scopeId))
+  const topicIds = new Set(scopeTopics.map((t) => t.topicId))
+  const scopeRelations = allRelations.value.filter((r) => topicIds.has(String(r.topicId)))
+  const coveredTopicIds = new Set(scopeRelations.map((r) => String(r.topicId)))
   const linkedDocumentIds = new Set(scopeRelations.map((r) => String(r.documentId)))
-  const coverageRate = scopeTopics.length ? (coveredTopicCodes.size / scopeTopics.length) * 100 : 0
-  return { scopeCode: scope.scopeCode, scopeName: scope.scopeName, topicCount: scopeTopics.length, coveredTopicCount: coveredTopicCodes.size, pendingTopicCount: Math.max(0, scopeTopics.length - coveredTopicCodes.size), documentCount: linkedDocumentIds.size, relationCount: scopeRelations.length, coverageRate, coverageRateText: `${coverageRate.toFixed(0)}%` }
+  const coverageRate = scopeTopics.length ? (coveredTopicIds.size / scopeTopics.length) * 100 : 0
+  return { scopeId: scope.scopeId, scopeName: scope.scopeName, topicCount: scopeTopics.length, coveredTopicCount: coveredTopicIds.size, pendingTopicCount: Math.max(0, scopeTopics.length - coveredTopicIds.size), documentCount: linkedDocumentIds.size, relationCount: scopeRelations.length, coverageRate, coverageRateText: `${coverageRate.toFixed(0)}%` }
 }))
 const overallCoverageRateText = computed(() => {
   if (!topics.value.length) return '0%'
-  const coveredTopicCodes = new Set(allRelations.value.map((r) => r.topicCode))
-  return `${((coveredTopicCodes.size / topics.value.length) * 100).toFixed(0)}%`
+  const coveredTopicIds = new Set(allRelations.value.map((r) => String(r.topicId)))
+  return `${((coveredTopicIds.size / topics.value.length) * 100).toFixed(0)}%`
 })
 const profileAnomalyRows = computed(() => {
   const linkedDocumentIds = new Set(allRelations.value.map((r) => String(r.documentId)))
@@ -496,7 +500,7 @@ const profileAnomalyRows = computed(() => {
 const allVisibleAnomaliesSelected = computed(() => profileAnomalyRows.value.length && profileAnomalyRows.value.every((item) => selectedProfileRepairIds.value.includes(item.documentId)))
 const summaryCards = computed(() => {
   const linkedDocumentCount = new Set(allRelations.value.map((item) => String(item.documentId))).size
-  const pendingTopicCount = topics.value.filter((item) => !allRelations.value.some((r) => r.topicCode === item.topicCode)).length
+  const pendingTopicCount = topics.value.filter((item) => !allRelations.value.some((r) => sameId(r.topicId, item.topicId))).length
   return [
     { label: '知识范围', value: String(scopes.value.length), description: '知识范围是自动路由的第一层收敛边界' },
     { label: '知识主题', value: String(topics.value.length), description: '主题是范围里的可回答单元' },
@@ -508,16 +512,14 @@ const summaryCards = computed(() => {
 })
 const scopeViewRows = computed(() => !drawerTarget.value ? [] : [
   { label: '所属知识库', value: knowledgeBaseNameMap.value[String(drawerTarget.value.knowledgeBaseId || activeKnowledgeBaseId.value)] || '-' },
-  { label: '范围编码', value: drawerTarget.value.scopeCode },
   { label: '范围名称', value: drawerTarget.value.scopeName },
-  { label: '父级编码', value: drawerTarget.value.parentScopeCode || '-' },
+  { label: '父级范围', value: scopeNameText(drawerTarget.value.parentScopeId) || '-' },
   { label: '排序值', value: drawerTarget.value.sortOrder },
   { label: '描述', value: drawerTarget.value.description || '暂无描述' }
 ])
 const topicViewRows = computed(() => !drawerTarget.value ? [] : [
-  { label: '主题编码', value: drawerTarget.value.topicCode },
   { label: '主题名称', value: drawerTarget.value.topicName },
-  { label: '所属范围', value: drawerTarget.value.scopeCode },
+  { label: '所属范围', value: scopeNameText(drawerTarget.value.scopeId) || '-' },
   { label: '回答形态', value: formatAnswerShapeLabel(drawerTarget.value.answerShape) },
   { label: '执行偏好', value: formatExecutionPreferenceLabel(drawerTarget.value.executionPreference) },
   { label: '排序值', value: drawerTarget.value.sortOrder },
@@ -530,10 +532,10 @@ const profileMiniCards = computed(() => !profile.value ? [] : [
   { label: '核心主题数', value: parseJsonArray(profile.value.coreTopics).length }
 ])
 
-watch(() => relationForm.topicCode, (value) => {
-  activeTopicCode.value = value || ''
-  const currentTopic = topics.value.find((item) => item.topicCode === value)
-  if (currentTopic?.scopeCode) activeScopeCode.value = currentTopic.scopeCode
+watch(() => relationForm.topicId, (value) => {
+  activeTopicId.value = value || ''
+  const currentTopic = topics.value.find((item) => sameId(item.topicId, value))
+  if (currentTopic?.scopeId) activeScopeId.value = currentTopic.scopeId
 })
 
 function noticeClass(type) {
@@ -541,40 +543,64 @@ function noticeClass(type) {
   if (type === 'danger') return 'bg-[#fef3f2] text-[#b42318]'
   return 'bg-primary/[0.08] text-primary'
 }
-function openDrawer(type, item, mode = 'view') { drawerType.value = type; drawerTarget.value = item ? { ...item } : null; drawerMode.value = mode; drawerVisible.value = true }
+function openDrawer(type, item, mode = 'view') {
+  if (item && type === 'scope') activeScopeId.value = item.scopeId || ''
+  if (item && type === 'topic') { activeTopicId.value = item.topicId || ''; activeScopeId.value = item.scopeId || activeScopeId.value }
+  if (item && type === 'relation') { activeTopicId.value = item.topicId || ''; activeScopeId.value = item.scopeId || activeScopeId.value }
+  drawerType.value = type
+  drawerTarget.value = item ? { ...item } : null
+  drawerMode.value = mode
+  drawerVisible.value = true
+}
 function closeDrawer() { drawerVisible.value = false; drawerTarget.value = null; drawerMode.value = 'view'; drawerType.value = '' }
 function switchDrawerToEdit() {
   drawerMode.value = 'edit'
   if (drawerType.value === 'scope' && drawerTarget.value) { editScope(drawerTarget.value) }
   else if (drawerType.value === 'topic' && drawerTarget.value) { editTopic(drawerTarget.value) }
-  else if (drawerType.value === 'relation' && drawerTarget.value) { Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: drawerTarget.value.topicCode || '', documentId: drawerTarget.value.documentId || '', relationScore: drawerTarget.value.relationScore || '0.9000', relationSource: 'manual', reason: drawerTarget.value.reason || '', operatorId: OPERATOR_ID }) }
+  else if (drawerType.value === 'relation' && drawerTarget.value) { Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicId: drawerTarget.value.topicId || '', documentId: drawerTarget.value.documentId || '', relationScore: drawerTarget.value.relationScore || '0.9000', relationSource: 'manual', reason: drawerTarget.value.reason || '', operatorId: OPERATOR_ID }) }
 }
 function openCreateDrawer(type) {
   if (type === 'scope') resetScopeForm()
   else if (type === 'topic') resetTopicForm()
-  else if (type === 'relation') Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: activeTopicCode.value || '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+  else if (type === 'relation') Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicId: activeTopicId.value || '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
   openDrawer(type, null, 'edit')
 }
 function scrollToSection(section) {
   const element = { scope: scopeSectionRef.value, profile: profileSectionRef.value, relation: relationSectionRef.value }[section]
   element?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
-function focusCoverageScope(item) { activeScopeCode.value = item.scopeCode; const scope = scopes.value.find((s) => s.scopeCode === item.scopeCode); if (scope) editScope(scope); scrollToSection('scope') }
+function focusCoverageScope(item) { activeScopeId.value = item.scopeId; const scope = scopes.value.find((s) => sameId(s.scopeId, item.scopeId)); if (scope) editScope(scope); scrollToSection('scope') }
 function showNotice(message, type = 'info') { notice.message = message; notice.type = type }
-function topicScopeText(topicCode) {
-  const topic = topics.value.find((item) => item.topicCode === topicCode)
-  if (!topic?.scopeCode) return '未分范围'
-  const scope = scopes.value.find((item) => item.scopeCode === topic.scopeCode)
-  return scope?.scopeName ? `${scope.scopeName} (${topic.scopeCode})` : topic.scopeCode
+function sameId(left, right) { return String(left || '') === String(right || '') }
+function scopeNameText(scopeId) {
+  if (!scopeId) return ''
+  return scopes.value.find((item) => sameId(item.scopeId, scopeId))?.scopeName || ''
 }
-function linkedDocumentCountByScope(scopeCode) {
-  const topicCodes = new Set(topics.value.filter((item) => item.scopeCode === scopeCode).map((item) => item.topicCode))
-  return new Set(allRelations.value.filter((item) => topicCodes.has(item.topicCode)).map((item) => String(item.documentId))).size
+function topicNameText(topicId) {
+  if (!topicId) return ''
+  return topics.value.find((item) => sameId(item.topicId, topicId))?.topicName || ''
 }
-function resetScopeForm() { Object.assign(scopeForm, { knowledgeBaseId: activeKnowledgeBaseId.value, scopeCode: '', scopeName: '', parentScopeCode: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeScopeCode.value = '' }
-function resetTopicForm() { Object.assign(topicForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '', topicName: '', scopeCode: activeScopeCode.value || '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeTopicCode.value = '' }
-function editScope(item) { activeScopeCode.value = item.scopeCode; if (activeTopic.value && activeTopic.value.scopeCode !== item.scopeCode) { activeTopicCode.value = ''; relationForm.topicCode = '' }; Object.assign(scopeForm, { ...item, knowledgeBaseId: item.knowledgeBaseId || activeKnowledgeBaseId.value, operatorId: OPERATOR_ID }); topicForm.scopeCode = item.scopeCode }
-function editTopic(item) { activeScopeCode.value = item.scopeCode; activeTopicCode.value = item.topicCode; relationForm.topicCode = item.topicCode; Object.assign(topicForm, { ...item, knowledgeBaseId: activeKnowledgeBaseId.value, operatorId: OPERATOR_ID }) }
+function normalizeScopeItem(item = {}) {
+  const scopeId = String(item.id || item.scopeId || '')
+  return { ...item, id: scopeId, scopeId, parentScopeId: item.parentScopeId ? String(item.parentScopeId) : '' }
+}
+function normalizeTopicItem(item = {}) {
+  const topicId = String(item.id || item.topicId || '')
+  return { ...item, id: topicId, topicId, scopeId: item.scopeId ? String(item.scopeId) : '' }
+}
+function topicScopeText(topicId) {
+  const topic = topics.value.find((item) => sameId(item.topicId, topicId))
+  if (!topic?.scopeId) return '未分范围'
+  return scopeNameText(topic.scopeId) || '未分范围'
+}
+function linkedDocumentCountByScope(scopeId) {
+  const topicIds = new Set(topics.value.filter((item) => sameId(item.scopeId, scopeId)).map((item) => String(item.topicId)))
+  return new Set(allRelations.value.filter((item) => topicIds.has(String(item.topicId))).map((item) => String(item.documentId))).size
+}
+function resetScopeForm() { Object.assign(scopeForm, { id: '', knowledgeBaseId: activeKnowledgeBaseId.value, scopeName: '', parentScopeId: '', description: '', aliases: '', examples: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeScopeId.value = '' }
+function resetTopicForm() { Object.assign(topicForm, { id: '', knowledgeBaseId: activeKnowledgeBaseId.value, topicName: '', scopeId: activeScopeId.value || '', description: '', aliases: '', examples: '', answerShape: '', executionPreference: '', sortOrder: '0', operatorId: OPERATOR_ID }); activeTopicId.value = '' }
+function editScope(item) { activeScopeId.value = item.scopeId; if (activeTopic.value && !sameId(activeTopic.value.scopeId, item.scopeId)) { activeTopicId.value = ''; relationForm.topicId = '' }; Object.assign(scopeForm, { id: item.id || item.scopeId || '', knowledgeBaseId: item.knowledgeBaseId || activeKnowledgeBaseId.value, scopeName: item.scopeName || '', parentScopeId: item.parentScopeId || '', description: item.description || '', aliases: item.aliases || '', examples: item.examples || '', sortOrder: String(item.sortOrder || '0'), operatorId: OPERATOR_ID }); topicForm.scopeId = String(item.scopeId || '') }
+function editTopic(item) { activeScopeId.value = item.scopeId; activeTopicId.value = item.topicId; relationForm.topicId = item.topicId; Object.assign(topicForm, { id: item.id || item.topicId || '', knowledgeBaseId: activeKnowledgeBaseId.value, topicName: item.topicName || '', scopeId: item.scopeId || '', description: item.description || '', aliases: item.aliases || '', examples: item.examples || '', answerShape: item.answerShape || '', executionPreference: item.executionPreference || '', sortOrder: String(item.sortOrder || '0'), operatorId: OPERATOR_ID }) }
 function selectDocument(item) { profileDocumentId.value = item.documentId; profile.value = null }
 async function withAction(task, successMessage = '') {
   actionLoading.value = true
@@ -598,13 +624,13 @@ async function loadAll() {
       activeKnowledgeBaseId.value ? manageApi.listKnowledgeTopics(query) : Promise.resolve([]),
       manageApi.queryDocumentPage({ pageNo: '1', pageSize: '200', keyword: '' })
     ])
-    scopes.value = Array.isArray(scopeList) ? scopeList : []
-    topics.value = Array.isArray(topicList) ? topicList : []
+    scopes.value = Array.isArray(scopeList) ? scopeList.map(normalizeScopeItem) : []
+    topics.value = Array.isArray(topicList) ? topicList.map(normalizeTopicItem) : []
     documents.value = Array.isArray(docPage?.records)
       ? docPage.records.filter((item) => String(item.knowledgeBaseId || '') === String(activeKnowledgeBaseId.value || ''))
       : []
-    if (activeScopeCode.value && !scopes.value.some((item) => item.scopeCode === activeScopeCode.value)) activeScopeCode.value = ''
-    if (activeTopicCode.value && !topics.value.some((item) => item.topicCode === activeTopicCode.value)) { activeTopicCode.value = ''; relationForm.topicCode = '' }
+    if (activeScopeId.value && !scopes.value.some((item) => sameId(item.scopeId, activeScopeId.value))) activeScopeId.value = ''
+    if (activeTopicId.value && !topics.value.some((item) => sameId(item.topicId, activeTopicId.value))) { activeTopicId.value = ''; relationForm.topicId = '' }
     await loadRelations()
   } catch (error) { showNotice(error.message || '加载知识路由数据失败', 'danger') }
   finally { loading.value = false }
@@ -616,13 +642,13 @@ function ensureKnowledgeBaseSelected(value = activeKnowledgeBaseId.value) {
 }
 function ensureActiveKnowledgeBase() { return ensureKnowledgeBaseSelected(activeKnowledgeBaseId.value) }
 async function handleKnowledgeBaseChange() {
-  activeScopeCode.value = ''
-  activeTopicCode.value = ''
+  activeScopeId.value = ''
+  activeTopicId.value = ''
   profileDocumentId.value = ''
   profile.value = null
   resetScopeForm()
   resetTopicForm()
-  Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
+  Object.assign(relationForm, { knowledgeBaseId: activeKnowledgeBaseId.value, topicId: '', documentId: '', relationScore: '0.9000', relationSource: 'manual', reason: '', operatorId: OPERATOR_ID })
   await loadAll()
 }
 async function saveScope() {
@@ -630,19 +656,19 @@ async function saveScope() {
   await withAction(async () => {
     activeKnowledgeBaseId.value = String(scopeForm.knowledgeBaseId)
     const data = await manageApi.saveKnowledgeScope(scopeForm)
-    activeScopeCode.value = data?.scopeCode || scopeForm.scopeCode
+    activeScopeId.value = data?.id || scopeForm.id
     await loadAll()
     closeDrawer()
   }, '知识范围已保存')
 }
 async function deleteScope() {
   if (!activeScope.value || !await confirm(`确认删除范围「${activeScope.value.scopeName}」吗？`, '确认删除')) return
-  await withAction(async () => { await manageApi.deleteKnowledgeScope({ knowledgeBaseId: activeKnowledgeBaseId.value, scopeCode: activeScope.value.scopeCode, operatorId: OPERATOR_ID }); resetScopeForm(); closeDrawer(); await loadAll() }, '知识范围已删除')
+  await withAction(async () => { await manageApi.deleteKnowledgeScope({ knowledgeBaseId: activeKnowledgeBaseId.value, id: activeScope.value.id || activeScope.value.scopeId, operatorId: OPERATOR_ID }); resetScopeForm(); closeDrawer(); await loadAll() }, '知识范围已删除')
 }
-async function saveTopic() { if (!ensureActiveKnowledgeBase()) return; topicForm.knowledgeBaseId = activeKnowledgeBaseId.value; await withAction(async () => { const data = await manageApi.saveKnowledgeTopic(topicForm); activeTopicCode.value = data?.topicCode || topicForm.topicCode; relationForm.topicCode = activeTopicCode.value; await loadAll(); closeDrawer() }, '知识主题已保存') }
+async function saveTopic() { if (!ensureActiveKnowledgeBase()) return; topicForm.knowledgeBaseId = activeKnowledgeBaseId.value; await withAction(async () => { const data = await manageApi.saveKnowledgeTopic(topicForm); activeTopicId.value = data?.id || topicForm.id; relationForm.topicId = activeTopicId.value; await loadAll(); closeDrawer() }, '知识主题已保存') }
 async function deleteTopic() {
   if (!activeTopic.value || !await confirm(`确认删除主题「${activeTopic.value.topicName}」吗？`, '确认删除')) return
-  await withAction(async () => { await manageApi.deleteKnowledgeTopic({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: activeTopic.value.topicCode, operatorId: OPERATOR_ID }); resetTopicForm(); relationForm.topicCode = ''; closeDrawer(); await loadAll() }, '知识主题已删除')
+  await withAction(async () => { await manageApi.deleteKnowledgeTopic({ knowledgeBaseId: activeKnowledgeBaseId.value, id: activeTopic.value.id || activeTopic.value.topicId, operatorId: OPERATOR_ID }); resetTopicForm(); relationForm.topicId = ''; closeDrawer(); await loadAll() }, '知识主题已删除')
 }
 async function loadProfile() { if (!profileDocumentId.value) return; await withAction(async () => { profile.value = await manageApi.queryDocumentProfile({ documentId: profileDocumentId.value }) }) }
 async function regenerateProfile() { if (!profileDocumentId.value) return; await withAction(async () => { profile.value = await manageApi.regenerateDocumentProfile({ documentId: profileDocumentId.value, operatorId: OPERATOR_ID }) }, '文档画像已重新生成') }
@@ -662,12 +688,12 @@ async function batchRepairProfiles() {
   finally { batchLoading.value = false }
 }
 async function loadRelations() {
-  try { allRelations.value = activeKnowledgeBaseId.value ? await manageApi.listTopicDocuments({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: '' }) : [] }
+  try { allRelations.value = activeKnowledgeBaseId.value ? await manageApi.listTopicDocuments({ knowledgeBaseId: activeKnowledgeBaseId.value, topicId: '' }) : [] }
   catch (error) { showNotice(error.message || '加载主题文档关联失败', 'danger') }
 }
 async function saveRelation() { if (!ensureActiveKnowledgeBase()) return; relationForm.knowledgeBaseId = activeKnowledgeBaseId.value; await withAction(async () => { await manageApi.saveTopicDocumentRelation(relationForm); await loadRelations(); closeDrawer() }, '主题文档关联已保存') }
-async function removeRelation(item) { await withAction(async () => { await manageApi.removeTopicDocumentRelation({ knowledgeBaseId: activeKnowledgeBaseId.value, topicCode: item.topicCode, documentId: item.documentId, operatorId: OPERATOR_ID }); await loadRelations() }, '主题文档关联已移除') }
-function documentMetaLine(item = {}) { return [item.knowledgeBaseName, item.knowledgeBaseCode].filter(Boolean).join(' · ') || '仅绑定知识库' }
+async function removeRelation(item) { await withAction(async () => { await manageApi.removeTopicDocumentRelation({ knowledgeBaseId: activeKnowledgeBaseId.value, topicId: item.topicId, documentId: item.documentId, operatorId: OPERATOR_ID }); await loadRelations() }, '主题文档关联已移除') }
+function documentMetaLine(item = {}) { return item.knowledgeBaseName || '仅绑定知识库' }
 function parseTextList(value) { const n = String(value || '').trim(); if (!n) return []; return n.split(',').map((item) => item.trim()).filter(Boolean) }
 function formatAnswerShapeLabel(value) { return formatMappedLabel(value, ANSWER_SHAPE_LABEL_MAP) }
 function formatExecutionPreferenceLabel(value) { return formatMappedLabel(value, EXECUTION_PREFERENCE_LABEL_MAP) }

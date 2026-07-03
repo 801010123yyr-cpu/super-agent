@@ -486,7 +486,7 @@ public class ChatPreparationOrchestrator {
             .limit(5)
             .map(scope -> {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("scopeCode", StrUtil.blankToDefault(scope.getScopeCode(), ""));
+                item.put("scopeId", scope.getScopeId() == null ? "" : String.valueOf(scope.getScopeId()));
                 item.put("scopeName", StrUtil.blankToDefault(scope.getScopeName(), ""));
                 item.put("score", scope.getScore() == null ? "" : scope.getScore().toPlainString());
                 item.put("reason", StrUtil.blankToDefault(scope.getReason(), ""));
@@ -503,8 +503,8 @@ public class ChatPreparationOrchestrator {
             .limit(5)
             .map(topic -> {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("scopeCode", StrUtil.blankToDefault(topic.getScopeCode(), ""));
-                item.put("topicCode", StrUtil.blankToDefault(topic.getTopicCode(), ""));
+                item.put("scopeId", topic.getScopeId() == null ? "" : String.valueOf(topic.getScopeId()));
+                item.put("topicId", topic.getTopicId() == null ? "" : String.valueOf(topic.getTopicId()));
                 item.put("topicName", StrUtil.blankToDefault(topic.getTopicName(), ""));
                 item.put("score", topic.getScore() == null ? "" : topic.getScore().toPlainString());
                 item.put("reason", StrUtil.blankToDefault(topic.getReason(), ""));
@@ -900,7 +900,6 @@ public class ChatPreparationOrchestrator {
     private double descriptorRouteScore(KnowledgeDocumentDescriptor descriptor, List<String> queryTerms) {
         String content = normalizeRouteExpansionText(String.join(" ",
             StrUtil.blankToDefault(descriptor.getDocumentName(), ""),
-            StrUtil.blankToDefault(descriptor.getKnowledgeBaseCode(), ""),
             StrUtil.blankToDefault(descriptor.getKnowledgeBaseName(), "")
         ));
         if (queryTerms == null || queryTerms.isEmpty() || content.isBlank()) {

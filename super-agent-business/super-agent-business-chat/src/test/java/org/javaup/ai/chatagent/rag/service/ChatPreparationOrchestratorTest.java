@@ -123,8 +123,8 @@ class ChatPreparationOrchestratorTest {
                 .selectedKnowledgeBaseIds(List.of(1L))
                 .selectedKnowledgeBaseNames(List.of("测试知识库"))
                 .allowedDocuments(List.of(
-                    new KnowledgeDocumentDescriptor(1001L, "O6跨文档图谱-审计系统别名说明B.md", 2001L, 1L, "test-kb", "测试知识库"),
-                    new KnowledgeDocumentDescriptor(1002L, "O6跨文档图谱-审计证据规范A.md", 2002L, 1L, "test-kb", "测试知识库")
+                    new KnowledgeDocumentDescriptor(1001L, "O6跨文档图谱-审计系统别名说明B.md", 2001L, 1L, "测试知识库"),
+                    new KnowledgeDocumentDescriptor(1002L, "O6跨文档图谱-审计证据规范A.md", 2002L, 1L, "测试知识库")
                 ))
                 .allowedDocumentIds(List.of(1001L, 1002L))
                 .allowedTaskIds(List.of(2001L, 2002L))

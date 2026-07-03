@@ -12,7 +12,7 @@ public class TopicDocumentRelationSaveDto {
 
     private String knowledgeBaseId;
 
-    private String topicCode;
+    private String topicId;
 
     private String documentId;
 

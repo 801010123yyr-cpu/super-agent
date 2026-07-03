@@ -276,12 +276,12 @@ const candidateGroups = computed(() => {
   return [
     {
       title: '范围候选', count: selectedRecord.value.scopes.length,
-      items: selectedRecord.value.scopes.map((c) => ({ name: c.scopeName || c.scopeCode, scoreText: c.scoreText })),
+      items: selectedRecord.value.scopes.map((c, index) => ({ name: c.scopeName || `范围 ${c.scopeId || index + 1}`, scoreText: c.scoreText })),
       empty: '当前没有显式范围候选。'
     },
     {
       title: '主题候选', count: selectedRecord.value.topics.length,
-      items: selectedRecord.value.topics.map((c) => ({ name: c.topicName || c.topicCode, scoreText: c.scoreText })),
+      items: selectedRecord.value.topics.map((c, index) => ({ name: c.topicName || `主题 ${c.topicId || index + 1}`, scoreText: c.scoreText })),
       empty: '当前没有显式主题候选。'
     }
   ]

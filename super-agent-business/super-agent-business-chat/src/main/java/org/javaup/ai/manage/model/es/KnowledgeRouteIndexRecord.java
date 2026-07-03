@@ -24,17 +24,17 @@ public class KnowledgeRouteIndexRecord {
 
     private String entityType;
 
-    private String entityCode;
+    private Long entityId;
 
     private Long documentId;
 
     private Long knowledgeBaseId;
 
-    private String scopeCode;
+    private Long scopeId;
 
     private String scopeName;
 
-    private String topicCode;
+    private Long topicId;
 
     private String topicName;
 
