@@ -58,6 +58,10 @@ public class DocumentManageProperties {
         private Integer semanticMaxChars = 700;
         private Integer semanticMinChars = 240;
         private Double semanticSimilarityThreshold = 0.18D;
+        private Integer parentBlockMaxChars = 2200;
+        private Integer parentBlockOverlapChars = 180;
+        private Integer parentSemanticMaxChars = 1600;
+        private Integer parentSemanticMinChars = 480;
         private Boolean llmEnabled = Boolean.FALSE;
         private Integer llmMaxChars = 3500;
         private Boolean recommendLlmWhenLowQuality = Boolean.TRUE;

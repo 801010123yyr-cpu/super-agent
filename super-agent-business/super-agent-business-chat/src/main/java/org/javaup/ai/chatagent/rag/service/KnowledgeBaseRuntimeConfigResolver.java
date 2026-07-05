@@ -57,6 +57,8 @@ public class KnowledgeBaseRuntimeConfigResolver {
         applyIfPresent(config.getRaptorTopK(), options::setRaptorTopK);
         applyIfPresent(config.getRaptorSourceChunkTopK(), options::setRaptorSourceChunkTopK);
         applyIfPresent(config.getCandidateTopK(), options::setCandidateTopK);
+        applyIfPresent(config.getRerankCandidateTopK(), options::setRerankCandidateTopK);
+        applyIfPresent(config.getReserveCandidateTopK(), options::setReserveCandidateTopK);
         applyIfPresent(config.getFinalTopK(), options::setFinalTopK);
         applyIfPresent(config.getMinVectorSimilarity(), options::setMinVectorSimilarity);
         applyIfPresent(config.getKeywordRelativeScoreFloor(), options::setKeywordRelativeScoreFloor);
@@ -91,6 +93,8 @@ public class KnowledgeBaseRuntimeConfigResolver {
         mergeField(configs, RuntimeConfig::getRaptorTopK, options::setRaptorTopK, "raptorTopK", conflicts);
         mergeField(configs, RuntimeConfig::getRaptorSourceChunkTopK, options::setRaptorSourceChunkTopK, "raptorSourceChunkTopK", conflicts);
         mergeField(configs, RuntimeConfig::getCandidateTopK, options::setCandidateTopK, "candidateTopK", conflicts);
+        mergeField(configs, RuntimeConfig::getRerankCandidateTopK, options::setRerankCandidateTopK, "rerankCandidateTopK", conflicts);
+        mergeField(configs, RuntimeConfig::getReserveCandidateTopK, options::setReserveCandidateTopK, "reserveCandidateTopK", conflicts);
         mergeField(configs, RuntimeConfig::getFinalTopK, options::setFinalTopK, "finalTopK", conflicts);
         mergeField(configs, RuntimeConfig::getMinVectorSimilarity, options::setMinVectorSimilarity, "minVectorSimilarity", conflicts);
         mergeField(configs, RuntimeConfig::getKeywordRelativeScoreFloor, options::setKeywordRelativeScoreFloor, "keywordRelativeScoreFloor", conflicts);
@@ -182,6 +186,8 @@ public class KnowledgeBaseRuntimeConfigResolver {
         copyIfPresent(source.getRaptorTopK(), target::setRaptorTopK);
         copyIfPresent(source.getRaptorSourceChunkTopK(), target::setRaptorSourceChunkTopK);
         copyIfPresent(source.getCandidateTopK(), target::setCandidateTopK);
+        copyIfPresent(source.getRerankCandidateTopK(), target::setRerankCandidateTopK);
+        copyIfPresent(source.getReserveCandidateTopK(), target::setReserveCandidateTopK);
         copyIfPresent(source.getFinalTopK(), target::setFinalTopK);
         copyIfPresent(source.getMinVectorSimilarity(), target::setMinVectorSimilarity);
         copyIfPresent(source.getKeywordRelativeScoreFloor(), target::setKeywordRelativeScoreFloor);
@@ -228,6 +234,8 @@ public class KnowledgeBaseRuntimeConfigResolver {
         private Integer raptorTopK;
         private Integer raptorSourceChunkTopK;
         private Integer candidateTopK;
+        private Integer rerankCandidateTopK;
+        private Integer reserveCandidateTopK;
         private Integer finalTopK;
         private Double minVectorSimilarity;
         private Double keywordRelativeScoreFloor;

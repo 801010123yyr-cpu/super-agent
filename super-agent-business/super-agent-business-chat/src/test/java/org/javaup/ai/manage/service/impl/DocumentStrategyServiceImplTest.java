@@ -7,6 +7,7 @@ import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
+import org.javaup.ai.manage.support.KnowledgeBaseIndexingConfigResolver;
 import org.javaup.ai.manage.support.ParentBlockCandidate;
 import org.javaup.ai.prompt.PromptTemplateService;
 import org.javaup.enums.DocumentStrategyPipelineTypeEnum;
@@ -32,7 +33,8 @@ class DocumentStrategyServiceImplTest {
             new ObjectMapper(),
             new EmptyChatModelProvider(),
             new EmptyDocumentStructureNodeService(),
-            new PromptTemplateService(null)
+            new PromptTemplateService(null),
+            new KnowledgeBaseIndexingConfigResolver(new DocumentManageProperties())
         );
 
         SuperAgentDocument document = new SuperAgentDocument();

@@ -241,6 +241,80 @@ class GraphRagRetrievalChannelTest {
             .containsEntry(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 800L);
     }
 
+    @Test
+    void communitySummaryOnlyCandidateIsMarkedAsBackground() {
+        GraphRagSearchResult communitySummaryOnly = GraphRagSearchResult.builder()
+            .documentId(100L)
+            .taskId(900L)
+            .communityId(500L)
+            .communityTitle("跨文档社区摘要")
+            .communitySummary("社区摘要覆盖多个实体，但当前候选没有代表原文 quote。")
+            .crossDocumentCommunityKey("xdoc-community:summary-only")
+            .crossDocumentCommunityDocumentCount(2)
+            .crossDocumentCommunityRelationGroupCount(3)
+            .crossDocumentCommunityEvidenceCount(4)
+            .graphPath("跨文档社区：summary-only")
+            .score(0.88D)
+            .build();
+        GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
+            new StaticGraphRagSearchService(List.of(communitySummaryOnly)),
+            new StaticDocumentKnowledgeService(),
+            new ChatRagProperties(),
+            new DocumentRetrieveRequestFactory()
+        );
+
+        RetrievalChannelResult result = channel.retrieve(
+            "这个图谱社区能说明什么？",
+            ConversationExecutionPlan.builder().selectedDocumentId(100L).selectedTaskId(900L).build()
+        );
+
+        assertThat(result.getDocuments()).hasSize(1);
+        Document document = result.getDocuments().get(0);
+        assertThat(document.getId()).isEqualTo("graphrag-xcommunity-xdoc-community-summary-only-evidence-summary");
+        assertThat(document.getText())
+            .contains("社区报告边界")
+            .contains("不能单独支撑具体事实结论");
+        assertThat(document.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL, "COMMUNITY_SUMMARY_ONLY")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY, true)
+            .doesNotContainKey(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID);
+    }
+
+    @Test
+    void relationQuoteCandidateExposesGroundingLevel() {
+        GraphRagSearchResult relationEvidence = GraphRagSearchResult.builder()
+            .documentId(100L)
+            .taskId(900L)
+            .entityId(200L)
+            .entityName("PaymentService")
+            .relationId(300L)
+            .relationType("RESPONSIBLE_FOR")
+            .relatedEntityId(201L)
+            .relatedEntityName("OwnerTeam")
+            .evidenceId(400L)
+            .quoteText("PaymentService 由 OwnerTeam 负责维护。")
+            .sectionPath("服务职责")
+            .graphPath("一跳：PaymentService --RESPONSIBLE_FOR--> OwnerTeam")
+            .score(0.91D)
+            .build();
+        GraphRagRetrievalChannel channel = new GraphRagRetrievalChannel(
+            new StaticGraphRagSearchService(List.of(relationEvidence)),
+            new StaticDocumentKnowledgeService(),
+            new ChatRagProperties(),
+            new DocumentRetrieveRequestFactory()
+        );
+
+        RetrievalChannelResult result = channel.retrieve(
+            "PaymentService 谁负责？",
+            ConversationExecutionPlan.builder().selectedDocumentId(100L).selectedTaskId(900L).build()
+        );
+
+        assertThat(result.getDocuments()).hasSize(1);
+        assertThat(result.getDocuments().get(0).getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL, "RELATION_STRONG_QUOTE")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY, false);
+    }
+
     private record StaticGraphRagSearchService(List<GraphRagSearchResult> results) implements GraphRagSearchService {
 
         @Override

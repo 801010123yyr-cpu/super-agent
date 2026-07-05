@@ -110,7 +110,8 @@ public class DocumentQuestionRouter {
 
         Integer itemIndex = resolveExplicitItemIndex(routeText);
         boolean itemLookupMatched = itemIndex != null || questionIntent.itemLookup();
-        boolean shouldUseGraphThenEvidence = itemLookupMatched && !analyticQuestion;
+        boolean shouldUseGraphThenEvidence = itemLookupMatched
+            && shouldUseGraphThenEvidence(routeText, itemIndex, queryUnderstanding);
         if (shouldUseGraphThenEvidence) {
             GraphSection section = resolveSection(documentId, originalQuestion, rewrittenQuestion);
             return buildDecision(
@@ -121,7 +122,7 @@ public class DocumentQuestionRouter {
                 retrievalPlan,
                 queryUnderstanding,
                 retrievalIntent,
-                "编号项或步骤型问题走图定位取证"
+                "高置信结构导航编号项问题走图定位取证"
             );
         }
 
@@ -342,6 +343,24 @@ public class DocumentQuestionRouter {
             return !contentQuestion && !analyticQuestion && hasExplicitSectionAnchor(question);
         }
         return false;
+    }
+
+    private boolean shouldUseGraphThenEvidence(String routeText,
+                                               Integer itemIndex,
+                                               QueryUnderstandingResult queryUnderstanding) {
+        if (itemIndex == null || queryUnderstanding == null) {
+            return false;
+        }
+        QueryType queryType = queryUnderstanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : queryUnderstanding.getQueryType();
+        if (queryType != QueryType.STRUCTURE_NAVIGATION) {
+            return false;
+        }
+        if (confidence(queryUnderstanding) < 0.72D) {
+            return false;
+        }
+        return hasExplicitSectionAnchor(routeText) || hasSectionAnchor(queryUnderstanding);
     }
 
     private GraphOnlyIntentDecision detectGraphOnlyIntentByControlledPlan(String question,

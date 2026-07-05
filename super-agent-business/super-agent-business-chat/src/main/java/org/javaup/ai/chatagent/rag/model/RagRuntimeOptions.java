@@ -29,6 +29,10 @@ public class RagRuntimeOptions {
 
     private int candidateTopK;
 
+    private int rerankCandidateTopK;
+
+    private int reserveCandidateTopK;
+
     private int finalTopK;
 
     private double minVectorSimilarity;
@@ -58,6 +62,8 @@ public class RagRuntimeOptions {
             .raptorTopK(properties == null ? 5 : properties.getRaptorTopK())
             .raptorSourceChunkTopK(properties == null ? 3 : properties.getRaptorSourceChunkTopK())
             .candidateTopK(properties == null ? 10 : properties.getCandidateTopK())
+            .rerankCandidateTopK(properties == null ? 16 : properties.getRerankCandidateTopK())
+            .reserveCandidateTopK(properties == null ? 8 : properties.getReserveCandidateTopK())
             .finalTopK(properties == null ? 5 : properties.getFinalTopK())
             .minVectorSimilarity(properties == null ? 0.45D : properties.getMinVectorSimilarity())
             .keywordRelativeScoreFloor(properties == null ? 0.35D : properties.getKeywordRelativeScoreFloor())

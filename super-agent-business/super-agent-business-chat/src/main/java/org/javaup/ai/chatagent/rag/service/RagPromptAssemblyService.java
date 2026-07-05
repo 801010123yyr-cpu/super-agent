@@ -5,6 +5,8 @@ import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagPromptAssemblyResult;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.SubQuestionEvidence;
@@ -53,6 +55,7 @@ public class RagPromptAssemblyService {
             Math.max(0, properties.getPerSubQuestionEvidenceMaxChars())
         );
         Set<String> renderedReferenceKeys = new LinkedHashSet<>();
+        String evidenceBlocks = buildEvidenceBlocks(context, renderedReferenceKeys, promptBudget);
         String userPrompt = promptTemplateService.render(PromptTemplateNames.RAG_ANSWER_USER, Map.of(
             "currentDate", StrUtil.blankToDefault(plan.getCurrentDateText(), ""),
             "originalQuestion", StrUtil.blankToDefault(plan.getOriginalQuestion(), ""),
@@ -62,8 +65,12 @@ public class RagPromptAssemblyService {
             "historyContext", buildHistoryContext(plan),
             "hasSubQuestions", hasSubQuestions(plan),
             "subQuestions", buildSubQuestions(plan),
-            "evidenceBlocks", buildEvidenceBlocks(context, renderedReferenceKeys, promptBudget)
+            "evidenceBlocks", evidenceBlocks
         ));
+        String boundaryInstruction = buildAnswerBoundaryInstruction(plan, context);
+        if (StrUtil.isNotBlank(boundaryInstruction)) {
+            userPrompt = boundaryInstruction + "\n\n" + userPrompt;
+        }
         return new RagPromptAssemblyResult(
             buildSystemPrompt(),
             userPrompt,
@@ -181,6 +188,21 @@ public class RagPromptAssemblyService {
     }
 
     private String buildDocumentReferenceBlock(SearchReference reference) {
+        String snippet = trimSnippet(reference.getSnippet(), 1100);
+        if (EvidenceApplicabilityResult.NOT_APPLICABLE.equals(reference.getEvidenceApplicabilityStatus())) {
+            snippet = "【证据适用性】这条证据不适用于当前目标对象，只能作为相似但不适用的线索。原因："
+                + StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), "-")
+                + "\n"
+                + snippet;
+        }
+        if ("SUMMARY_ONLY".equalsIgnoreCase(StrUtil.blankToDefault(reference.getRaptorSourceStatus(), ""))) {
+            snippet = "【RAPTOR 摘要边界】这条证据只命中层级摘要，未下钻到 source chunk 或 ParentBlock；只能作为背景线索，不能单独支撑具体事实结论。\n"
+                + snippet;
+        }
+        if (reference.isKgCommunitySummaryOnly()) {
+            snippet = "【GraphRAG 社区摘要边界】这条证据只命中社区摘要，缺少可回到原文 quote 的 KG evidence；只能作为背景线索，不能单独支撑具体事实结论。\n"
+                + snippet;
+        }
         return promptTemplateService.render(PromptTemplateNames.RAG_ANSWER_DOCUMENT_REFERENCE, Map.of(
             "referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""),
             "documentName", StrUtil.blankToDefault(
@@ -188,8 +210,45 @@ public class RagPromptAssemblyService {
                 "文档来源"
             ),
             "sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), "未识别"),
-            "snippet", trimSnippet(reference.getSnippet(), 1100)
+            "snippet", snippet
         )) + "\n\n";
+    }
+
+    private String buildAnswerBoundaryInstruction(ConversationExecutionPlan plan, RagRetrievalContext context) {
+        QueryUnderstandingResult understanding = plan == null ? null : plan.getQueryUnderstanding();
+        boolean explicitBoundary = understanding != null
+            && (understanding.isNegativeBoundary()
+            || "EXPLICIT_EVIDENCE_REQUIRED".equalsIgnoreCase(StrUtil.blankToDefault(understanding.getAnswerExpectation(), "")));
+        boolean hasNotApplicableEvidence = hasNotApplicableEvidence(context);
+        if (!explicitBoundary && !hasNotApplicableEvidence) {
+            return "";
+        }
+        String targetText = understanding == null || understanding.getTargetEntities() == null || understanding.getTargetEntities().isEmpty()
+            ? ""
+            : String.join("、", understanding.getTargetEntities());
+        String excludedText = understanding == null || understanding.getExcludedEntities() == null || understanding.getExcludedEntities().isEmpty()
+            ? ""
+            : String.join("、", understanding.getExcludedEntities());
+        StringBuilder builder = new StringBuilder();
+        builder.append("回答边界要求：如果证据只支持相似对象或被用户排除的对象，而没有支持当前目标对象，必须回答文档没有明确给出，不得把相似对象的步骤、原因或结论套用到当前目标对象。");
+        if (StrUtil.isNotBlank(targetText)) {
+            builder.append("\n当前目标对象：").append(targetText);
+        }
+        if (StrUtil.isNotBlank(excludedText)) {
+            builder.append("\n用户排除对象：").append(excludedText);
+        }
+        return builder.toString();
+    }
+
+    private boolean hasNotApplicableEvidence(RagRetrievalContext context) {
+        if (context == null || context.getSubQuestionEvidenceList() == null) {
+            return false;
+        }
+        return context.getSubQuestionEvidenceList().stream()
+            .filter(evidence -> evidence != null && evidence.getReferences() != null)
+            .flatMap(evidence -> evidence.getReferences().stream())
+            .anyMatch(reference -> reference != null
+                && EvidenceApplicabilityResult.NOT_APPLICABLE.equals(reference.getEvidenceApplicabilityStatus()));
     }
 
     private String trimSnippet(String snippet, int maxChars) {

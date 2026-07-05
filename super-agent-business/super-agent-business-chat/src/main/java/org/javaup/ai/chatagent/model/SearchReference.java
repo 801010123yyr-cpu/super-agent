@@ -129,6 +129,8 @@ public class SearchReference {
 
     private Long kgEvidenceId;
 
+    private String kgEvidenceGroundingLevel;
+
     private String kgGraphPath;
 
     private Integer kgHopCount;
@@ -146,6 +148,8 @@ public class SearchReference {
     private String kgNhopPath;
 
     private String kgCrossDocumentCommunityKey;
+
+    private boolean kgCommunitySummaryOnly;
 
     private Integer kgCrossDocumentCommunityEntityCount;
 
@@ -179,6 +183,8 @@ public class SearchReference {
 
     private String raptorSummary;
 
+    private String raptorSourceStatus;
+
     private String answerSegment;
 
     private String quoteText;
@@ -190,6 +196,12 @@ public class SearchReference {
     private Integer citationRank;
 
     private boolean citationRepaired;
+
+    private String finalSelectionReason;
+
+    private String evidenceApplicabilityStatus;
+
+    private String evidenceApplicabilityReason;
 
     public SearchReference(String title, String url, String snippet) {
         this.sourceType = "WEB";
@@ -203,6 +215,9 @@ public class SearchReference {
     public String uniqueKey() {
         if (raptorNodeId != null && chunkId != null) {
             return "RAPTOR:" + raptorNodeId + ":" + chunkId;
+        }
+        if (raptorNodeId != null) {
+            return "RAPTOR:" + raptorNodeId + ":" + (raptorSourceStatus == null ? "SUMMARY" : raptorSourceStatus);
         }
         if (kgEvidenceId != null) {
             return "GRAPH_RAG:" + kgEvidenceId;

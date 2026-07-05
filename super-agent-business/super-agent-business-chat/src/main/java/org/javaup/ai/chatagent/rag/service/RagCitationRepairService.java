@@ -24,6 +24,9 @@ public class RagCitationRepairService {
     private static final double MIN_SCORE = 0.18D;
     private static final int MAX_TRACE_CANDIDATES = 24;
     private static final int MAX_TRACE_CITATIONS = 24;
+    private static final String NOT_APPLICABLE_STATUS = "NOT_APPLICABLE";
+    private static final String FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY = "FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY";
+    private static final String LEGACY_NOT_APPLICABLE_REASON = "NOT_APPLICABLE_TO_TARGET_ENTITY";
 
     private final RagToolsClient ragToolsClient;
 
@@ -41,8 +44,12 @@ public class RagCitationRepairService {
 
         List<SearchReference> documentReferences = references.stream()
             .filter(this::isRepairableDocumentReference)
+            .filter(reference -> !isEvidenceNotApplicable(reference))
             .toList();
-        if (documentReferences.isEmpty()) {
+        List<SearchReference> applicabilityFilteredReferences = references.stream()
+            .filter(this::isEvidenceNotApplicable)
+            .toList();
+        if (documentReferences.isEmpty() && applicabilityFilteredReferences.isEmpty()) {
             return references;
         }
 
@@ -54,26 +61,32 @@ public class RagCitationRepairService {
                 "正在修复回答句与原文证据的引用关系。",
                 Map.of(
                     "candidateReferenceCount", references.size(),
-                    "documentReferenceCount", documentReferences.size()
+                    "documentReferenceCount", documentReferences.size(),
+                    "applicabilityFilteredReferenceCount", applicabilityFilteredReferences.size()
                 )
             );
         try {
-            RagToolsCitationRepairRequest request = buildRequest(answer, documentReferences);
-            RagToolsCitationRepairResponse response = ragToolsClient.repairCitations(request);
-            if (response == null) {
-                throw new IllegalStateException("rag-tools citation repair 返回空响应");
+            List<RagToolsCitationRepairResponse.Result> citations = List.of();
+            if (!documentReferences.isEmpty()) {
+                RagToolsCitationRepairRequest request = buildRequest(answer, documentReferences);
+                RagToolsCitationRepairResponse response = ragToolsClient.repairCitations(request);
+                if (response == null) {
+                    throw new IllegalStateException("rag-tools citation repair 返回空响应");
+                }
+                citations = response.getCitations() == null ? List.of() : response.getCitations();
             }
-            List<SearchReference> repairedReferences = applyRepairResults(references, documentReferences, response.getCitations());
+            List<SearchReference> repairedReferences = applyRepairResults(references, documentReferences, citations);
             if (traceRecorder != null) {
                 traceRecorder.completeStage(
                     citationStage,
                     "引用修复完成。",
-                    buildRepairTraceSnapshot(references, documentReferences, response.getCitations(), repairedReferences)
+                    buildRepairTraceSnapshot(references, documentReferences, applicabilityFilteredReferences, citations, repairedReferences)
                 );
             }
-            log.info("引用修复完成: candidateReferenceCount={}, documentReferenceCount={}, repairedReferenceCount={}",
+            log.info("引用修复完成: candidateReferenceCount={}, documentReferenceCount={}, applicabilityFilteredReferenceCount={}, repairedReferenceCount={}",
                 references.size(),
                 documentReferences.size(),
+                applicabilityFilteredReferences.size(),
                 repairedReferences.size());
             return repairedReferences;
         }
@@ -132,6 +145,7 @@ public class RagCitationRepairService {
         List<SearchReference> repairedReferences = new ArrayList<>();
         allReferences.stream()
             .filter(reference -> !isRepairableDocumentReference(reference))
+            .filter(reference -> !isEvidenceNotApplicable(reference))
             .forEach(repairedReferences::add);
         repairedReferences.addAll(repairedDocumentMap.values());
         return repairedReferences;
@@ -167,6 +181,9 @@ public class RagCitationRepairService {
     private Map<String, Object> buildEvidenceMetadata(SearchReference reference) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""));
+        metadata.put("finalSelectionReason", StrUtil.blankToDefault(reference.getFinalSelectionReason(), ""));
+        metadata.put("evidenceApplicabilityStatus", StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), ""));
+        metadata.put("evidenceApplicabilityReason", StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), ""));
         metadata.put("chunkNo", reference.getChunkNo());
         metadata.put("parentBlockNo", reference.getParentBlockNo());
         metadata.put("sourceBlockIds", StrUtil.blankToDefault(reference.getSourceBlockIds(), ""));
@@ -191,6 +208,7 @@ public class RagCitationRepairService {
 
     private Map<String, Object> buildRepairTraceSnapshot(List<SearchReference> allReferences,
                                                          List<SearchReference> documentReferences,
+                                                         List<SearchReference> applicabilityFilteredReferences,
                                                          List<RagToolsCitationRepairResponse.Result> citations,
                                                          List<SearchReference> repairedReferences) {
         List<RagToolsCitationRepairResponse.Result> safeCitations = citations == null ? List.of() : citations;
@@ -198,17 +216,21 @@ public class RagCitationRepairService {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("candidateReferenceCount", allReferences == null ? 0 : allReferences.size());
         snapshot.put("documentReferenceCount", documentReferences == null ? 0 : documentReferences.size());
+        snapshot.put("applicabilityFilteredReferenceCount", applicabilityFilteredReferences == null ? 0 : applicabilityFilteredReferences.size());
         snapshot.put("matchedCitationCount", safeCitations.size());
         snapshot.put("repairedReferenceCount", repairedReferences == null ? 0 : repairedReferences.size());
         snapshot.put("repairedDocumentReferenceCount", countDocumentReferences(repairedReferences));
-        snapshot.put("removedDocumentReferenceCount", Math.max(0, (documentReferences == null ? 0 : documentReferences.size()) - countDocumentReferences(repairedReferences)));
+        snapshot.put("removedDocumentReferenceCount", Math.max(0,
+            (documentReferences == null ? 0 : documentReferences.size())
+                + (applicabilityFilteredReferences == null ? 0 : applicabilityFilteredReferences.size())
+                - countDocumentReferences(repairedReferences)));
         snapshot.put("minScore", MIN_SCORE);
         snapshot.put("maxSegments", MAX_SEGMENTS);
         snapshot.put("maxMatchesPerSegment", MAX_MATCHES_PER_SEGMENT);
         snapshot.put("candidateEvidences", buildCandidateEvidenceTrace(documentReferences));
         snapshot.put("matchedCitations", buildMatchedCitationTrace(safeCitations, documentReferences));
         snapshot.put("finalCitations", finalCitations);
-        snapshot.put("removedCandidates", buildRemovedCandidateTrace(documentReferences, safeCitations));
+        snapshot.put("removedCandidates", buildRemovedCandidateTrace(documentReferences, applicabilityFilteredReferences, safeCitations));
         snapshot.put("citations", finalCitations);
         return snapshot;
     }
@@ -265,24 +287,40 @@ public class RagCitationRepairService {
     }
 
     private List<Map<String, Object>> buildRemovedCandidateTrace(List<SearchReference> documentReferences,
+                                                                 List<SearchReference> applicabilityFilteredReferences,
                                                                 List<RagToolsCitationRepairResponse.Result> citations) {
         List<String> matchedEvidenceIds = (citations == null ? List.<RagToolsCitationRepairResponse.Result>of() : citations).stream()
             .filter(citation -> citation != null && StrUtil.isNotBlank(citation.getEvidenceId()))
             .map(RagToolsCitationRepairResponse.Result::getEvidenceId)
             .toList();
-        return (documentReferences == null ? List.<SearchReference>of() : documentReferences).stream()
-            .filter(reference -> !matchedEvidenceIds.contains(evidenceId(reference)))
+        List<Map<String, Object>> removed = new ArrayList<>();
+        (applicabilityFilteredReferences == null ? List.<SearchReference>of() : applicabilityFilteredReferences).stream()
             .limit(MAX_TRACE_CANDIDATES)
-            .map(reference -> {
+            .forEach(reference -> {
+                Map<String, Object> item = baseReferenceTrace(reference);
+                item.put("evidenceId", evidenceId(reference));
+                item.put("candidateText", StrUtil.blankToDefault(reference.getSnippet(), ""));
+                item.put("repairedBefore", reference.isCitationRepaired());
+                item.put("repairedAfter", false);
+                item.put("filteredReason", FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY);
+                removed.add(item);
+            });
+        if (removed.size() >= MAX_TRACE_CANDIDATES) {
+            return removed;
+        }
+        (documentReferences == null ? List.<SearchReference>of() : documentReferences).stream()
+            .filter(reference -> !matchedEvidenceIds.contains(evidenceId(reference)))
+            .limit(MAX_TRACE_CANDIDATES - removed.size())
+            .forEach(reference -> {
                 Map<String, Object> item = baseReferenceTrace(reference);
                 item.put("evidenceId", evidenceId(reference));
                 item.put("candidateText", StrUtil.blankToDefault(reference.getSnippet(), ""));
                 item.put("repairedBefore", reference.isCitationRepaired());
                 item.put("repairedAfter", false);
                 item.put("filteredReason", "未达到 citation repair 语义匹配阈值或该答案句已有更高分证据");
-                return item;
-            })
-            .toList();
+                removed.add(item);
+            });
+        return removed;
     }
 
     private List<Map<String, Object>> buildCitationTrace(List<SearchReference> references) {
@@ -320,6 +358,9 @@ public class RagCitationRepairService {
         item.put("referenceId", StrUtil.blankToDefault(reference.getReferenceId(), ""));
         item.put("sourceType", StrUtil.blankToDefault(reference.getSourceType(), ""));
         item.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
+        item.put("finalSelectionReason", StrUtil.blankToDefault(reference.getFinalSelectionReason(), ""));
+        item.put("evidenceApplicabilityStatus", StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), ""));
+        item.put("evidenceApplicabilityReason", StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), ""));
         item.put("documentId", reference.getDocumentId());
         item.put("documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()));
         item.put("chunkId", reference.getChunkId());
@@ -344,7 +385,10 @@ public class RagCitationRepairService {
     }
 
     private int countDocumentReferences(List<SearchReference> references) {
-        return (int) references.stream().filter(this::isRepairableDocumentReference).count();
+        return (int) references.stream()
+            .filter(this::isRepairableDocumentReference)
+            .filter(reference -> !isEvidenceNotApplicable(reference))
+            .count();
     }
 
     private boolean isRepairableDocumentReference(SearchReference reference) {
@@ -352,6 +396,17 @@ public class RagCitationRepairService {
             && ("DOCUMENT".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), ""))
             || "DOCUMENT_TABLE".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), "")))
             && StrUtil.isNotBlank(reference.getSnippet());
+    }
+
+    private boolean isEvidenceNotApplicable(SearchReference reference) {
+        if (reference == null) {
+            return false;
+        }
+        String status = StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), "");
+        String reason = StrUtil.blankToDefault(reference.getFinalSelectionReason(), "");
+        return NOT_APPLICABLE_STATUS.equalsIgnoreCase(status)
+            || FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY.equalsIgnoreCase(reason)
+            || LEGACY_NOT_APPLICABLE_REASON.equalsIgnoreCase(reason);
     }
 
     private String evidenceId(SearchReference reference) {

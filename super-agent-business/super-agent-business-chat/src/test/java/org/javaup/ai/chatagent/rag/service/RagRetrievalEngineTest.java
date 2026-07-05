@@ -3,6 +3,8 @@ package org.javaup.ai.chatagent.rag.service;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
@@ -513,20 +515,20 @@ class RagRetrievalEngineTest {
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 1001L);
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "权限申请");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 2001L);
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "CALLS");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, 1002L);
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME, "信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --CALLS--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --CALLS--> 信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "审计系统");
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->APPROVES->ORG:信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->CALLS->ORG:信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.84D);
         Document graphDoc = Document.builder()
             .id("graph-approval")
-            .text("GraphRAG: 权限申请 APPROVES 信息安全部。")
+            .text("GraphRAG: 权限申请 CALLS 信息安全部。")
             .metadata(graphMetadata)
             .score(0.60D)
             .build();
@@ -564,9 +566,132 @@ class RagRetrievalEngineTest {
                 .findFirst()
                 .orElseThrow();
             assertThat(reservedGraphDocument.getMetadata())
-                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "CALLS")
                 .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG")
-                .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --CALLS--> 信息安全部");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalEvidencePolicyKeepsSameSectionBodyAfterRerank() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document title = document("title", "# 14.1.2", 0.99D);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 101L);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.1.2");
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.1/14.1.2");
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE");
+
+        Document unrelated = document("unrelated", "其他章节内容。", 0.98D);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 999L);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "12.3");
+
+        Document body = document("body", "1. 新版本切块异常。\n2. 父子块配置错误。\n3. 向量索引构建不完整。", 0.50D);
+        body.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        body.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 101L);
+        body.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.1.2");
+        body.getMetadata().put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.1/14.1.2");
+        body.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "BODY");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(title, unrelated, body))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GENERAL)
+                .retrievalQuestion("14.1.2")
+                .retrievalSubQuestions(List.of("14.1.2"))
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.DOCUMENT_QA)
+                    .sectionAnchors(List.of("14.1.2"))
+                    .confidence(0.84D)
+                    .source("test")
+                    .build())
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).containsExactly("title", "body");
+            assertThat(documents.get(1).getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "SAME_SECTION_BODY");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void finalEvidenceMarksExcludedOnlyEvidenceAsNotApplicable() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(1);
+
+        Document excludedEvidence = document("excluded", "1. 先检查策略配置。\n2. 再检查服务队列。", 0.99D);
+        excludedEvidence.getMetadata().put(DocumentKnowledgeMetadataKeys.TITLE, "人工转接率异常升高");
+        excludedEvidence.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1");
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(excludedEvidence))),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("文档是否明确给出目标对象的检查顺序？")
+                .retrievalSubQuestions(List.of("文档是否明确给出目标对象的检查顺序？"))
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.DOCUMENT_QA)
+                    .targetEntities(List.of("知识引用错误率突然升高"))
+                    .excludedEntities(List.of("人工转接率异常升高"))
+                    .negativeBoundary(true)
+                    .answerExpectation("EXPLICIT_EVIDENCE_REQUIRED")
+                    .confidence(0.9D)
+                    .source("test")
+                    .build())
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            Document finalDocument = context.getSubQuestionEvidenceList().get(0).getDocuments().get(0);
+            assertThat(finalDocument.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY")
+                .containsEntry(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS, "NOT_APPLICABLE");
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note).contains("未明确支持当前目标对象"));
+            assertThat(context.getSubQuestionEvidenceList().get(0).getReferences())
+                .singleElement()
+                .satisfies(reference -> {
+                    assertThat(reference.getFinalSelectionReason()).isEqualTo("FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY");
+                    assertThat(reference.getEvidenceApplicabilityStatus()).isEqualTo("NOT_APPLICABLE");
+                });
         }
         finally {
             executorService.shutdownNow();
@@ -598,20 +723,20 @@ class RagRetrievalEngineTest {
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_ID, 1001L);
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "权限申请");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_ID, 2001L);
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "CALLS");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_ID, 1002L);
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATED_ENTITY_NAME, "信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, 3001L);
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --APPROVES--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, "二跳：AuditTrail --RECORDS--> 权限申请 --CALLS--> 信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH, "AuditTrail --RECORDS--> 权限申请 --CALLS--> 信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, "java.graph_query_profile.v2,llm.controlled.query_plan.v1");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ENTITIES, "审计系统");
-        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->APPROVES->ORG:信息安全部");
+        graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY, "PROCESS:权限申请->CALLS->ORG:信息安全部");
         graphMetadata.put(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE, 0.84D);
         Document graphDoc = Document.builder()
             .id("graph-approval")
-            .text("GraphRAG: 权限申请 APPROVES 信息安全部。")
+            .text("GraphRAG: 权限申请 CALLS 信息安全部。")
             .metadata(graphMetadata)
             .score(0.60D)
             .build();
@@ -671,7 +796,7 @@ class RagRetrievalEngineTest {
                 .orElseThrow();
             assertThat(reservedGraphDocument.getMetadata())
                 .containsEntry(DocumentKnowledgeMetadataKeys.RERANK_RANK, 3)
-                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "APPROVES")
+                .containsEntry(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE, "CALLS")
                 .containsEntry(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_ANSWER_TYPES, "ORG");
             assertThat(context.getUsedChannels()).contains(RetrievalChannelEnum.RERANK.getName());
         }
@@ -1021,6 +1146,76 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void rerankCandidateWindowLimitsModelInputAndRecordsFilterReasons() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(true);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(5);
+        properties.setRerankCandidateTopK(2);
+        properties.setReserveCandidateTopK(2);
+        properties.setFinalTopK(1);
+
+        Document first = document("doc-1", "第一条候选。", 0.99D);
+        first.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        Document second = document("doc-2", "第二条候选。", 0.98D);
+        second.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 2L);
+        Document third = document("doc-3", "第三条候选。", 0.97D);
+        third.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 3L);
+
+        InMemoryRetrievalObserveStore observeStore = new InMemoryRetrievalObserveStore();
+        ConversationTraceRecorder traceRecorder = new ConversationTraceRecorder(
+            null,
+            observeStore,
+            "conv-rerank-window",
+            9001L,
+            "trace-rerank-window"
+        );
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(first, second, third))),
+                properties,
+                new RagRerankService(null, properties) {
+                    @Override
+                    public List<Document> rerank(String query, List<Document> candidates) {
+                        assertThat(candidates).extracting(Document::getId).containsExactly("doc-1", "doc-2");
+                        for (int index = 0; index < candidates.size(); index++) {
+                            Document candidate = candidates.get(index);
+                            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, index + 1);
+                            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_SCORE, 1.0D - index * 0.1D);
+                            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_STATUS, "SUCCESS");
+                        }
+                        return candidates;
+                    }
+                },
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalQuestion("候选窗口测试")
+                .retrievalSubQuestions(List.of("候选窗口测试"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, traceRecorder);
+
+            assertThat(context.getSubQuestionEvidenceList().get(0).getRerankedCandidateCount()).isEqualTo(2);
+            assertThat(context.getSubQuestionEvidenceList().get(0).getDocuments())
+                .extracting(Document::getId)
+                .containsExactly("doc-1");
+            assertThat(reasonByDocumentId(observeStore.results, 1L)).isEqualTo("SELECTED_TOP_RANK");
+            assertThat(reasonByDocumentId(observeStore.results, 2L)).isEqualTo("FILTERED_BY_FINAL_TOP_K");
+            assertThat(reasonByDocumentId(observeStore.results, 3L)).isEqualTo("FILTERED_BY_RERANK_CANDIDATE_TOP_K");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);
@@ -1029,6 +1224,14 @@ class RagRetrievalEngineTest {
             .text(text)
             .metadata(metadata)
             .build();
+    }
+
+    private static String reasonByDocumentId(List<RetrievalResultView> results, Long documentId) {
+        return results.stream()
+            .filter(result -> documentId.equals(result.getDocumentId()))
+            .findFirst()
+            .map(RetrievalResultView::getSelectionReason)
+            .orElseThrow();
     }
 
     private static Document graphRagDocument(String id,

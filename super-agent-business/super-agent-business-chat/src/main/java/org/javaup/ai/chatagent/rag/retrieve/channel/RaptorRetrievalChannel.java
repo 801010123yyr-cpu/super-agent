@@ -21,6 +21,9 @@ import java.util.Map;
 public class RaptorRetrievalChannel implements RetrievalChannel {
 
     private static final String SOURCE_TYPE = "RAPTOR";
+    private static final String SOURCE_STATUS_SOURCE_CHUNK = "SOURCE_CHUNK";
+    private static final String SOURCE_STATUS_SOURCE_PARENT_BLOCK = "SOURCE_PARENT_BLOCK";
+    private static final String SOURCE_STATUS_SUMMARY_ONLY = "SUMMARY_ONLY";
 
     private final RaptorSearchService raptorSearchService;
     private final DocumentKnowledgeService documentKnowledgeService;
@@ -73,6 +76,7 @@ public class RaptorRetrievalChannel implements RetrievalChannel {
         KnowledgeDocumentDescriptor descriptor = documentDescriptors.get(result.getDocumentId());
         String documentName = StrUtil.blankToDefault(descriptor == null ? null : descriptor.getDocumentName(), "文档摘要树");
         String text = renderEvidenceText(subQuestion, result);
+        String sourceStatus = resolveSourceStatus(result);
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, SOURCE_TYPE);
         metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, channelName());
@@ -84,24 +88,27 @@ public class RaptorRetrievalChannel implements RetrievalChannel {
             metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, StrUtil.blankToDefault(descriptor.getKnowledgeBaseName(), ""));
         }
         metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());
-        metadata.put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
-        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_ID, result.getChunkId());
-        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_NO, result.getChunkNo());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, result.getParentBlockId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.CHUNK_ID, result.getChunkId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.CHUNK_NO, result.getChunkNo());
         metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, StrUtil.blankToDefault(result.getSectionPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, result.getPageNo());
         metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, StrUtil.blankToDefault(result.getPageRange(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, StrUtil.blankToDefault(result.getBboxJson(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, StrUtil.blankToDefault(result.getSourceBlockIds(), ""));
-        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "RAPTOR_SOURCE_CHUNK");
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE,
+            SOURCE_STATUS_SUMMARY_ONLY.equals(sourceStatus) ? "RAPTOR_SUMMARY" : "RAPTOR_SOURCE_CHUNK");
         metadata.put(DocumentKnowledgeMetadataKeys.TITLE, StrUtil.blankToDefault(result.getTitle(), result.getRaptorNodeTitle()));
-        metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, StrUtil.blankToDefault(result.getChunkText(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET,
+            StrUtil.blankToDefault(result.getChunkText(), StrUtil.blankToDefault(result.getRaptorSummary(), "")));
         metadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_ID, result.getRaptorNodeId());
         metadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_TITLE, StrUtil.blankToDefault(result.getRaptorNodeTitle(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL, result.getRaptorNodeLevel());
         metadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_SUMMARY, StrUtil.blankToDefault(result.getRaptorSummary(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.RAPTOR_SOURCE_STATUS, sourceStatus);
 
         return Document.builder()
-            .id("raptor-" + result.getRaptorNodeId() + "-" + result.getChunkId())
+            .id(raptorDocumentId(result))
             .text(text)
             .metadata(metadata)
             .score(result.getScore())
@@ -121,8 +128,41 @@ public class RaptorRetrievalChannel implements RetrievalChannel {
         if (result.getPageNo() != null) {
             builder.append("原文页码：").append(result.getPageNo()).append('\n');
         }
-        builder.append("下钻原文：").append(StrUtil.blankToDefault(result.getChunkText(), "")).append('\n');
+        String sourceStatus = resolveSourceStatus(result);
+        if (SOURCE_STATUS_SUMMARY_ONLY.equals(sourceStatus)) {
+            builder.append("下钻状态：未找到可引用 source chunk 或 ParentBlock，本证据仅作为摘要背景。\n");
+        }
+        else if (SOURCE_STATUS_SOURCE_PARENT_BLOCK.equals(sourceStatus) && StrUtil.isBlank(result.getChunkText())) {
+            builder.append("下钻状态：已定位到 ParentBlock，但当前结果未携带 chunk 原文。\n");
+        }
+        if (StrUtil.isNotBlank(result.getChunkText())) {
+            builder.append("下钻原文：").append(result.getChunkText()).append('\n');
+        }
         return builder.toString().trim();
+    }
+
+    private String resolveSourceStatus(RaptorSearchResult result) {
+        String sourceStatus = StrUtil.blankToDefault(result.getSourceStatus(), "");
+        if (StrUtil.isNotBlank(sourceStatus)) {
+            return sourceStatus;
+        }
+        if (result.getChunkId() != null) {
+            return SOURCE_STATUS_SOURCE_CHUNK;
+        }
+        if (result.getParentBlockId() != null) {
+            return SOURCE_STATUS_SOURCE_PARENT_BLOCK;
+        }
+        return SOURCE_STATUS_SUMMARY_ONLY;
+    }
+
+    private String raptorDocumentId(RaptorSearchResult result) {
+        if (result.getChunkId() != null) {
+            return "raptor-" + result.getRaptorNodeId() + "-" + result.getChunkId();
+        }
+        if (result.getParentBlockId() != null) {
+            return "raptor-" + result.getRaptorNodeId() + "-parent-" + result.getParentBlockId();
+        }
+        return "raptor-" + result.getRaptorNodeId() + "-summary";
     }
 
     private List<Long> resolvedDocumentIds(ConversationExecutionPlan plan) {

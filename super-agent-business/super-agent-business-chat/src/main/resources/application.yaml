@@ -243,6 +243,12 @@ app:
       raptor-summary-quality-floor: ${SUPER_AGENT_RAPTOR_SUMMARY_QUALITY_FLOOR:0.42}
       # 多通道合并后进入精排前，最多保留多少个候选片段。
       candidate-top-k: 10
+      # 进入 rerank/cross-encoder 精排的候选数量。
+      # 该值通常应大于 candidate-top-k 或与其保持一致，用于避免正确证据在精排前过早丢失。
+      rerank-candidate-top-k: 16
+      # final evidence policy 可以从 rerank 后尾部候选中补保留的窗口大小。
+      # 用于保留同章节正文、GraphRAG quote、RAPTOR source chunk 等高价值证据。
+      reserve-candidate-top-k: 8
       # 最终注入 Prompt 的证据片段数量。
       # 这一层已经是“融合/精排后的定稿证据数”，不是每个通道各自的 topK。
       final-top-k: 5
@@ -419,6 +425,14 @@ app:
       # 语义相似度阈值。
       # 用于判断相邻文本是否应该继续合并为同一个 chunk。
       semantic-similarity-threshold: 0.18
+      # 父块允许的最大字符数。父块是回答阶段的主要上下文单元。
+      parent-block-max-chars: ${SUPER_AGENT_PARENT_BLOCK_MAX_CHARS:2200}
+      # 父块递归裁切时保留的重叠字符数。
+      parent-block-overlap-chars: ${SUPER_AGENT_PARENT_BLOCK_OVERLAP_CHARS:180}
+      # 父块语义切分时的最大字符数。
+      parent-semantic-max-chars: ${SUPER_AGENT_PARENT_SEMANTIC_MAX_CHARS:1600}
+      # 父块语义切分时的最小字符数。
+      parent-semantic-min-chars: ${SUPER_AGENT_PARENT_SEMANTIC_MIN_CHARS:480}
       # 是否开启基于大模型的智能切块。
       # 第一阶段默认关闭，避免成本和复杂度过高。
       llm-enabled: false

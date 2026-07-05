@@ -42,6 +42,12 @@ import java.util.stream.IntStream;
 @Service
 public class RaptorSearchServiceImpl implements RaptorSearchService {
 
+    private static final String SOURCE_STATUS_SOURCE_CHUNK = "SOURCE_CHUNK";
+
+    private static final String SOURCE_STATUS_SOURCE_PARENT_BLOCK = "SOURCE_PARENT_BLOCK";
+
+    private static final String SOURCE_STATUS_SUMMARY_ONLY = "SUMMARY_ONLY";
+
     private static final String RAPTOR_RETRIEVE_SQL_TEMPLATE = """
         SELECT
             id,
@@ -112,20 +118,28 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
         List<String> terms = extractTerms(question);
         Set<Long> allowedDocumentIds = new LinkedHashSet<>(documentIds);
         Set<Long> allowedTaskIds = new LinkedHashSet<>(taskIds);
-        Map<Long, RaptorSearchResult> resultMap = new LinkedHashMap<>();
+        Map<String, RaptorSearchResult> resultMap = new LinkedHashMap<>();
         for (RaptorNodeHit hit : nodeHits) {
             SuperAgentRaptorNode node = nodeMap.get(hit.nodeId());
             if (node == null) {
                 continue;
             }
             List<SuperAgentDocumentChunk> chunks = loadSourceChunks(node, sourceChunkTopK, allowedDocumentIds, allowedTaskIds);
+            if (chunks.isEmpty()) {
+                RaptorSearchResult summaryOnly = toSummaryOnlyResult(node, hit.score(), allowedDocumentIds, allowedTaskIds);
+                if (summaryOnly != null) {
+                    resultMap.merge(resultKey(summaryOnly), summaryOnly,
+                        (left, right) -> left.getScore() >= right.getScore() ? left : right);
+                }
+                continue;
+            }
             for (SuperAgentDocumentChunk chunk : chunks) {
                 if (chunk == null || chunk.getId() == null) {
                     continue;
                 }
                 double score = hit.score() + chunkEvidenceBoost(chunk, terms);
                 RaptorSearchResult result = toResult(node, chunk, score);
-                resultMap.merge(chunk.getId(), result,
+                resultMap.merge(resultKey(result), result,
                     (left, right) -> left.getScore() >= right.getScore() ? left : right);
             }
         }
@@ -274,6 +288,7 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             .raptorNodeTitle(node.getTitle())
             .raptorNodeLevel(node.getNodeLevel())
             .raptorSummary(node.getSummary())
+            .sourceStatus(SOURCE_STATUS_SOURCE_CHUNK)
             .chunkId(chunk.getId())
             .parentBlockId(chunk.getParentBlockId())
             .chunkNo(chunk.getChunkNo())
@@ -286,6 +301,66 @@ public class RaptorSearchServiceImpl implements RaptorSearchService {
             .sourceBlockIds(chunk.getSourceBlockIds())
             .score(score)
             .build();
+    }
+
+    private RaptorSearchResult toSummaryOnlyResult(SuperAgentRaptorNode node,
+                                                   double score,
+                                                   Set<Long> allowedDocumentIds,
+                                                   Set<Long> allowedTaskIds) {
+        Long documentId = firstAllowedId(node.getDocumentId(), node.getSourceDocumentIdsJson(), allowedDocumentIds);
+        Long taskId = firstAllowedId(node.getTaskId(), node.getSourceTaskIdsJson(), allowedTaskIds);
+        if (documentId == null || taskId == null) {
+            return null;
+        }
+        Long parentBlockId = readLongList(node.getSourceParentBlockIdsJson()).stream()
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+        String sourceStatus = parentBlockId == null ? SOURCE_STATUS_SUMMARY_ONLY : SOURCE_STATUS_SOURCE_PARENT_BLOCK;
+        return RaptorSearchResult.builder()
+            .documentId(documentId)
+            .taskId(taskId)
+            .raptorNodeId(node.getId())
+            .raptorNodeTitle(node.getTitle())
+            .raptorNodeLevel(node.getNodeLevel())
+            .raptorSummary(node.getSummary())
+            .sourceStatus(sourceStatus)
+            .parentBlockId(parentBlockId)
+            .title(node.getTitle())
+            .sectionPath(node.getSectionPath())
+            .pageRange(node.getPageRange())
+            .sourceBlockIds(joinLongList(readLongList(node.getSourceParentBlockIdsJson())))
+            .score(score)
+            .build();
+    }
+
+    private Long firstAllowedId(Long primaryId, String sourceIdsJson, Set<Long> allowedIds) {
+        if (primaryId != null && allowedIds.contains(primaryId)) {
+            return primaryId;
+        }
+        return readLongList(sourceIdsJson).stream()
+            .filter(allowedIds::contains)
+            .findFirst()
+            .orElse(null);
+    }
+
+    private String resultKey(RaptorSearchResult result) {
+        if (result.getChunkId() != null) {
+            return "chunk:" + result.getChunkId();
+        }
+        if (result.getParentBlockId() != null) {
+            return "parent:" + result.getRaptorNodeId() + ":" + result.getParentBlockId();
+        }
+        return "summary:" + result.getRaptorNodeId() + ":" + result.getDocumentId() + ":" + result.getTaskId();
+    }
+
+    private String joinLongList(List<Long> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        return values.stream()
+            .map(String::valueOf)
+            .collect(Collectors.joining(","));
     }
 
     private double chunkEvidenceBoost(SuperAgentDocumentChunk chunk, List<String> terms) {

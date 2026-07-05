@@ -4,7 +4,10 @@ import org.javaup.ai.chatagent.model.memory.ConversationMemoryContext;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
+import org.javaup.ai.chatagent.rag.model.EvidenceAnchor;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
@@ -98,6 +101,42 @@ class ChatPreparationOrchestratorTest {
         assertThat(plan.getClarificationReply()).contains("这个问题目前存在文档范围歧义");
     }
 
+    @Test
+    void followUpPlanCarriesPreviousFinalEvidenceAnchor() {
+        ChatRagProperties properties = new ChatRagProperties();
+        EvidenceAnchor anchor = EvidenceAnchor.builder()
+            .documentId(1001L)
+            .documentName("测试文档.md")
+            .sectionPath("14.3.1")
+            .structureNodeId(1431L)
+            .parentBlockId(9001L)
+            .chunkId(8001L)
+            .snippet("上一轮最终证据")
+            .build();
+
+        ChatPreparationOrchestrator orchestrator = new ChatPreparationOrchestrator(
+            properties,
+            new StaticConversationMemoryService(),
+            new AnswerHistoryContextAssembler(properties),
+            new StaticRewriteService(properties),
+            new FollowUpDocumentQuestionRouter(),
+            new StaticKnowledgeRouteService(new KnowledgeRouteDecision()),
+            new StaticDocumentKnowledgeService(),
+            new StaticConversationEvidenceAnchorService(List.of(anchor))
+        );
+
+        ConversationExecutionPlan plan = orchestrator.prepare(documentTaskInfo("第一项和第三项分别是什么？"));
+
+        assertThat(plan.getMode()).isEqualTo(ExecutionMode.RETRIEVAL);
+        assertThat(plan.getAnswerHistoryContext()).isNotNull();
+        assertThat(plan.getAnswerHistoryContext().getEvidenceAnchors()).hasSize(1);
+        assertThat(plan.getAnswerHistoryContext().getStructuredContext())
+            .contains("14.3.1")
+            .contains("9001")
+            .contains("8001");
+        assertThat(plan.getNavigationDecision().getExecutionMode()).isEqualTo(ExecutionMode.RETRIEVAL);
+    }
+
     private static DocumentRouteCandidate candidate(String documentId, String taskId, String name, double score) {
         return new DocumentRouteCandidate(
             documentId,
@@ -128,6 +167,43 @@ class ChatPreparationOrchestratorTest {
                 ))
                 .allowedDocumentIds(List.of(1001L, 1002L))
                 .allowedTaskIds(List.of(2001L, 2002L))
+                .build(),
+            LocalDate.of(2026, 6, 26),
+            "2026年6月26日",
+            null,
+            null,
+            null,
+            null,
+            null,
+            new StreamEventMetadata("conversation-a", 1L),
+            "",
+            "",
+            List.of(),
+            List.of(),
+            Set.of(),
+            System.currentTimeMillis()
+        );
+    }
+
+    private static TaskInfo documentTaskInfo(String question) {
+        return new TaskInfo(
+            "conversation-a",
+            1L,
+            question,
+            ChatQueryMode.DOCUMENT,
+            "trace-a",
+            1001L,
+            "测试文档.md",
+            2001L,
+            KnowledgeBaseSelectionSnapshot.builder()
+                .selectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(1L))
+                .selectedKnowledgeBaseNames(List.of("测试知识库"))
+                .allowedDocuments(List.of(
+                    new KnowledgeDocumentDescriptor(1001L, "测试文档.md", 2001L, 1L, "测试知识库")
+                ))
+                .allowedDocumentIds(List.of(1001L))
+                .allowedTaskIds(List.of(2001L))
                 .build(),
             LocalDate.of(2026, 6, 26),
             "2026年6月26日",
@@ -209,6 +285,15 @@ class ChatPreparationOrchestratorTest {
         public DocumentNavigationDecision route(Long documentId,
                                                 String originalQuestion,
                                                 RagRewriteResult rewriteResult) {
+            return route(documentId, originalQuestion, rewriteResult, "", "");
+        }
+
+        @Override
+        public DocumentNavigationDecision route(Long documentId,
+                                                String originalQuestion,
+                                                RagRewriteResult rewriteResult,
+                                                String historySummary,
+                                                String answerRecentTranscript) {
             return DocumentNavigationDecision.builder()
                 .executionMode(ExecutionMode.RETRIEVAL)
                 .retrievalIntent(RetrievalIntent.GRAPH_RAG)
@@ -217,6 +302,49 @@ class ChatPreparationOrchestratorTest {
                     rewriteResult.getSubQuestions()
                 ))
                 .build();
+        }
+    }
+
+    private static class FollowUpDocumentQuestionRouter extends DocumentQuestionRouter {
+
+        FollowUpDocumentQuestionRouter() {
+            super(null, null, null);
+        }
+
+        @Override
+        public DocumentNavigationDecision route(Long documentId,
+                                                String originalQuestion,
+                                                RagRewriteResult rewriteResult,
+                                                String historySummary,
+                                                String answerRecentTranscript) {
+            return DocumentNavigationDecision.builder()
+                .executionMode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GENERAL)
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.FOLLOW_UP)
+                    .confidence(0.88D)
+                    .source("test")
+                    .build())
+                .retrievalPlan(new org.javaup.ai.chatagent.rag.model.RetrievalQuestionPlan(
+                    rewriteResult.getRewrittenQuestion(),
+                    rewriteResult.getSubQuestions()
+                ))
+                .build();
+        }
+    }
+
+    private static class StaticConversationEvidenceAnchorService extends ConversationEvidenceAnchorService {
+
+        private final List<EvidenceAnchor> anchors;
+
+        StaticConversationEvidenceAnchorService(List<EvidenceAnchor> anchors) {
+            super(null);
+            this.anchors = anchors;
+        }
+
+        @Override
+        public List<EvidenceAnchor> loadRecentEvidenceAnchors(String conversationId, int limit) {
+            return anchors.stream().limit(Math.max(0, limit)).toList();
         }
     }
 

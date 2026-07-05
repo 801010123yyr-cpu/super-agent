@@ -23,6 +23,8 @@ public class RaptorSearchResult {
 
     private String raptorSummary;
 
+    private String sourceStatus;
+
     private Long chunkId;
 
     private Long parentBlockId;

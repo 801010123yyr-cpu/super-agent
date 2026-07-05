@@ -51,6 +51,10 @@ public class ChatRagProperties {
 
     private int candidateTopK = 10;
 
+    private int rerankCandidateTopK = 16;
+
+    private int reserveCandidateTopK = 8;
+
     private int finalTopK = 5;
 
     private double minVectorSimilarity = 0.45D;

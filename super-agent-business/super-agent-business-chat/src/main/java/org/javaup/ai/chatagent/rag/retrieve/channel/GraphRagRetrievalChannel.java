@@ -122,6 +122,7 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT, result.getRelationGroupEvidenceCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT, result.getRelationGroupDocumentCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID, result.getEvidenceId());
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL, groundingLevel(result));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH, StrUtil.blankToDefault(result.getGraphPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_HOP_COUNT, result.getHopCount());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE, StrUtil.blankToDefault(result.getQueryPlanSource(), ""));
@@ -133,6 +134,7 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_COMMUNITY_ID, result.getCommunityId());
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE, StrUtil.blankToDefault(result.getCommunityTitle(), ""));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY, StrUtil.blankToDefault(result.getCommunitySummary(), ""));
+        metadata.put(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY, isCommunitySummaryOnly(result));
         metadata.put(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY, StrUtil.blankToDefault(result.getCrossDocumentCommunityKey(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT, result.getCrossDocumentCommunityEntityCount());
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT, result.getCrossDocumentCommunityRelationGroupCount());
@@ -171,6 +173,9 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         }
         if (StrUtil.isNotBlank(result.getCommunitySummary())) {
             builder.append("社区报告：").append(result.getCommunitySummary()).append('\n');
+            if (isCommunitySummaryOnly(result)) {
+                builder.append("社区报告边界：该候选缺少可回到原文 quote 的 KG evidence，只能作为背景线索，不能单独支撑具体事实结论。\n");
+            }
         }
         if (StrUtil.isNotBlank(result.getNHopPath())) {
             builder.append("n-hop路径：").append(result.getNHopPath()).append('\n');
@@ -197,6 +202,42 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
         }
         builder.append("原文证据：").append(StrUtil.blankToDefault(result.getQuoteText(), "")).append('\n');
         return builder.toString().trim();
+    }
+
+    private String groundingLevel(GraphRagSearchResult result) {
+        if (result == null) {
+            return "NONE";
+        }
+        boolean hasSourceQuote = hasSourceQuoteEvidence(result);
+        if (result.getRelationId() != null) {
+            if (!hasSourceQuote) {
+                return "RELATION_NO_QUOTE";
+            }
+            String relationType = StrUtil.blankToDefault(result.getRelationType(), "")
+                .trim()
+                .toUpperCase();
+            if ("RECORDS".equals(relationType) || "ASSOCIATED_WITH".equals(relationType) || "RELATED_TO".equals(relationType)) {
+                return "RELATION_WEAK_QUOTE";
+            }
+            return "RELATION_STRONG_QUOTE";
+        }
+        if (result.getEntityId() != null) {
+            return hasSourceQuote ? "ENTITY_QUOTE" : "ENTITY_NO_QUOTE";
+        }
+        if (isCommunityReportResult(result)) {
+            return hasSourceQuote ? "COMMUNITY_SOURCE_QUOTE" : "COMMUNITY_SUMMARY_ONLY";
+        }
+        return hasSourceQuote ? "SOURCE_QUOTE" : "NONE";
+    }
+
+    private boolean isCommunitySummaryOnly(GraphRagSearchResult result) {
+        return isCommunityReportResult(result) && !hasSourceQuoteEvidence(result);
+    }
+
+    private boolean hasSourceQuoteEvidence(GraphRagSearchResult result) {
+        return result != null
+            && result.getEvidenceId() != null
+            && StrUtil.isNotBlank(result.getQuoteText());
     }
 
     private Set<String> resolveRelationTypes(GraphRagSearchResult result) {
@@ -284,10 +325,10 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
     private String documentId(GraphRagSearchResult result) {
         if (isCommunityReportResult(result)) {
             if (StrUtil.isNotBlank(result.getCrossDocumentCommunityKey())) {
-                return "graphrag-xcommunity-" + stableIdPart(result.getCrossDocumentCommunityKey()) + "-evidence-" + result.getEvidenceId();
+                return "graphrag-xcommunity-" + stableIdPart(result.getCrossDocumentCommunityKey()) + "-evidence-" + stableEvidenceIdPart(result);
             }
             if (result.getCommunityId() != null) {
-                return "graphrag-community-" + result.getCommunityId() + "-evidence-" + result.getEvidenceId();
+                return "graphrag-community-" + result.getCommunityId() + "-evidence-" + stableEvidenceIdPart(result);
             }
         }
         if (result.getEvidenceId() != null) {
@@ -321,5 +362,12 @@ public class GraphRagRetrievalChannel implements RetrievalChannel {
             return Integer.toHexString(value.hashCode());
         }
         return normalized.length() <= 80 ? normalized : normalized.substring(0, 80);
+    }
+
+    private String stableEvidenceIdPart(GraphRagSearchResult result) {
+        if (result != null && result.getEvidenceId() != null) {
+            return String.valueOf(result.getEvidenceId());
+        }
+        return "summary";
     }
 }

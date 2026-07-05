@@ -17,6 +17,7 @@ import org.javaup.ai.manage.mapper.SuperAgentKgCommunityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEntityMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
+import org.javaup.ai.manage.model.KnowledgeBaseIndexingOptions;
 import org.javaup.ai.manage.model.graph.GraphRagBuildResult;
 import org.javaup.ai.manage.model.graph.GraphRagCommunityReportAdvice;
 import org.javaup.ai.manage.model.graph.GraphRagCommunityReportContext;
@@ -30,6 +31,7 @@ import org.javaup.ai.manage.service.GraphRagCommunityReportAdvisor;
 import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.service.GraphRagEntityResolutionAdvisor;
 import org.javaup.ai.manage.service.GraphRagExtractionAdvisor;
+import org.javaup.ai.manage.support.KnowledgeBaseIndexingConfigResolver;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsGraphExtractRequest;
 import org.javaup.ai.ragtools.model.RagToolsGraphExtractResponse;
@@ -118,6 +120,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
 
     private final GraphRagCrossDocumentIndexService crossDocumentIndexService;
 
+    private final KnowledgeBaseIndexingConfigResolver indexingConfigResolver;
+
     @Autowired
     public GraphRagBuildServiceImpl(SuperAgentKgEntityMapper entityMapper,
                                     SuperAgentKgRelationMapper relationMapper,
@@ -133,7 +137,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                                     ObjectProvider<GraphRagExtractionAdvisor> extractionAdvisorProvider,
                                     ObjectProvider<GraphRagCommunityReportAdvisor> communityReportAdvisorProvider,
                                     ObjectProvider<GraphRagEntityResolutionAdvisor> entityResolutionAdvisorProvider,
-                                    ObjectProvider<GraphRagCrossDocumentIndexService> crossDocumentIndexServiceProvider) {
+                                    ObjectProvider<GraphRagCrossDocumentIndexService> crossDocumentIndexServiceProvider,
+                                    ObjectProvider<KnowledgeBaseIndexingConfigResolver> indexingConfigResolverProvider) {
         this(
             entityMapper,
             relationMapper,
@@ -149,7 +154,8 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             extractionAdvisorProvider == null ? null : (GraphRagExtractionAdvisor) extractionAdvisorProvider.getIfAvailable(),
             communityReportAdvisorProvider == null ? null : (GraphRagCommunityReportAdvisor) communityReportAdvisorProvider.getIfAvailable(),
             entityResolutionAdvisorProvider == null ? null : (GraphRagEntityResolutionAdvisor) entityResolutionAdvisorProvider.getIfAvailable(),
-            crossDocumentIndexServiceProvider == null ? null : crossDocumentIndexServiceProvider.getIfAvailable()
+            crossDocumentIndexServiceProvider == null ? null : crossDocumentIndexServiceProvider.getIfAvailable(),
+            indexingConfigResolverProvider == null ? null : indexingConfigResolverProvider.getIfAvailable()
         );
     }
 
@@ -179,6 +185,7 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
             (GraphRagExtractionAdvisor) null,
             (GraphRagCommunityReportAdvisor) null,
             (GraphRagEntityResolutionAdvisor) null,
+            null,
             null
         );
     }
@@ -198,6 +205,42 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
                              GraphRagCommunityReportAdvisor communityReportAdvisor,
                              GraphRagEntityResolutionAdvisor entityResolutionAdvisor,
                              GraphRagCrossDocumentIndexService crossDocumentIndexService) {
+        this(
+            entityMapper,
+            relationMapper,
+            evidenceMapper,
+            communityMapper,
+            ragToolsClient,
+            objectMapper,
+            uidGenerator,
+            buildProperties,
+            redisLeaseManager,
+            checkpointService,
+            transactionTemplate,
+            extractionAdvisor,
+            communityReportAdvisor,
+            entityResolutionAdvisor,
+            crossDocumentIndexService,
+            null
+        );
+    }
+
+    GraphRagBuildServiceImpl(SuperAgentKgEntityMapper entityMapper,
+                             SuperAgentKgRelationMapper relationMapper,
+                             SuperAgentKgEvidenceMapper evidenceMapper,
+                             SuperAgentKgCommunityMapper communityMapper,
+                             RagToolsClient ragToolsClient,
+                             ObjectMapper objectMapper,
+                             UidGenerator uidGenerator,
+                             GraphRagBuildProperties buildProperties,
+                             RedisLeaseManager redisLeaseManager,
+                             GraphRagBuildCheckpointService checkpointService,
+                             TransactionTemplate transactionTemplate,
+                             GraphRagExtractionAdvisor extractionAdvisor,
+                             GraphRagCommunityReportAdvisor communityReportAdvisor,
+                             GraphRagEntityResolutionAdvisor entityResolutionAdvisor,
+                             GraphRagCrossDocumentIndexService crossDocumentIndexService,
+                             KnowledgeBaseIndexingConfigResolver indexingConfigResolver) {
         this.entityMapper = entityMapper;
         this.relationMapper = relationMapper;
         this.evidenceMapper = evidenceMapper;
@@ -213,12 +256,24 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
         this.communityReportAdvisor = communityReportAdvisor;
         this.entityResolutionAdvisor = entityResolutionAdvisor;
         this.crossDocumentIndexService = crossDocumentIndexService;
+        this.indexingConfigResolver = indexingConfigResolver;
     }
 
     @Override
     public GraphRagBuildResult rebuildDocumentGraph(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks) {
         if (documentId == null || taskId == null) {
             return GraphRagBuildResult.builder().build();
+        }
+        KnowledgeBaseIndexingOptions.GraphRagBuildOptions graphRagOptions = graphRagBuildOptions(documentId);
+        if (!Boolean.TRUE.equals(graphRagOptions.getGraphRagBuildEnabled())) {
+            checkpointService.markRunning(documentId, taskId, "DISABLED_BY_KB_CONFIG", 0, maxAttempts(), metadata(
+                "graphRagBuildEnabled", false
+            ));
+            GraphRagBuildResult result = replaceGraph(documentId, taskId, new RagToolsGraphExtractResponse());
+            refreshCrossDocumentIndex(documentId, taskId);
+            checkpointService.markSuccess(documentId, taskId, result, 0, maxAttempts());
+            log.info("知识库配置已关闭 GraphRAG 构建，跳过实体关系抽取: documentId={}, taskId={}", documentId, taskId);
+            return result;
         }
         if (CollUtil.isEmpty(chunks)) {
             GraphRagBuildResult result = replaceGraph(documentId, taskId, new RagToolsGraphExtractResponse());
@@ -1195,6 +1250,13 @@ public class GraphRagBuildServiceImpl implements GraphRagBuildService {
 
     private int maxAttempts() {
         return Math.max(1, buildProperties.getMaxAttempts());
+    }
+
+    private KnowledgeBaseIndexingOptions.GraphRagBuildOptions graphRagBuildOptions(Long documentId) {
+        if (indexingConfigResolver == null) {
+            return KnowledgeBaseIndexingOptions.defaults().getGraphRag();
+        }
+        return indexingConfigResolver.resolveByDocumentId(documentId).getGraphRag();
     }
 
     private Duration leaseTtl() {

@@ -6,6 +6,7 @@ import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
@@ -54,27 +55,21 @@ import java.util.concurrent.TimeoutException;
 public class RagRetrievalEngine {
 
     private static final int RRF_K = 60;
-    private static final Set<String> GRAPH_RAG_ACTION_RELATION_TYPES = Set.of(
-        "APPROVES",
-        "RESPONSIBLE_FOR",
-        "EXECUTES",
-        "REVOKES",
-        "OWNS",
-        "MANAGES",
-        "OPERATES",
-        "MAINTAINS"
-    );
-    private static final Set<String> GRAPH_RAG_WEAK_RELATION_TYPES = Set.of(
-        "RECORDS",
-        "ASSOCIATED_WITH",
-        "RELATED_TO"
-    );
+    private static final String FILTERED_BY_VECTOR_GATE = "FILTERED_BY_VECTOR_GATE";
+    private static final String FILTERED_BY_KEYWORD_RELATIVE_SCORE = "FILTERED_BY_KEYWORD_RELATIVE_SCORE";
+    private static final String FILTERED_BY_CHANNEL_GATE = "FILTERED_BY_CHANNEL_GATE";
+    private static final String FILTERED_BY_CANDIDATE_TOP_K = "FILTERED_BY_CANDIDATE_TOP_K";
+    private static final String FILTERED_BY_RERANK_CANDIDATE_TOP_K = "FILTERED_BY_RERANK_CANDIDATE_TOP_K";
+    private static final String FILTERED_BY_FINAL_TOP_K = "FILTERED_BY_FINAL_TOP_K";
+    private static final String FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY = "FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY";
 
     private final List<RetrievalChannel> retrievalChannels;
     private final ChatRagProperties properties;
     private final RagRerankService ragRerankService;
     private final DocumentKnowledgeService documentKnowledgeService;
     private final ExecutorService executorService;
+    private final FinalEvidenceSelectionPolicy finalEvidenceSelectionPolicy;
+    private final EvidenceApplicabilityService evidenceApplicabilityService;
 
     public RagRetrievalEngine(List<RetrievalChannel> retrievalChannels,
                               ChatRagProperties properties,
@@ -86,6 +81,8 @@ public class RagRetrievalEngine {
         this.ragRerankService = ragRerankService;
         this.documentKnowledgeService = documentKnowledgeService;
         this.executorService = executorService;
+        this.finalEvidenceSelectionPolicy = new FinalEvidenceSelectionPolicy(properties);
+        this.evidenceApplicabilityService = new EvidenceApplicabilityService();
     }
 
     public RagRetrievalContext retrieve(ConversationExecutionPlan plan, ConversationTraceRecorder traceRecorder) {
@@ -184,9 +181,12 @@ public class RagRetrievalEngine {
             mergedCandidates,
             properties.getParentEvidenceMaxChars()
         );
-        List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, parentCandidates, usedChannels, notes);
+        List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, parentCandidates, plan, usedChannels, notes);
 
         List<Document> finalDocuments = selectFinalDocuments(rerankedCandidates, plan);
+        if (markEvidenceApplicability(finalDocuments, plan)) {
+            notes.add("子问题" + subQuestionIndex + "最终证据未明确支持当前目标对象，仅保留为相似但不适用证据。");
+        }
 
         appendGraphRagCanonicalNotes(subQuestionIndex, subQuestion, finalDocuments, notes);
 
@@ -218,34 +218,51 @@ public class RagRetrievalEngine {
     }
 
     private List<Document> selectFinalDocuments(List<Document> rerankedCandidates, ConversationExecutionPlan plan) {
+        return finalEvidenceSelectionPolicy.select(limitReserveCandidates(rerankedCandidates, plan), plan);
+    }
+
+    private List<Document> limitReserveCandidates(List<Document> rerankedCandidates, ConversationExecutionPlan plan) {
         if (rerankedCandidates == null || rerankedCandidates.isEmpty()) {
             return List.of();
         }
-        int finalTopK = Math.max(runtimeOptions(plan).getFinalTopK(), 0);
-        if (finalTopK <= 0 || rerankedCandidates.size() <= finalTopK) {
-            return rerankedCandidates.stream()
-                .limit(finalTopK)
-                .toList();
+        RagRuntimeOptions options = runtimeOptions(plan);
+        int reserveCandidateTopK = options.getReserveCandidateTopK();
+        int finalTopK = Math.max(options.getFinalTopK(), 0);
+        if (reserveCandidateTopK <= 0) {
+            return rerankedCandidates;
         }
-        List<Document> selected = new ArrayList<>(rerankedCandidates.stream()
-            .limit(finalTopK)
-            .toList());
-        boolean preferCrossDocumentCommunity = shouldReserveCrossDocumentCommunityEvidence(plan);
-        if (selected.stream().anyMatch(document -> isRequiredGraphRagReserveCandidate(document, plan, preferCrossDocumentCommunity))) {
-            return selected;
+        int limit = Math.max(finalTopK, reserveCandidateTopK);
+        if (limit <= 0 || rerankedCandidates.size() <= limit) {
+            return rerankedCandidates;
         }
-        Document graphRagReserve = selectGraphRagReserveCandidate(rerankedCandidates, finalTopK, selected, plan, preferCrossDocumentCommunity);
-        if (graphRagReserve == null && preferCrossDocumentCommunity) {
-            graphRagReserve = selectGraphRagReserveCandidate(rerankedCandidates, finalTopK, selected, plan, false);
+        return rerankedCandidates.stream()
+            .limit(limit)
+            .toList();
+    }
+
+    private boolean markEvidenceApplicability(List<Document> finalDocuments, ConversationExecutionPlan plan) {
+        QueryUnderstandingResult queryUnderstanding = plan == null ? null : plan.getQueryUnderstanding();
+        if (finalDocuments == null || finalDocuments.isEmpty() || queryUnderstanding == null) {
+            return false;
         }
-        if (graphRagReserve == null) {
-            return selected;
+        boolean hasEvaluated = false;
+        boolean allNotApplicable = true;
+        for (Document document : finalDocuments) {
+            EvidenceApplicabilityResult result = evidenceApplicabilityService.evaluate(queryUnderstanding, document);
+            if (result == null || document == null || document.getMetadata() == null) {
+                continue;
+            }
+            hasEvaluated = true;
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS, result.getStatus());
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_REASON, result.getReason());
+            if (!result.isApplicable()) {
+                document.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY);
+            }
+            else {
+                allNotApplicable = false;
+            }
         }
-        int replaceIndex = weakestNonReservedEvidenceIndex(selected, plan);
-        if (replaceIndex >= 0) {
-            selected.set(replaceIndex, graphRagReserve);
-        }
-        return selected;
+        return hasEvaluated && allNotApplicable;
     }
 
     private Document selectGraphRagReserveCandidate(List<Document> rerankedCandidates,
@@ -632,6 +649,19 @@ public class RagRetrievalEngine {
         }
         Map<String, Object> metadata = document.getMetadata();
         double priority = finalDocumentScore(document) * 0.01D;
+        if (isGraphRagCommunitySummaryOnly(document)) {
+            priority -= 30D;
+        }
+        String groundingLevel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        if ("RELATION_STRONG_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 18D;
+        }
+        else if ("RELATION_WEAK_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 8D;
+        }
+        else if ("COMMUNITY_SOURCE_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 6D;
+        }
         if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID))) {
             priority += 20D;
         }
@@ -802,31 +832,23 @@ public class RagRetrievalEngine {
             return false;
         }
         Map<String, Object> metadata = document.getMetadata();
+        if (isGraphRagCommunitySummaryOnly(document)) {
+            return false;
+        }
         if (isGraphRagCommunityReportReserveCandidate(document, plan)) {
             return true;
         }
         boolean hasRelationEvidence = isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID))
-            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID));
+            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID))
+            && hasGraphRagSourceQuote(document);
         if (!hasRelationEvidence) {
             return false;
         }
-        boolean queryPlanOrNhop = isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE))
-            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH))
-            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
-        if (!queryPlanOrNhop) {
+        if (!hasGraphRagRelationGroundingContext(metadata)) {
             return false;
         }
         Double qualityScore = numericMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUALITY_SCORE));
-        boolean qualityAccepted = qualityScore == null || qualityScore >= 0.55D;
-        if (!qualityAccepted) {
-            return false;
-        }
-        String relationType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE)).toUpperCase(Locale.ROOT);
-        if (GRAPH_RAG_ACTION_RELATION_TYPES.contains(relationType)) {
-            return true;
-        }
-        return GRAPH_RAG_WEAK_RELATION_TYPES.contains(relationType)
-            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
+        return qualityScore == null || qualityScore >= 0.55D;
     }
 
     private boolean isGraphRagCrossDocumentCommunityReserveCandidate(Document document, ConversationExecutionPlan plan) {
@@ -846,14 +868,16 @@ public class RagRetrievalEngine {
         if (!isGraphRagCommunityReportCandidate(metadata)) {
             return false;
         }
+        if (isGraphRagCommunitySummaryOnly(document)) {
+            return false;
+        }
         Integer communityDocumentCount = integerMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT));
         if (communityDocumentCount != null && communityDocumentCount < 2) {
             return false;
         }
         boolean grounded = isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID))
-            && (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))
-            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY))
-            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_TITLE)));
+            && hasGraphRagSourceQuote(document)
+            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY));
         if (!grounded) {
             return false;
         }
@@ -905,6 +929,12 @@ public class RagRetrievalEngine {
         }
         Map<String, Object> metadata = document.getMetadata();
         double priority = finalDocumentScore(document);
+        if (isGraphRagCommunitySummaryOnly(document)) {
+            priority -= 2.0D;
+        }
+        if (hasGraphRagSourceQuote(document)) {
+            priority += 0.75D;
+        }
         if (isGraphRagCommunityReportReserveCandidate(document, plan)) {
             priority += 1.35D;
             Integer communityDocumentCount = integerMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_DOCUMENT_COUNT));
@@ -920,12 +950,23 @@ public class RagRetrievalEngine {
                 priority += Math.min(0.24D, communityRelationGroupCount * 0.04D);
             }
         }
-        String relationType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_TYPE)).toUpperCase(Locale.ROOT);
-        if (GRAPH_RAG_ACTION_RELATION_TYPES.contains(relationType)) {
-            priority += 2.0D;
+        if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID))
+            && isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID))
+            && hasGraphRagSourceQuote(document)) {
+            priority += 1.10D;
         }
-        else if (GRAPH_RAG_WEAK_RELATION_TYPES.contains(relationType)) {
+        String groundingLevel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        if ("RELATION_STRONG_QUOTE".equalsIgnoreCase(groundingLevel)) {
             priority += 0.55D;
+        }
+        else if ("RELATION_WEAK_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 0.25D;
+        }
+        else if (groundingLevel.toUpperCase(Locale.ROOT).startsWith("RELATION_")) {
+            priority += 0.15D;
+        }
+        else if ("COMMUNITY_SOURCE_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 0.12D;
         }
         if (isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH))) {
             priority += 0.55D;
@@ -950,6 +991,45 @@ public class RagRetrievalEngine {
             priority += Math.min(0.45D, Math.max(0D, qualityScore) * 0.45D);
         }
         return priority;
+    }
+
+    private boolean hasGraphRagRelationGroundingContext(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return false;
+        }
+        String groundingLevel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        return isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH))
+            || isMeaningfulMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_KEY))
+            || groundingLevel.toUpperCase(Locale.ROOT).startsWith("RELATION_");
+    }
+
+    private boolean isGraphRagCommunitySummaryOnly(Document document) {
+        if (document == null || document.getMetadata() == null || !isGraphRagMetadata(document.getMetadata())) {
+            return false;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        Object summaryOnly = metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY);
+        if (summaryOnly instanceof Boolean bool) {
+            return bool;
+        }
+        if (summaryOnly != null && Boolean.parseBoolean(String.valueOf(summaryOnly))) {
+            return true;
+        }
+        String groundingLevel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        if ("COMMUNITY_SUMMARY_ONLY".equalsIgnoreCase(groundingLevel)) {
+            return true;
+        }
+        return isGraphRagCommunityReportCandidate(metadata) && !hasGraphRagSourceQuote(document);
+    }
+
+    private boolean hasGraphRagSourceQuote(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        return isMeaningfulMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET))
+            || (isMeaningfulMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID))
+            && isMeaningfulMetadataValue(document.getText()));
     }
 
     private Double numericMetadataValue(Object value) {
@@ -980,29 +1060,63 @@ public class RagRetrievalEngine {
     private List<Document> applyRerank(int subQuestionIndex,
                                        String subQuestion,
                                        List<Document> candidates,
+                                       ConversationExecutionPlan plan,
                                        List<String> usedChannels,
                                        List<String> notes) {
         if (!properties.isRerankEnabled() || candidates.isEmpty()) {
             return candidates;
         }
 
+        int rerankCandidateTopK = resolveRerankCandidateTopK(candidates, plan);
+        List<Document> rerankInput = candidates.stream()
+            .limit(rerankCandidateTopK)
+            .toList();
+        markRerankWindow(candidates, rerankInput.size());
         try {
-            List<Document> rerankedCandidates = ragRerankService.rerank(subQuestion, candidates);
+            List<Document> rerankedCandidates = ragRerankService.rerank(subQuestion, rerankInput);
             markUsedChannel(usedChannels, RetrievalChannelEnum.RERANK.getName());
             return rerankedCandidates;
         }
         catch (RuntimeException exception) {
             Throwable rootCause = unwrapThrowable(exception);
-            markRerankFailure(candidates, rootCause);
+            markRerankFailure(rerankInput, rootCause);
             log.warn("rerank 失败，保留 weighted hybrid 候选继续回答: subQuestionIndex={}, subQuestion='{}', candidateCount={}, exceptionType={}, message={}",
                 subQuestionIndex,
                 subQuestion,
-                candidates.size(),
+                rerankInput.size(),
                 rootCause == null ? "" : rootCause.getClass().getName(),
                 rootCause == null ? "" : rootCause.getMessage(),
                 exception);
             notes.add("子问题" + subQuestionIndex + " rerank 失败或超时，已保留融合候选继续回答。");
-            return candidates;
+            return rerankInput;
+        }
+    }
+
+    private int resolveRerankCandidateTopK(List<Document> candidates, ConversationExecutionPlan plan) {
+        if (candidates == null || candidates.isEmpty()) {
+            return 0;
+        }
+        int configured = runtimeOptions(plan).getRerankCandidateTopK();
+        if (configured <= 0) {
+            return candidates.size();
+        }
+        return Math.min(configured, candidates.size());
+    }
+
+    private void markRerankWindow(List<Document> candidates, int acceptedCount) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        for (int index = 0; index < candidates.size(); index++) {
+            Document candidate = candidates.get(index);
+            if (candidate == null || candidate.getMetadata() == null) {
+                continue;
+            }
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_CANDIDATE_COUNT, acceptedCount);
+            candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_TOP_K, acceptedCount);
+            if (index >= acceptedCount) {
+                candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_STATUS, "SKIPPED_BY_RERANK_CANDIDATE_TOP_K");
+            }
         }
     }
 
@@ -1481,13 +1595,16 @@ public class RagRetrievalEngine {
                                                    ConversationExecutionPlan plan) {
         List<RetrievalResultView> results = new ArrayList<>();
         Map<String, Integer> finalRankMap = new LinkedHashMap<>();
+        Map<String, Document> finalDocumentMap = new LinkedHashMap<>();
         Map<String, Document> mergedCandidateMap = new LinkedHashMap<>();
         Map<String, Document> rerankedCandidateMap = new LinkedHashMap<>();
         if (finalDocuments != null) {
             for (int i = 0; i < finalDocuments.size(); i++) {
-                String docId = finalDocuments.get(i).getId();
+                Document finalDocument = finalDocuments.get(i);
+                String docId = finalDocument.getId();
                 if (docId != null) {
                     finalRankMap.put(docId, i + 1);
+                    finalDocumentMap.put(docId, finalDocument);
                 }
             }
         }
@@ -1516,7 +1633,7 @@ public class RagRetrievalEngine {
 
                 for (int i = 0; i < rawDocs.size(); i++) {
                     Document doc = rawDocs.get(i);
-                    Document mergedDoc = doc.getId() == null ? null : mergedCandidateMap.get(doc.getId());
+                    Document mergedDoc = findMatchingDocument(doc, mergedCandidates, mergedCandidateMap);
                     Map<String, Object> scoreMetadata = mergedDoc == null ? doc.getMetadata() : mergedDoc.getMetadata();
                     Document rerankedDoc = findMatchingDocument(doc, rerankedCandidates, rerankedCandidateMap);
                     Map<String, Object> rerankMetadata = rerankedDoc == null ? scoreMetadata : rerankedDoc.getMetadata();
@@ -1616,25 +1733,12 @@ public class RagRetrievalEngine {
 
                     if (isSelected) {
                         view.setFinalRank(finalRank);
-                        view.setSelectionReason("已选入最终 Prompt");
+                        Document finalDocument = findMatchingDocument(doc, finalDocuments, finalDocumentMap);
+                        view.setSelectionReason(resolveSelectedReason(finalDocument));
                     } else if (!passedGate) {
-
-                        double score = originalScore == null ? 0D : originalScore;
-                        if ("vector".equals(channelName)) {
-                            view.setSelectionReason(String.format(
-                                "向量闸门过滤：分数 %.4f < 阈值 %.4f",
-                                score, runtimeOptions(plan).getMinVectorSimilarity()
-                            ));
-                        } else if ("keyword".equals(channelName)) {
-                            view.setSelectionReason(String.format(
-                                "关键词闸门过滤：分数 %.4f 低于相对阈值（floor=%.2f）",
-                                score, runtimeOptions(plan).getKeywordRelativeScoreFloor()
-                            ));
-                        } else {
-                            view.setSelectionReason("闸门过滤：分数 " + String.format("%.4f", score));
-                        }
+                        view.setSelectionReason(resolveGateFilteredReason(channelName));
                     } else {
-                        view.setSelectionReason("超出 finalTopK 限制（topK=" + runtimeOptions(plan).getFinalTopK() + "）");
+                        view.setSelectionReason(resolveFilteredReason(mergedDoc, rerankedDoc));
                     }
 
                     results.add(view);
@@ -1643,6 +1747,34 @@ public class RagRetrievalEngine {
         }
 
         traceRecorder.recordRetrievalResults(results);
+    }
+
+    private String resolveSelectedReason(Document finalDocument) {
+        if (finalDocument == null || finalDocument.getMetadata() == null) {
+            return FinalEvidenceSelectionPolicy.SELECTED_TOP_RANK;
+        }
+        String reason = safeText(finalDocument.getMetadata().get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON));
+        return reason.isBlank() ? FinalEvidenceSelectionPolicy.SELECTED_TOP_RANK : reason;
+    }
+
+    private String resolveGateFilteredReason(String channelName) {
+        if (RetrievalChannelEnum.VECTOR.getName().equals(channelName)) {
+            return FILTERED_BY_VECTOR_GATE;
+        }
+        if (RetrievalChannelEnum.KEYWORD.getName().equals(channelName)) {
+            return FILTERED_BY_KEYWORD_RELATIVE_SCORE;
+        }
+        return FILTERED_BY_CHANNEL_GATE;
+    }
+
+    private String resolveFilteredReason(Document mergedDoc, Document rerankedDoc) {
+        if (mergedDoc == null) {
+            return FILTERED_BY_CANDIDATE_TOP_K;
+        }
+        if (rerankedDoc == null) {
+            return FILTERED_BY_RERANK_CANDIDATE_TOP_K;
+        }
+        return FILTERED_BY_FINAL_TOP_K;
     }
 
     private Document findMatchingDocument(Document candidate,

@@ -19,6 +19,9 @@ class KnowledgeBaseRuntimeConfigResolverTest {
             {
               "vectorTopK": 12,
               "keywordTopK": 6,
+              "candidateTopK": 20,
+              "rerankCandidateTopK": 16,
+              "reserveCandidateTopK": 9,
               "minVectorSimilarity": 0.62,
               "keywordChannelEnabled": false,
               "hybrid": {
@@ -32,6 +35,9 @@ class KnowledgeBaseRuntimeConfigResolverTest {
 
         assertThat(options.getVectorTopK()).isEqualTo(12);
         assertThat(options.getKeywordTopK()).isEqualTo(6);
+        assertThat(options.getCandidateTopK()).isEqualTo(20);
+        assertThat(options.getRerankCandidateTopK()).isEqualTo(16);
+        assertThat(options.getReserveCandidateTopK()).isEqualTo(9);
         assertThat(options.getMinVectorSimilarity()).isEqualTo(0.62D);
         assertThat(options.isKeywordChannelEnabled()).isFalse();
         assertThat(options.getHybrid().getVectorWeight()).isEqualTo(1.7D);

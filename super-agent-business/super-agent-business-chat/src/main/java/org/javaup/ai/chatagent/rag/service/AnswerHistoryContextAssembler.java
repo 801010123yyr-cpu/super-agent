@@ -3,9 +3,12 @@ package org.javaup.ai.chatagent.rag.service;
 import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
+import org.javaup.ai.chatagent.rag.model.EvidenceAnchor;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
@@ -29,28 +32,40 @@ public class AnswerHistoryContextAssembler {
     public AnswerHistoryContext assemble(String question,
                                          String answerRecentTranscript,
                                          QueryUnderstandingResult queryUnderstanding) {
+        return assemble(question, answerRecentTranscript, queryUnderstanding, List.of());
+    }
+
+    public AnswerHistoryContext assemble(String question,
+                                         String answerRecentTranscript,
+                                         QueryUnderstandingResult queryUnderstanding,
+                                         List<EvidenceAnchor> recentEvidenceAnchors) {
         String normalizedQuestion = safeText(question);
         String recentUserContext = extractRecentUserQuestions(answerRecentTranscript);
         int totalBudget = Math.max(1, properties.getAnswerHistoryMaxChars());
         boolean hasRecentContext = StrUtil.isNotBlank(recentUserContext);
-        boolean followUpQuestion = looksLikeFollowUpQuestion(normalizedQuestion, hasRecentContext, queryUnderstanding);
+        boolean followUpQuestion = looksLikeFollowUpQuestion(normalizedQuestion, queryUnderstanding);
+        List<EvidenceAnchor> anchors = safeAnchors(recentEvidenceAnchors);
 
-        if (!followUpQuestion || !hasRecentContext) {
+        if (!followUpQuestion || (!hasRecentContext && anchors.isEmpty())) {
             return emptyContext(totalBudget, followUpQuestion);
         }
 
         String recentPart = renderRecentContext(recentUserContext, totalBudget);
-        if (recentPart.isBlank()) {
+        String structuredPart = renderStructuredContext(anchors, totalBudget - recentPart.length());
+        String renderedText = joinNonBlank(structuredPart, recentPart);
+        if (renderedText.isBlank() && anchors.isEmpty()) {
             return emptyContext(totalBudget, followUpQuestion);
         }
         return AnswerHistoryContext.builder()
-            .renderedText(recentPart)
-            .structuredContext("")
+            .renderedText(renderedText)
+            .structuredContext(structuredPart)
             .recentContext(recentPart)
+            .evidenceAnchors(anchors)
+            .resolvedTopic(resolveTopic(anchors))
             .followUpQuestion(followUpQuestion)
             .totalBudget(totalBudget)
-            .recentBudget(totalBudget)
-            .structuredBudget(0)
+            .recentBudget(recentPart.length())
+            .structuredBudget(structuredPart.length())
             .build();
     }
 
@@ -59,6 +74,8 @@ public class AnswerHistoryContextAssembler {
             .renderedText("")
             .structuredContext("")
             .recentContext("")
+            .evidenceAnchors(List.of())
+            .resolvedTopic("")
             .followUpQuestion(followUpQuestion)
             .totalBudget(totalBudget)
             .recentBudget(0)
@@ -89,9 +106,8 @@ public class AnswerHistoryContextAssembler {
     }
 
     private boolean looksLikeFollowUpQuestion(String normalizedQuestion,
-                                              boolean hasRecentContext,
                                               QueryUnderstandingResult queryUnderstanding) {
-        if (!hasRecentContext || StrUtil.isBlank(normalizedQuestion)) {
+        if (StrUtil.isBlank(normalizedQuestion)) {
             return false;
         }
         QueryType queryType = queryUnderstanding == null || queryUnderstanding.getQueryType() == null
@@ -101,6 +117,62 @@ public class AnswerHistoryContextAssembler {
             return true;
         }
         return false;
+    }
+
+    private List<EvidenceAnchor> safeAnchors(List<EvidenceAnchor> anchors) {
+        if (anchors == null || anchors.isEmpty()) {
+            return List.of();
+        }
+        return anchors.stream()
+            .filter(anchor -> anchor != null && hasAnchorIdentity(anchor))
+            .limit(5)
+            .toList();
+    }
+
+    private boolean hasAnchorIdentity(EvidenceAnchor anchor) {
+        return anchor.getDocumentId() != null
+            || anchor.getStructureNodeId() != null
+            || anchor.getParentBlockId() != null
+            || anchor.getChunkId() != null
+            || StrUtil.isNotBlank(anchor.getSectionPath());
+    }
+
+    private String renderStructuredContext(List<EvidenceAnchor> anchors, int budget) {
+        if (anchors == null || anchors.isEmpty() || budget <= 0) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder("上一轮可继承证据锚点（仅用于解析指代和限定范围，不作为事实证据）：\n");
+        for (EvidenceAnchor anchor : anchors) {
+            if (anchor == null) {
+                continue;
+            }
+            builder.append("- 文档: ").append(blankToDash(anchor.getDocumentName())).append('\n');
+            appendAnchorField(builder, "  章节", anchor.getSectionPath());
+            appendAnchorField(builder, "  canonicalPath", anchor.getCanonicalPath());
+            appendAnchorField(builder, "  structureNodeId", anchor.getStructureNodeId());
+            appendAnchorField(builder, "  parentBlockId", anchor.getParentBlockId());
+            appendAnchorField(builder, "  chunkId", anchor.getChunkId());
+            appendAnchorField(builder, "  itemIndex", anchor.getItemIndex());
+            String snippet = clipHead(anchor.getSnippet(), 300);
+            appendAnchorField(builder, "  snippet", snippet);
+        }
+        return clipHead(builder.toString().trim(), budget);
+    }
+
+    private void appendAnchorField(StringBuilder builder, String name, Object value) {
+        String text = value == null ? "" : String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return;
+        }
+        builder.append(name).append(": ").append(text).append('\n');
+    }
+
+    private String resolveTopic(List<EvidenceAnchor> anchors) {
+        if (anchors == null || anchors.isEmpty()) {
+            return "";
+        }
+        EvidenceAnchor anchor = anchors.get(0);
+        return StrUtil.blankToDefault(anchor.getSectionPath(), StrUtil.blankToDefault(anchor.getDocumentName(), ""));
     }
 
     private String renderRecentContext(String recentUserContext, int budget) {
@@ -118,6 +190,29 @@ public class AnswerHistoryContextAssembler {
         return title + body;
     }
 
+    private String joinNonBlank(String first, String second) {
+        String left = safeText(first);
+        String right = safeText(second);
+        if (left.isBlank()) {
+            return right;
+        }
+        if (right.isBlank()) {
+            return left;
+        }
+        return left + "\n" + right;
+    }
+
+    private String clipHead(String text, int maxChars) {
+        String normalized = safeText(text);
+        if (normalized.length() <= maxChars) {
+            return normalized;
+        }
+        if (maxChars <= 1) {
+            return "";
+        }
+        return normalized.substring(0, maxChars - 1) + "…";
+    }
+
     private String clipTail(String text, int maxChars) {
         String normalized = safeText(text);
         if (normalized.length() <= maxChars) {
@@ -128,6 +223,10 @@ public class AnswerHistoryContextAssembler {
         }
         int start = Math.max(0, normalized.length() - (maxChars - 1));
         return "…" + normalized.substring(start);
+    }
+
+    private String blankToDash(String text) {
+        return StrUtil.blankToDefault(text, "-");
     }
 
     private String safeText(String text) {

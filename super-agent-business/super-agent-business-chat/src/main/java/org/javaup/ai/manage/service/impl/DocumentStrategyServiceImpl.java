@@ -11,12 +11,14 @@ import org.javaup.ai.manage.data.SuperAgentDocumentBlock;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
+import org.javaup.ai.manage.model.KnowledgeBaseIndexingOptions;
 import org.javaup.ai.manage.service.DocumentStrategyService;
 import org.javaup.ai.manage.service.DocumentStructureNodeService;
 import org.javaup.ai.manage.support.ChunkCandidate;
 import org.javaup.ai.manage.support.DocumentAnalysisResult;
 import org.javaup.ai.manage.support.DocumentStrategyPlanDraft;
 import org.javaup.ai.manage.support.DocumentStrategyStepDraft;
+import org.javaup.ai.manage.support.KnowledgeBaseIndexingConfigResolver;
 import org.javaup.ai.manage.support.ParentBlockCandidate;
 import org.javaup.ai.prompt.PromptTemplateNames;
 import org.javaup.ai.prompt.PromptTemplateService;
@@ -61,27 +63,24 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     private static final Pattern ENGLISH_WORD_PATTERN = Pattern.compile("[A-Za-z0-9]{2,}");
     private static final Pattern CHINESE_KEYWORD_PATTERN = Pattern.compile("[\\p{IsHan}]{2,12}");
 
-    private static final int PARENT_BLOCK_MAX_CHARS = 2200;
-    private static final int PARENT_BLOCK_OVERLAP_CHARS = 180;
-    private static final int PARENT_SEMANTIC_MAX_CHARS = 1600;
-    private static final int PARENT_SEMANTIC_MIN_CHARS = 480;
-
     private final DocumentManageProperties properties;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<ChatModel> chatModelProvider;
     private final DocumentStructureNodeService structureNodeService;
     private final PromptTemplateService promptTemplateService;
+    private final KnowledgeBaseIndexingConfigResolver indexingConfigResolver;
 
     @Override
     public DocumentStrategyPlanDraft recommendStrategy(SuperAgentDocument document, DocumentAnalysisResult analysisResult) {
 
         List<String> reasonList = new ArrayList<>();
         DocumentFileTypeEnum fileType = DocumentFileTypeEnum.getRc(document.getFileType());
+        KnowledgeBaseIndexingOptions indexingOptions = indexingConfigResolver.resolve(document);
 
         boolean structureRecommended = shouldUseStructure(fileType, analysisResult);
-        boolean recursiveRecommended = shouldUseRecursive(analysisResult);
-        boolean semanticRecommended = shouldUseSemantic(analysisResult);
-        boolean llmRecommended = shouldUseLlm(analysisResult);
+        boolean recursiveRecommended = shouldUseRecursive(analysisResult, indexingOptions);
+        boolean semanticRecommended = shouldUseSemantic(analysisResult, indexingOptions);
+        boolean llmRecommended = shouldUseLlm(analysisResult, indexingOptions);
 
         List<Integer> parentStrategyTypes = new ArrayList<>();
         Map<Integer, String> parentReasonMap = new LinkedHashMap<>();
@@ -190,13 +189,14 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             document == null ? null : document.getId(),
             document == null ? null : document.getLastParseTaskId()
         );
-        List<ChunkCandidate> parentSeedList = buildParentSeedList(orderedBlocks, parentSteps, structureNodes);
+        KnowledgeBaseIndexingOptions indexingOptions = indexingConfigResolver.resolve(document);
+        List<ChunkCandidate> parentSeedList = buildParentSeedList(orderedBlocks, parentSteps, structureNodes, indexingOptions);
         List<ParentBlockCandidate> parentBlockList = new ArrayList<>();
         for (ChunkCandidate parentSeed : cleanupChunkList(parentSeedList)) {
             if (parentSeed == null || StrUtil.isBlank(parentSeed.getText())) {
                 continue;
             }
-            List<ChunkCandidate> childSeedList = buildChildSeedList(parentSeed, childSteps, blockMap);
+            List<ChunkCandidate> childSeedList = buildChildSeedList(parentSeed, childSteps, blockMap, indexingOptions);
             List<ChunkCandidate> finalChildren = cleanupChunkList(childSeedList);
             if (finalChildren.isEmpty()) {
                 finalChildren = List.of(cloneChunkCandidate(parentSeed, parentSeed.getText().trim()));
@@ -220,25 +220,28 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
 
     private List<ChunkCandidate> buildParentSeedList(List<SuperAgentDocumentBlock> documentBlocks,
                                                      List<SuperAgentDocumentStrategyStep> parentSteps,
-                                                     List<SuperAgentDocumentStructureNode> structureNodes) {
+                                                     List<SuperAgentDocumentStructureNode> structureNodes,
+                                                     KnowledgeBaseIndexingOptions indexingOptions) {
         if (containsStructureStep(parentSteps)) {
-            List<ChunkCandidate> structureSeeds = buildBlockSectionParentSeeds(documentBlocks, structureNodes);
+            List<ChunkCandidate> structureSeeds = buildBlockSectionParentSeeds(documentBlocks, structureNodes, indexingOptions);
             List<SuperAgentDocumentStrategyStep> remainingSteps = stripStructureSteps(parentSteps);
             if (remainingSteps.isEmpty()) {
                 return structureSeeds;
             }
-            return executePipeline(structureSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT);
+            return executePipeline(structureSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT, indexingOptions);
         }
-        List<ChunkCandidate> parentSeeds = buildBlockWindowParentSeeds(documentBlocks, PARENT_BLOCK_MAX_CHARS);
+        List<ChunkCandidate> parentSeeds = buildBlockWindowParentSeeds(documentBlocks,
+            resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum.PARENT, indexingOptions));
         List<SuperAgentDocumentStrategyStep> remainingSteps = stripRecursiveSteps(parentSteps);
         return remainingSteps.isEmpty()
             ? parentSeeds
-            : executePipeline(parentSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT);
+            : executePipeline(parentSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.PARENT, indexingOptions);
     }
 
     private List<ChunkCandidate> buildChildSeedList(ChunkCandidate parentSeed,
                                                     List<SuperAgentDocumentStrategyStep> childSteps,
-                                                    Map<Long, SuperAgentDocumentBlock> blockMap) {
+                                                    Map<Long, SuperAgentDocumentBlock> blockMap,
+                                                    KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> blockSeeds = buildBlockChildSeeds(parentSeed, blockMap);
         if (blockSeeds.isEmpty()) {
             blockSeeds = List.of(cloneChunkCandidate(parentSeed, parentSeed.getText()));
@@ -246,7 +249,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         List<SuperAgentDocumentStrategyStep> remainingSteps = stripStructureSteps(childSteps);
         return remainingSteps.isEmpty()
             ? blockSeeds
-            : executePipeline(blockSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.CHILD);
+            : executePipeline(blockSeeds, remainingSteps, DocumentStrategyPipelineTypeEnum.CHILD, indexingOptions);
     }
 
     private boolean containsStructureStep(List<SuperAgentDocumentStrategyStep> steps) {
@@ -288,7 +291,8 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     }
 
     private List<ChunkCandidate> buildBlockSectionParentSeeds(List<SuperAgentDocumentBlock> documentBlocks,
-                                                              List<SuperAgentDocumentStructureNode> structureNodes) {
+                                                              List<SuperAgentDocumentStructureNode> structureNodes,
+                                                              KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> seeds = new ArrayList<>();
         List<SuperAgentDocumentBlock> currentGroup = new ArrayList<>();
         String currentSectionKey = "";
@@ -297,7 +301,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             boolean sectionChanged = !currentGroup.isEmpty() && !StrUtil.equals(currentSectionKey, sectionKey);
             boolean startsNewTitleSection = isTitleBlock(block) && sectionChanged;
             if (sectionChanged || startsNewTitleSection) {
-                appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes);
+                appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes, indexingOptions);
                 currentGroup = new ArrayList<>();
             }
             if (currentGroup.isEmpty()) {
@@ -305,22 +309,26 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             }
             currentGroup.add(block);
         }
-        appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes);
-        return seeds.isEmpty() ? buildBlockWindowParentSeeds(documentBlocks, PARENT_BLOCK_MAX_CHARS, structureNodes) : seeds;
+        appendParentSeedsFromBlockGroup(seeds, currentGroup, structureNodes, indexingOptions);
+        return seeds.isEmpty()
+            ? buildBlockWindowParentSeeds(documentBlocks, resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum.PARENT, indexingOptions), structureNodes)
+            : seeds;
     }
 
     private void appendParentSeedsFromBlockGroup(List<ChunkCandidate> seeds,
                                                  List<SuperAgentDocumentBlock> blockGroup,
-                                                 List<SuperAgentDocumentStructureNode> structureNodes) {
+                                                 List<SuperAgentDocumentStructureNode> structureNodes,
+                                                 KnowledgeBaseIndexingOptions indexingOptions) {
         if (blockGroup == null || blockGroup.isEmpty()) {
             return;
         }
         String text = joinBlockTexts(blockGroup);
-        if (text.length() <= PARENT_BLOCK_MAX_CHARS) {
+        int parentMaxChars = resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum.PARENT, indexingOptions);
+        if (text.length() <= parentMaxChars) {
             seeds.add(toParentSeed(blockGroup, structureNodes));
             return;
         }
-        seeds.addAll(buildBlockWindowParentSeeds(blockGroup, PARENT_BLOCK_MAX_CHARS, structureNodes));
+        seeds.addAll(buildBlockWindowParentSeeds(blockGroup, parentMaxChars, structureNodes));
     }
 
     private List<ChunkCandidate> buildBlockWindowParentSeeds(List<SuperAgentDocumentBlock> documentBlocks, int maxChars) {
@@ -339,7 +347,9 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                 continue;
             }
             if (blockText.length() > maxChars) {
-                appendParentSeedsFromBlockGroup(seeds, currentBlocks, structureNodes);
+                if (!currentBlocks.isEmpty()) {
+                    seeds.add(toParentSeed(currentBlocks, structureNodes));
+                }
                 currentBlocks = new ArrayList<>();
                 currentChars = 0;
                 for (String splitText : recursiveSplit(blockText, maxChars, 0)) {
@@ -864,7 +874,8 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
 
     private List<ChunkCandidate> executePipeline(List<ChunkCandidate> sourceList,
                                                  List<SuperAgentDocumentStrategyStep> orderedSteps,
-                                                 DocumentStrategyPipelineTypeEnum pipelineType) {
+                                                 DocumentStrategyPipelineTypeEnum pipelineType,
+                                                 KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> currentChunks = cleanupChunkList(sourceList);
         for (SuperAgentDocumentStrategyStep step : orderedSteps) {
             DocumentStrategyTypeEnum strategyType = DocumentStrategyTypeEnum.getRc(step.getStrategyType());
@@ -873,9 +884,9 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             }
             currentChunks = switch (strategyType) {
                 case STRUCTURE -> currentChunks;
-                case RECURSIVE -> applyRecursiveChunking(currentChunks, pipelineType);
-                case SEMANTIC -> applySemanticChunking(currentChunks, pipelineType);
-                case LLM -> applyLlmChunking(currentChunks, pipelineType);
+                case RECURSIVE -> applyRecursiveChunking(currentChunks, pipelineType, indexingOptions);
+                case SEMANTIC -> applySemanticChunking(currentChunks, pipelineType, indexingOptions);
+                case LLM -> applyLlmChunking(currentChunks, pipelineType, indexingOptions);
             };
             currentChunks = cleanupChunkList(currentChunks);
         }
@@ -919,37 +930,38 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             || analysisResult.getHeadingCount() >= 2);
     }
 
-    private boolean shouldUseRecursive(DocumentAnalysisResult analysisResult) {
+    private boolean shouldUseRecursive(DocumentAnalysisResult analysisResult,
+                                       KnowledgeBaseIndexingOptions indexingOptions) {
 
-        return analysisResult.getCharCount() >= properties.getChunk().getRecursiveMaxChars()
-            || analysisResult.getMaxParagraphLength() >= properties.getChunk().getRecursiveMaxChars();
+        int recursiveMaxChars = resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum.CHILD, indexingOptions);
+        return analysisResult.getCharCount() >= recursiveMaxChars
+            || analysisResult.getMaxParagraphLength() >= recursiveMaxChars;
     }
 
-    private boolean shouldUseSemantic(DocumentAnalysisResult analysisResult) {
+    private boolean shouldUseSemantic(DocumentAnalysisResult analysisResult,
+                                      KnowledgeBaseIndexingOptions indexingOptions) {
 
-        return analysisResult.getCharCount() >= properties.getChunk().getSemanticMinChars()
+        return analysisResult.getCharCount() >= resolveSemanticMinChars(DocumentStrategyPipelineTypeEnum.CHILD, indexingOptions)
             && analysisResult.getParagraphCount() >= 3
             && analysisResult.getContentQualityLevel() >= DocumentContentQualityLevelEnum.MEDIUM.getCode();
     }
 
-    private boolean shouldUseLlm(DocumentAnalysisResult analysisResult) {
+    private boolean shouldUseLlm(DocumentAnalysisResult analysisResult,
+                                 KnowledgeBaseIndexingOptions indexingOptions) {
 
         return Boolean.TRUE.equals(properties.getChunk().getRecommendLlmWhenLowQuality())
             && Boolean.TRUE.equals(properties.getChunk().getLlmEnabled())
             && chatModelProvider.getIfAvailable() != null
             && analysisResult.getContentQualityLevel().equals(DocumentContentQualityLevelEnum.LOW.getCode())
-            && analysisResult.getCharCount() >= properties.getChunk().getSemanticMinChars();
-    }
-
-    private List<ChunkCandidate> applyRecursiveChunking(List<ChunkCandidate> sourceList) {
-        return applyRecursiveChunking(sourceList, DocumentStrategyPipelineTypeEnum.CHILD);
+            && analysisResult.getCharCount() >= resolveSemanticMinChars(DocumentStrategyPipelineTypeEnum.CHILD, indexingOptions);
     }
 
     private List<ChunkCandidate> applyRecursiveChunking(List<ChunkCandidate> sourceList,
-                                                        DocumentStrategyPipelineTypeEnum pipelineType) {
+                                                        DocumentStrategyPipelineTypeEnum pipelineType,
+                                                        KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> resultList = new ArrayList<>();
-        int maxChars = resolveRecursiveMaxChars(pipelineType);
-        int overlapChars = resolveRecursiveOverlap(maxChars, pipelineType);
+        int maxChars = resolveRecursiveMaxChars(pipelineType, indexingOptions);
+        int overlapChars = resolveRecursiveOverlap(maxChars, pipelineType, indexingOptions);
         for (ChunkCandidate candidate : sourceList) {
 
             List<String> splitTextList = recursiveSplit(candidate.getText(), maxChars, overlapChars);
@@ -960,14 +972,11 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         return resultList;
     }
 
-    private List<ChunkCandidate> applySemanticChunking(List<ChunkCandidate> sourceList) {
-        return applySemanticChunking(sourceList, DocumentStrategyPipelineTypeEnum.CHILD);
-    }
-
     private List<ChunkCandidate> applySemanticChunking(List<ChunkCandidate> sourceList,
-                                                       DocumentStrategyPipelineTypeEnum pipelineType) {
+                                                       DocumentStrategyPipelineTypeEnum pipelineType,
+                                                       KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> resultList = new ArrayList<>();
-        int semanticMinChars = resolveSemanticMinChars(pipelineType);
+        int semanticMinChars = resolveSemanticMinChars(pipelineType, indexingOptions);
         for (ChunkCandidate candidate : sourceList) {
             if (StrUtil.isBlank(candidate.getText())
                 || candidate.getText().length() <= semanticMinChars) {
@@ -976,17 +985,14 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                 continue;
             }
 
-            resultList.addAll(semanticSplit(candidate, pipelineType));
+            resultList.addAll(semanticSplit(candidate, pipelineType, indexingOptions));
         }
         return resultList;
     }
 
-    private List<ChunkCandidate> applyLlmChunking(List<ChunkCandidate> sourceList) {
-        return applyLlmChunking(sourceList, DocumentStrategyPipelineTypeEnum.CHILD);
-    }
-
     private List<ChunkCandidate> applyLlmChunking(List<ChunkCandidate> sourceList,
-                                                  DocumentStrategyPipelineTypeEnum pipelineType) {
+                                                  DocumentStrategyPipelineTypeEnum pipelineType,
+                                                  KnowledgeBaseIndexingOptions indexingOptions) {
         ChatModel chatModel = chatModelProvider.getIfAvailable();
         if (!Boolean.TRUE.equals(properties.getChunk().getLlmEnabled()) || chatModel == null) {
             throw new IllegalStateException("当前切块方案包含 LLM 策略，但 LLM 切块未启用或 ChatModel 不可用。");
@@ -998,7 +1004,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
                 continue;
             }
 
-            int llmMaxChars = resolveLlmMaxChars(pipelineType);
+            int llmMaxChars = resolveLlmMaxChars(pipelineType, indexingOptions);
             List<String> sourceTextList = candidate.getText().length() > llmMaxChars
                 ? recursiveSplit(candidate.getText(), llmMaxChars, 0)
                 : List.of(candidate.getText());
@@ -1017,7 +1023,8 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
     }
 
     private List<ChunkCandidate> semanticSplit(ChunkCandidate candidate,
-                                               DocumentStrategyPipelineTypeEnum pipelineType) {
+                                               DocumentStrategyPipelineTypeEnum pipelineType,
+                                               KnowledgeBaseIndexingOptions indexingOptions) {
         List<ChunkCandidate> resultList = new ArrayList<>();
         List<String> sentenceList = splitSentences(candidate.getText());
         if (sentenceList.size() <= 1) {
@@ -1028,8 +1035,9 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
 
         StringBuilder currentChunk = new StringBuilder();
         Set<String> currentTokenSet = new LinkedHashSet<>();
-        int semanticMinChars = resolveSemanticMinChars(pipelineType);
-        int semanticMaxChars = resolveSemanticMaxChars(pipelineType);
+        int semanticMinChars = resolveSemanticMinChars(pipelineType, indexingOptions);
+        int semanticMaxChars = resolveSemanticMaxChars(pipelineType, indexingOptions);
+        double similarityThreshold = resolveSemanticSimilarityThreshold(indexingOptions);
 
         for (String sentence : sentenceList) {
 
@@ -1038,7 +1046,7 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
             boolean exceedMaxChars = currentChunk.length() + sentence.length() > semanticMaxChars;
             double similarity = currentTokenSet.isEmpty() ? 1D : jaccard(currentTokenSet, sentenceTokenSet);
             boolean semanticBreak = currentChunk.length() >= semanticMinChars
-                && similarity < properties.getChunk().getSemanticSimilarityThreshold();
+                && similarity < similarityThreshold;
 
             if (currentChunk.length() > 0 && (exceedMaxChars || semanticBreak)) {
 
@@ -1177,15 +1185,13 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         return suffix.trim();
     }
 
-    private int resolveRecursiveOverlap(int maxChars) {
-        return resolveRecursiveOverlap(maxChars, DocumentStrategyPipelineTypeEnum.CHILD);
-    }
-
-    private int resolveRecursiveOverlap(int maxChars, DocumentStrategyPipelineTypeEnum pipelineType) {
+    private int resolveRecursiveOverlap(int maxChars,
+                                        DocumentStrategyPipelineTypeEnum pipelineType,
+                                        KnowledgeBaseIndexingOptions indexingOptions) {
         if (pipelineType == DocumentStrategyPipelineTypeEnum.PARENT) {
-            return Math.min(PARENT_BLOCK_OVERLAP_CHARS, Math.max(0, maxChars - 1));
+            return Math.min(indexingOptions.getChunk().getParentBlockOverlapChars(), Math.max(0, maxChars - 1));
         }
-        Integer configuredOverlap = properties.getChunk().getRecursiveOverlapChars();
+        Integer configuredOverlap = indexingOptions.getChunk().getChildRecursiveOverlapChars();
         if (configuredOverlap == null || configuredOverlap <= 0) {
             return 0;
         }
@@ -1193,27 +1199,35 @@ public class DocumentStrategyServiceImpl implements DocumentStrategyService {
         return Math.min(configuredOverlap, Math.max(0, maxChars - 1));
     }
 
-    private int resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum pipelineType) {
+    private int resolveRecursiveMaxChars(DocumentStrategyPipelineTypeEnum pipelineType,
+                                         KnowledgeBaseIndexingOptions indexingOptions) {
         return pipelineType == DocumentStrategyPipelineTypeEnum.PARENT
-            ? PARENT_BLOCK_MAX_CHARS
-            : properties.getChunk().getRecursiveMaxChars();
+            ? indexingOptions.getChunk().getParentBlockMaxChars()
+            : indexingOptions.getChunk().getChildRecursiveMaxChars();
     }
 
-    private int resolveSemanticMaxChars(DocumentStrategyPipelineTypeEnum pipelineType) {
+    private int resolveSemanticMaxChars(DocumentStrategyPipelineTypeEnum pipelineType,
+                                        KnowledgeBaseIndexingOptions indexingOptions) {
         return pipelineType == DocumentStrategyPipelineTypeEnum.PARENT
-            ? Math.max(PARENT_SEMANTIC_MAX_CHARS, properties.getChunk().getSemanticMaxChars())
-            : properties.getChunk().getSemanticMaxChars();
+            ? indexingOptions.getChunk().getParentSemanticMaxChars()
+            : indexingOptions.getChunk().getChildSemanticMaxChars();
     }
 
-    private int resolveSemanticMinChars(DocumentStrategyPipelineTypeEnum pipelineType) {
+    private int resolveSemanticMinChars(DocumentStrategyPipelineTypeEnum pipelineType,
+                                        KnowledgeBaseIndexingOptions indexingOptions) {
         return pipelineType == DocumentStrategyPipelineTypeEnum.PARENT
-            ? Math.max(PARENT_SEMANTIC_MIN_CHARS, properties.getChunk().getSemanticMinChars())
-            : properties.getChunk().getSemanticMinChars();
+            ? indexingOptions.getChunk().getParentSemanticMinChars()
+            : indexingOptions.getChunk().getChildSemanticMinChars();
     }
 
-    private int resolveLlmMaxChars(DocumentStrategyPipelineTypeEnum pipelineType) {
+    private double resolveSemanticSimilarityThreshold(KnowledgeBaseIndexingOptions indexingOptions) {
+        return indexingOptions.getChunk().getChildSemanticSimilarityThreshold();
+    }
+
+    private int resolveLlmMaxChars(DocumentStrategyPipelineTypeEnum pipelineType,
+                                   KnowledgeBaseIndexingOptions indexingOptions) {
         return pipelineType == DocumentStrategyPipelineTypeEnum.PARENT
-            ? Math.max(properties.getChunk().getLlmMaxChars(), PARENT_BLOCK_MAX_CHARS)
+            ? Math.max(properties.getChunk().getLlmMaxChars(), indexingOptions.getChunk().getParentBlockMaxChars())
             : properties.getChunk().getLlmMaxChars();
     }
 

@@ -33,6 +33,9 @@ public final class SearchReferenceMapper {
         reference.setSubQuestion(subQuestion);
         reference.setChannel(asText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL), "vector"));
         reference.setScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.SCORE)));
+        reference.setFinalSelectionReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON), ""));
+        reference.setEvidenceApplicabilityStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS), ""));
+        reference.setEvidenceApplicabilityReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_REASON), ""));
 
         if ("WEB".equalsIgnoreCase(sourceType)) {
             reference.setTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.TITLE), "网页来源"));
@@ -89,6 +92,7 @@ public final class SearchReferenceMapper {
         reference.setKgRelationGroupEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT)));
         reference.setKgRelationGroupDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT)));
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
+        reference.setKgEvidenceGroundingLevel(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL), ""));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
         reference.setKgQueryPlanSource(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE), ""));
@@ -98,6 +102,7 @@ public final class SearchReferenceMapper {
         reference.setKgNhopSeedEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME), ""));
         reference.setKgNhopPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH), ""));
         reference.setKgCrossDocumentCommunityKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY), ""));
+        reference.setKgCommunitySummaryOnly(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY)));
         reference.setKgCrossDocumentCommunityEntityCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT)));
         reference.setKgCrossDocumentCommunityRelationGroupCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)));
         reference.setKgCrossDocumentCommunityEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT)));
@@ -114,6 +119,7 @@ public final class SearchReferenceMapper {
         reference.setRaptorNodeTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_TITLE), ""));
         reference.setRaptorNodeLevel(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL)));
         reference.setRaptorSummary(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SUMMARY), ""));
+        reference.setRaptorSourceStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SOURCE_STATUS), ""));
         return reference;
     }
 
@@ -131,6 +137,13 @@ public final class SearchReferenceMapper {
 
     private static Double asDouble(Object value) {
         return value instanceof Number number ? number.doubleValue() : null;
+    }
+
+    private static boolean asBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static List<Long> asLongList(Object value) {

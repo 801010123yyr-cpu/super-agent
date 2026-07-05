@@ -9,6 +9,7 @@ import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
+import org.javaup.ai.chatagent.rag.model.EvidenceAnchor;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
 import org.javaup.ai.chatagent.rag.model.QueryType;
@@ -28,6 +29,7 @@ import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.KnowledgeRouteService;
 import org.javaup.enums.ChatQueryMode;
 import org.javaup.enums.KnowledgeBaseSelectionMode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -59,6 +61,7 @@ public class ChatPreparationOrchestrator {
     private final DocumentQuestionRouter documentQuestionRouter;
     private final KnowledgeRouteService knowledgeRouteService;
     private final DocumentKnowledgeService documentKnowledgeService;
+    private final ConversationEvidenceAnchorService conversationEvidenceAnchorService;
 
     public ChatPreparationOrchestrator(ChatRagProperties properties,
                                        ConversationMemoryService conversationMemoryService,
@@ -67,6 +70,19 @@ public class ChatPreparationOrchestrator {
                                        DocumentQuestionRouter documentQuestionRouter,
                                        KnowledgeRouteService knowledgeRouteService,
                                        DocumentKnowledgeService documentKnowledgeService) {
+        this(properties, conversationMemoryService, answerHistoryContextAssembler, chatQueryRewriteService,
+            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, null);
+    }
+
+    @Autowired
+    public ChatPreparationOrchestrator(ChatRagProperties properties,
+                                       ConversationMemoryService conversationMemoryService,
+                                       AnswerHistoryContextAssembler answerHistoryContextAssembler,
+                                       ChatQueryRewriteService chatQueryRewriteService,
+                                       DocumentQuestionRouter documentQuestionRouter,
+                                       KnowledgeRouteService knowledgeRouteService,
+                                       DocumentKnowledgeService documentKnowledgeService,
+                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService) {
         this.properties = properties;
         this.conversationMemoryService = conversationMemoryService;
         this.answerHistoryContextAssembler = answerHistoryContextAssembler;
@@ -74,6 +90,7 @@ public class ChatPreparationOrchestrator {
         this.documentQuestionRouter = documentQuestionRouter;
         this.knowledgeRouteService = knowledgeRouteService;
         this.documentKnowledgeService = documentKnowledgeService;
+        this.conversationEvidenceAnchorService = conversationEvidenceAnchorService;
     }
 
     public ConversationExecutionPlan prepare(TaskInfo taskInfo) {
@@ -115,10 +132,12 @@ public class ChatPreparationOrchestrator {
 
         HistoryPlanningContext historyPlanningContext = buildHistoryPlanningContext(memoryContext);
         String historySummary = buildPlanningHistory(memoryContext, historyPlanningContext);
+        List<EvidenceAnchor> recentEvidenceAnchors = loadRecentEvidenceAnchors(conversationId);
         AnswerHistoryContext answerHistoryContext = buildAnswerHistoryContext(
             question,
             memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
-            null
+            null,
+            List.of()
         );
 
         boolean requiresCurrentDateAnchoring = TimeSensitiveQueryHelper.requiresCurrentDateAnchoring(question);
@@ -313,10 +332,18 @@ public class ChatPreparationOrchestrator {
             ? RetrievalIntent.GENERAL
             : navigationDecision.getRetrievalIntent();
         QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
+        List<EvidenceAnchor> scopedEvidenceAnchors = filterEvidenceAnchors(
+            recentEvidenceAnchors,
+            chatMode,
+            routedDocumentId,
+            knowledgeBaseSelection
+        );
+        appendAnchorHints(historyPlanningContext, scopedEvidenceAnchors);
         AnswerHistoryContext routedAnswerHistoryContext = buildAnswerHistoryContext(
             question,
             memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
-            queryUnderstanding
+            queryUnderstanding,
+            scopedEvidenceAnchors
         );
 
         log.info("聊天编排完成: conversationId={}, chatMode={}, originalQuestion='{}', rewriteQuestion='{}', retrievalQuestion='{}', executionMode={}, retrievalIntent={}, targetSection='{}'",
@@ -356,9 +383,12 @@ public class ChatPreparationOrchestrator {
         snapshot.put("queryType", queryUnderstanding.getQueryType() == null ? "" : queryUnderstanding.getQueryType().name());
         snapshot.put("channels", queryUnderstanding.getChannels() == null ? List.of() : queryUnderstanding.getChannels().stream().map(Enum::name).toList());
         snapshot.put("entities", queryUnderstanding.getEntities() == null ? List.of() : queryUnderstanding.getEntities());
+        snapshot.put("targetEntities", queryUnderstanding.getTargetEntities() == null ? List.of() : queryUnderstanding.getTargetEntities());
+        snapshot.put("excludedEntities", queryUnderstanding.getExcludedEntities() == null ? List.of() : queryUnderstanding.getExcludedEntities());
         snapshot.put("sectionAnchors", queryUnderstanding.getSectionAnchors() == null ? List.of() : queryUnderstanding.getSectionAnchors());
         snapshot.put("tableOps", queryUnderstanding.getTableOps() == null ? List.of() : queryUnderstanding.getTableOps());
         snapshot.put("negativeBoundary", queryUnderstanding.isNegativeBoundary());
+        snapshot.put("answerExpectation", StrUtil.blankToDefault(queryUnderstanding.getAnswerExpectation(), ""));
         snapshot.put("confidence", queryUnderstanding.getConfidence());
         snapshot.put("source", StrUtil.blankToDefault(queryUnderstanding.getSource(), ""));
         snapshot.put("reasons", queryUnderstanding.getReasons() == null ? List.of() : queryUnderstanding.getReasons());
@@ -586,7 +616,96 @@ public class ChatPreparationOrchestrator {
     private AnswerHistoryContext buildAnswerHistoryContext(String question,
                                                            String answerRecentTranscript,
                                                            QueryUnderstandingResult queryUnderstanding) {
-        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript, queryUnderstanding);
+        return buildAnswerHistoryContext(question, answerRecentTranscript, queryUnderstanding, List.of());
+    }
+
+    private AnswerHistoryContext buildAnswerHistoryContext(String question,
+                                                           String answerRecentTranscript,
+                                                           QueryUnderstandingResult queryUnderstanding,
+                                                           List<EvidenceAnchor> recentEvidenceAnchors) {
+        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript, queryUnderstanding, recentEvidenceAnchors);
+    }
+
+    private List<EvidenceAnchor> loadRecentEvidenceAnchors(String conversationId) {
+        if (conversationEvidenceAnchorService == null || StrUtil.isBlank(conversationId)) {
+            return List.of();
+        }
+        try {
+            return conversationEvidenceAnchorService.loadRecentEvidenceAnchors(conversationId, 5);
+        }
+        catch (RuntimeException exception) {
+            log.warn("加载上一轮 evidence anchor 失败: conversationId={}, message={}",
+                conversationId,
+                exception.getMessage(),
+                exception);
+            return List.of();
+        }
+    }
+
+    private List<EvidenceAnchor> filterEvidenceAnchors(List<EvidenceAnchor> anchors,
+                                                       ChatQueryMode chatMode,
+                                                       Long selectedDocumentId,
+                                                       KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        if (anchors == null || anchors.isEmpty()) {
+            return List.of();
+        }
+        if (chatMode == ChatQueryMode.DOCUMENT && selectedDocumentId != null) {
+            return anchors.stream()
+                .filter(anchor -> anchor != null && Objects.equals(anchor.getDocumentId(), selectedDocumentId))
+                .toList();
+        }
+        if (chatMode == ChatQueryMode.AUTO_DOCUMENT
+            && knowledgeBaseSelection != null
+            && knowledgeBaseSelection.getAllowedDocumentIds() != null
+            && !knowledgeBaseSelection.getAllowedDocumentIds().isEmpty()) {
+            return anchors.stream()
+                .filter(anchor -> anchor != null && anchor.getDocumentId() != null)
+                .filter(anchor -> knowledgeBaseSelection.getAllowedDocumentIds().contains(anchor.getDocumentId()))
+                .toList();
+        }
+        return anchors;
+    }
+
+    private void appendAnchorHints(HistoryPlanningContext historyPlanningContext, List<EvidenceAnchor> anchors) {
+        if (historyPlanningContext == null || anchors == null || anchors.isEmpty()) {
+            return;
+        }
+        List<String> hints = new ArrayList<>(historyPlanningContext.getQueryContextHints() == null
+            ? List.of()
+            : historyPlanningContext.getQueryContextHints());
+        anchors.stream()
+            .map(this::anchorHint)
+            .filter(StrUtil::isNotBlank)
+            .limit(5)
+            .forEach(hints::add);
+        historyPlanningContext.setQueryContextHints(hints);
+    }
+
+    private String anchorHint(EvidenceAnchor anchor) {
+        if (anchor == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        appendHintPart(builder, "documentId", anchor.getDocumentId());
+        appendHintPart(builder, "sectionPath", anchor.getSectionPath());
+        appendHintPart(builder, "structureNodeId", anchor.getStructureNodeId());
+        appendHintPart(builder, "parentBlockId", anchor.getParentBlockId());
+        appendHintPart(builder, "chunkId", anchor.getChunkId());
+        return builder.toString().trim();
+    }
+
+    private void appendHintPart(StringBuilder builder, String name, Object value) {
+        if (value == null) {
+            return;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return;
+        }
+        if (!builder.isEmpty()) {
+            builder.append("; ");
+        }
+        builder.append(name).append('=').append(text);
     }
 
     private String buildStructuredPlanningHistory(HistoryPlanningContext historyPlanningContext) {

@@ -569,6 +569,19 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     private double graphRagMetadataPriority(Document document) {
         Map<String, Object> metadata = document.getMetadata();
         double priority = resolveScoreOrZero(document) * 0.01D;
+        if (Boolean.parseBoolean(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY)))) {
+            priority -= 30D;
+        }
+        String groundingLevel = asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        if ("RELATION_STRONG_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 18D;
+        }
+        else if ("RELATION_WEAK_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 8D;
+        }
+        else if ("COMMUNITY_SOURCE_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 6D;
+        }
         if (metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null) {
             priority += 20D;
         }
