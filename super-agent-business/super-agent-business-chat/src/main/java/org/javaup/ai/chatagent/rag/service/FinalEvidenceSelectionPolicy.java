@@ -26,11 +26,16 @@ public class FinalEvidenceSelectionPolicy {
     public static final String RESERVE_TOP_RANK = "TOP_RANK";
     public static final String RESERVE_SAME_SECTION_BODY = "SAME_SECTION_BODY";
     public static final String RESERVE_STRUCTURE_ANCHOR = "STRUCTURE_ANCHOR";
+    public static final String RESERVE_STRUCTURE_ANCHOR_BODY = "STRUCTURE_ANCHOR_BODY";
+    public static final String RESERVE_STRUCTURE_DESCENDANT_BODY = "STRUCTURE_DESCENDANT_BODY";
     public static final String RESERVE_GRAPH_RAG_QUOTE = "GRAPH_RAG_QUOTE";
     public static final String RESERVE_RAPTOR_SOURCE_CHUNK = "RAPTOR_SOURCE_CHUNK";
     public static final String SELECTED_TOP_RANK = "SELECTED_TOP_RANK";
     public static final String SELECTED_SAME_SECTION_BODY = "SELECTED_SAME_SECTION_BODY";
     public static final String SELECTED_STRUCTURE_ANCHOR = "SELECTED_STRUCTURE_ANCHOR";
+    public static final String SELECTED_STRUCTURE_ANCHOR_BODY = "SELECTED_STRUCTURE_ANCHOR_BODY";
+    public static final String SELECTED_STRUCTURE_DESCENDANT_BODY = "SELECTED_STRUCTURE_DESCENDANT_BODY";
+    public static final String REPLACED_TITLE_ONLY_WITH_BODY = "REPLACED_TITLE_ONLY_WITH_BODY";
     public static final String SELECTED_GRAPH_RAG_QUOTE = "SELECTED_GRAPH_RAG_QUOTE";
     public static final String SELECTED_RAPTOR_SOURCE_CHUNK = "SELECTED_RAPTOR_SOURCE_CHUNK";
 
@@ -53,15 +58,45 @@ public class FinalEvidenceSelectionPolicy {
             .limit(finalTopK)
             .toList());
         selected.forEach(document -> markReserve(document, RESERVE_TOP_RANK));
+        reserveStructureAnchorBodyCandidates(rerankedCandidates, selected);
         if (rerankedCandidates.size() <= finalTopK) {
             return selected;
         }
-
         reserveSameSectionBody(rerankedCandidates, selected);
         reserveStructureAnchor(rerankedCandidates, selected, plan);
         reserveRaptorSourceEvidence(rerankedCandidates, finalTopK, selected, plan);
         reserveGraphRagEvidence(rerankedCandidates, finalTopK, selected, plan);
         return selected;
+    }
+
+    private void reserveStructureAnchorBodyCandidates(List<Document> candidates, List<Document> selected) {
+        List<Document> bodyCandidates = candidates.stream()
+            .filter(this::isStructureAnchorBodyCandidate)
+            .filter(this::isBodyEvidence)
+            .sorted(Comparator.comparingDouble(this::structureAnchorBodyPriority).reversed())
+            .toList();
+        if (bodyCandidates.isEmpty()) {
+            return;
+        }
+        for (Document bodyCandidate : bodyCandidates) {
+            Document alreadySelected = findSameDocument(selected, bodyCandidate);
+            String reserveType = structureAnchorReserveType(bodyCandidate);
+            if (alreadySelected != null) {
+                markReserve(alreadySelected, reserveType);
+                continue;
+            }
+            int replaceIndex = firstReplaceableTitleOrSummaryOnlyIndex(selected);
+            boolean replacesTitleOrSummary = replaceIndex >= 0;
+            if (replaceIndex < 0) {
+                replaceIndex = weakestReplaceableEvidenceIndex(selected);
+            }
+            if (replaceIndex < 0) {
+                return;
+            }
+            String reason = replacesTitleOrSummary ? REPLACED_TITLE_ONLY_WITH_BODY : selectedReasonCode(reserveType);
+            markReserve(bodyCandidate, reserveType, reason);
+            selected.set(replaceIndex, bodyCandidate);
+        }
     }
 
     private void reserveSameSectionBody(List<Document> candidates, List<Document> selected) {
@@ -82,7 +117,6 @@ public class FinalEvidenceSelectionPolicy {
                 continue;
             }
             replaceWeakestEvidence(selected, body, RESERVE_SAME_SECTION_BODY);
-            return;
         }
     }
 
@@ -230,6 +264,19 @@ public class FinalEvidenceSelectionPolicy {
         return -1;
     }
 
+    private int firstReplaceableTitleOrSummaryOnlyIndex(List<Document> selected) {
+        for (int index = 0; index < selected.size(); index++) {
+            Document document = selected.get(index);
+            if (isProtectedReserve(document)) {
+                continue;
+            }
+            if (isTitleEvidence(document) || isRaptorSummaryOnly(document) || isGraphRagCommunitySummaryOnly(document)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     private int weakestReplaceableEvidenceIndex(List<Document> selected) {
         int replaceIndex = -1;
         double weakestScore = Double.MAX_VALUE;
@@ -254,6 +301,8 @@ public class FinalEvidenceSelectionPolicy {
         String reserveType = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
         return RESERVE_SAME_SECTION_BODY.equals(reserveType)
             || RESERVE_STRUCTURE_ANCHOR.equals(reserveType)
+            || RESERVE_STRUCTURE_ANCHOR_BODY.equals(reserveType)
+            || RESERVE_STRUCTURE_DESCENDANT_BODY.equals(reserveType)
             || RESERVE_GRAPH_RAG_QUOTE.equals(reserveType)
             || RESERVE_RAPTOR_SOURCE_CHUNK.equals(reserveType);
     }
@@ -266,10 +315,20 @@ public class FinalEvidenceSelectionPolicy {
         document.getMetadata().putIfAbsent(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, reserveType);
     }
 
+    private void markReserve(Document document, String reserveType, String reasonCode) {
+        if (document == null || document.getMetadata() == null) {
+            return;
+        }
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, reasonCode);
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, reserveType);
+    }
+
     private String selectedReasonCode(String reserveType) {
         return switch (reserveType) {
             case RESERVE_SAME_SECTION_BODY -> SELECTED_SAME_SECTION_BODY;
             case RESERVE_STRUCTURE_ANCHOR -> SELECTED_STRUCTURE_ANCHOR;
+            case RESERVE_STRUCTURE_ANCHOR_BODY -> SELECTED_STRUCTURE_ANCHOR_BODY;
+            case RESERVE_STRUCTURE_DESCENDANT_BODY -> SELECTED_STRUCTURE_DESCENDANT_BODY;
             case RESERVE_GRAPH_RAG_QUOTE -> SELECTED_GRAPH_RAG_QUOTE;
             case RESERVE_RAPTOR_SOURCE_CHUNK -> SELECTED_RAPTOR_SOURCE_CHUNK;
             default -> SELECTED_TOP_RANK;
@@ -296,10 +355,82 @@ public class FinalEvidenceSelectionPolicy {
         if (document == null) {
             return false;
         }
+        if (isTechnicalWrapperEvidence(document)) {
+            return false;
+        }
         if (isTitleEvidence(document)) {
             return false;
         }
         return safeText(document.getText()).length() >= 12;
+    }
+
+    private boolean isStructureAnchorBodyCandidate(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        if (!booleanMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY))) {
+            return false;
+        }
+        String reserveType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
+        String channel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL));
+        Object bypass = metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW);
+        return "STRUCTURE_ANCHOR_BODY_CANDIDATE".equalsIgnoreCase(reserveType)
+            || "structure-anchor".equalsIgnoreCase(channel)
+            || Boolean.TRUE.equals(bypass)
+            || Boolean.parseBoolean(String.valueOf(bypass));
+    }
+
+    private boolean isTechnicalWrapperEvidence(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        String chunkType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE));
+        if ("RAPTOR_SUMMARY".equalsIgnoreCase(chunkType)) {
+            return true;
+        }
+        if (isRaptorSummaryOnly(document) || isGraphRagCommunitySummaryOnly(document)) {
+            return true;
+        }
+        String channel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL));
+        String sourceType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_TYPE));
+        if ("graph-rag".equalsIgnoreCase(channel) || "GRAPH_RAG".equalsIgnoreCase(sourceType)) {
+            return !hasGraphRagSourceQuote(document);
+        }
+        String text = safeText(document.getText()).trim();
+        return text.startsWith("[GraphRAG") || text.startsWith("[RAPTOR");
+    }
+
+    private String structureAnchorReserveType(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return RESERVE_STRUCTURE_ANCHOR_BODY;
+        }
+        String matchType = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE));
+        return "CANONICAL_DESCENDANT".equalsIgnoreCase(matchType)
+            ? RESERVE_STRUCTURE_DESCENDANT_BODY
+            : RESERVE_STRUCTURE_ANCHOR_BODY;
+    }
+
+    private double structureAnchorBodyPriority(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return 0D;
+        }
+        double priority = finalDocumentScore(document) + 2D;
+        String matchType = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE));
+        if ("NODE_ID".equalsIgnoreCase(matchType)) {
+            priority += 0.6D;
+        }
+        else if ("CANONICAL_EXACT".equalsIgnoreCase(matchType)) {
+            priority += 0.45D;
+        }
+        else if ("CANONICAL_DESCENDANT".equalsIgnoreCase(matchType)) {
+            priority += 0.25D;
+        }
+        if (isMeaningfulMetadataValue(document.getMetadata().get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID))) {
+            priority += 0.3D;
+        }
+        return priority;
     }
 
     private boolean sameStructureAnchor(Document left, Document right) {
@@ -361,11 +492,40 @@ public class FinalEvidenceSelectionPolicy {
             && documents.stream().anyMatch(document -> sameDocument(document, candidate));
     }
 
+    private Document findSameDocument(List<Document> documents, Document candidate) {
+        if (documents == null || candidate == null) {
+            return null;
+        }
+        return documents.stream()
+            .filter(document -> sameDocument(document, candidate))
+            .findFirst()
+            .orElse(null);
+    }
+
     private boolean sameDocument(Document left, Document right) {
         if (left == null || right == null) {
             return false;
         }
-        return Objects.equals(left.getId(), right.getId());
+        if (Objects.equals(left.getId(), right.getId())) {
+            return true;
+        }
+        Map<String, Object> leftMetadata = left.getMetadata();
+        Map<String, Object> rightMetadata = right.getMetadata();
+        Long leftDocumentId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID));
+        Long rightDocumentId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID));
+        if (leftDocumentId != null && rightDocumentId != null && !Objects.equals(leftDocumentId, rightDocumentId)) {
+            return false;
+        }
+        Long leftChunkId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID));
+        Long rightChunkId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID));
+        if (leftChunkId != null && rightChunkId != null && Objects.equals(leftChunkId, rightChunkId)) {
+            return true;
+        }
+        Long leftParentBlockId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
+        Long rightParentBlockId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
+        return leftParentBlockId != null
+            && rightParentBlockId != null
+            && Objects.equals(leftParentBlockId, rightParentBlockId);
     }
 
     private boolean isRequiredGraphRagReserveCandidate(Document document,
@@ -694,6 +854,16 @@ public class FinalEvidenceSelectionPolicy {
             return false;
         }
         return !(value instanceof String text) || !text.isBlank();
+    }
+
+    private boolean booleanMetadataValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value == null) {
+            return false;
+        }
+        return Boolean.parseBoolean(String.valueOf(value));
     }
 
     private double finalDocumentScore(Document document) {

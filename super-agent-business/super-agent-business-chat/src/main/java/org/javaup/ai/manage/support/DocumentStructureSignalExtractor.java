@@ -35,6 +35,7 @@ public class DocumentStructureSignalExtractor {
     private static final Pattern VERSION_FOOTER_PATTERN = Pattern.compile(".*(?:\\bV\\d+(?:\\.\\d+)*\\b|版本|修订|Rev\\.?\\s*\\d+).*", Pattern.CASE_INSENSITIVE);
     private static final Pattern INLINE_EXPLICIT_STEP_BOUNDARY_PATTERN = Pattern.compile("(?=(?:第\\s*[0-9一二三四五六七八九十百]+\\s*步|步骤\\s*[0-9一二三四五六七八九十百]+)\\s*[:：、.])");
     private static final Pattern TABLE_SPLIT_PATTERN = Pattern.compile("\\|");
+    private static final Pattern ORDERED_MARKER_PATTERN = Pattern.compile("(?:^|\\s)(\\d{1,2})[、.]\\s+");
 
     private final DocumentManageProperties properties;
     private final DocumentLineClassifier documentLineClassifier;
@@ -150,6 +151,10 @@ public class DocumentStructureSignalExtractor {
         if (normalized.startsWith(">")) {
             return signal(lineNo, rawText, normalized, logicalLine.indentLevel(), DocumentStructureSignalKind.QUOTE, "", normalized, null, null,
                 List.of("quote"), 0.88D);
+        }
+        if (containsMultipleOrderedItems(normalized)) {
+            return signal(lineNo, rawText, normalized, logicalLine.indentLevel(), DocumentStructureSignalKind.LIST_ITEM, "", normalized, null, null,
+                List.of("collapsed-ordered-list"), 0.94D);
         }
         Matcher checkbox = CHECKBOX_PATTERN.matcher(normalized);
         if (checkbox.matches()) {
@@ -527,7 +532,25 @@ public class DocumentStructureSignalExtractor {
             return false;
         }
         String previous = safeText(previousNonBlank.normalizedText());
-        return previous.endsWith("：") || previous.endsWith(":");
+        return previous.endsWith("：")
+            || previous.endsWith(":")
+            || MARKDOWN_HEADING_PATTERN.matcher(previous).matches()
+            || DECIMAL_HEADING_PATTERN.matcher(previous).matches()
+            || CHAPTER_PATTERN.matcher(previous).matches()
+            || APPENDIX_PATTERN.matcher(previous).matches();
+    }
+
+    private boolean containsMultipleOrderedItems(String text) {
+        String normalized = safeText(text).replace('\n', ' ');
+        Matcher matcher = ORDERED_MARKER_PATTERN.matcher(normalized);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+            if (count >= 2) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isNeighborSequence(Integer itemIndex,

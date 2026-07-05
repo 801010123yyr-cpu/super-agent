@@ -60,6 +60,153 @@ class FinalEvidenceSelectionPolicyTest {
     }
 
     @Test
+    void structureAnchorBodyCandidateReplacesTitleOnlyEvidence() {
+        ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+            .retrievalIntent(RetrievalIntent.GENERAL)
+            .queryUnderstanding(QueryUnderstandingResult.builder()
+                .queryType(QueryType.DOCUMENT_QA)
+                .sectionAnchors(List.of("14.3.1"))
+                .confidence(0.88D)
+                .source("test")
+                .build())
+            .build();
+
+        Document titleOnly = doc("title-only", "#### 14.3.1 检查顺序", 0.99D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE"
+        ));
+        Document unrelated = doc("unrelated", "其他章节内容", 0.98D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 999L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "12.3"
+        ));
+        Document structureBody = doc("structure-body", "1. 检查机器人策略。\n2. 检查知识召回质量。\n3. 检查人工排队规则。", 0.40D, metadata(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L,
+            DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9301L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "BODY",
+            DocumentKnowledgeMetadataKeys.CHANNEL, "structure-anchor",
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, "NODE_ID",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY, true,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true
+        ));
+
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setFinalTopK(2);
+        List<Document> selected = new FinalEvidenceSelectionPolicy(properties).select(
+            List.of(titleOnly, unrelated, structureBody),
+            plan
+        );
+
+        assertThat(selected).extracting(Document::getId).containsExactly("structure-body", "unrelated");
+        assertThat(structureBody.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY")
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "REPLACED_TITLE_ONLY_WITH_BODY");
+    }
+
+    @Test
+    void descendantStructureBodyCandidateIsProtectedWhenParentAnchorMatches() {
+        ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+            .retrievalIntent(RetrievalIntent.GENERAL)
+            .queryUnderstanding(QueryUnderstandingResult.builder()
+                .queryType(QueryType.DOCUMENT_QA)
+                .sectionAnchors(List.of("14.1"))
+                .confidence(0.86D)
+                .source("test")
+                .build())
+            .build();
+
+        Document parentTitle = doc("parent-title", "### 14.1 场景一", 0.99D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 201L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.1",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.1",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE"
+        ));
+        Document descendantBody = doc("descendant-body", "1. 新版本切块异常。\n2. 父子块配置错误。\n3. 向量索引构建不完整。", 0.35D, metadata(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 202L,
+            DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9202L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.1.2",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.1/14.1.2",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "BODY",
+            DocumentKnowledgeMetadataKeys.CHANNEL, "structure-anchor",
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, "CANONICAL_DESCENDANT",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY, true,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true
+        ));
+
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setFinalTopK(1);
+        List<Document> selected = new FinalEvidenceSelectionPolicy(properties).select(
+            List.of(parentTitle, descendantBody),
+            plan
+        );
+
+        assertThat(selected).extracting(Document::getId).containsExactly("descendant-body");
+        assertThat(descendantBody.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_DESCENDANT_BODY")
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "REPLACED_TITLE_ONLY_WITH_BODY");
+    }
+
+    @Test
+    void structureAnchorCandidateWithoutRawBodyIsNotProtected() {
+        ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+            .retrievalIntent(RetrievalIntent.GENERAL)
+            .queryUnderstanding(QueryUnderstandingResult.builder()
+                .queryType(QueryType.DOCUMENT_QA)
+                .sectionAnchors(List.of("14.3.1"))
+                .confidence(0.88D)
+                .source("test")
+                .build())
+            .build();
+
+        Document titleOnly = doc("title-only", "#### 14.3.1 检查顺序", 0.99D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE"
+        ));
+        Document unrelated = doc("unrelated", "其他章节内容", 0.98D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 999L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "12.3"
+        ));
+        Document wrapped = doc("wrapped", "[GraphRAG entity] 14.3.1 检查顺序", 0.40D, Map.of(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L,
+            DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9301L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE",
+            DocumentKnowledgeMetadataKeys.CHANNEL, "structure-anchor",
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, "NODE_ID",
+            DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true
+        ));
+
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setFinalTopK(2);
+        List<Document> selected = new FinalEvidenceSelectionPolicy(properties).select(
+            List.of(titleOnly, unrelated, wrapped),
+            plan
+        );
+
+        assertThat(selected).extracting(Document::getId).containsExactly("title-only", "unrelated");
+        assertThat(wrapped.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE")
+            .doesNotContainEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "REPLACED_TITLE_ONLY_WITH_BODY");
+    }
+
+    @Test
     void reservesRaptorSourceChunkInsteadOfSummaryOnlyEvidence() {
         ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
             .retrievalIntent(RetrievalIntent.RAPTOR)
@@ -149,5 +296,13 @@ class FinalEvidenceSelectionPolicyTest {
             .metadata(mergedMetadata)
             .score(score)
             .build();
+    }
+
+    private static Map<String, Object> metadata(Object... values) {
+        LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+        for (int index = 0; index + 1 < values.length; index += 2) {
+            result.put(String.valueOf(values[index]), values[index + 1]);
+        }
+        return result;
     }
 }

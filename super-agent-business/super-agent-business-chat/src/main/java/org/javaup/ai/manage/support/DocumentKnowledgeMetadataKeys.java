@@ -53,6 +53,12 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String RERANK_TOP_K = "rerankTopK";
     public static final String FINAL_SELECTION_REASON = "finalSelectionReason";
     public static final String FINAL_SELECTION_RESERVE_TYPE = "finalSelectionReserveType";
+    public static final String SOURCE_STRUCTURE_ANCHOR = "sourceStructureAnchor";
+    public static final String STRUCTURE_ANCHOR_MATCH_TYPE = "structureAnchorMatchType";
+    public static final String STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW = "structureAnchorBypassReserveWindow";
+    public static final String STRUCTURE_ANCHOR_RAW_BODY = "structureAnchorRawBody";
+    public static final String STRUCTURE_BODY_RESOLVED_FROM = "structureBodyResolvedFrom";
+    public static final String STRUCTURE_BODY_CANDIDATE_KIND = "structureBodyCandidateKind";
     public static final String EVIDENCE_APPLICABILITY_STATUS = "evidenceApplicabilityStatus";
     public static final String EVIDENCE_APPLICABILITY_REASON = "evidenceApplicabilityReason";
     public static final String RETRIEVAL_INTENT = "retrievalIntent";

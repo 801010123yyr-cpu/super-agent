@@ -6,6 +6,8 @@ import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.ConversationStructureAnchor;
+import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
@@ -19,6 +21,7 @@ import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
 import org.javaup.ai.chatagent.rag.support.SearchReferenceMapper;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.StructureAnchoredEvidenceRequest;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.enums.RetrievalChannelEnum;
@@ -62,6 +65,8 @@ public class RagRetrievalEngine {
     private static final String FILTERED_BY_RERANK_CANDIDATE_TOP_K = "FILTERED_BY_RERANK_CANDIDATE_TOP_K";
     private static final String FILTERED_BY_FINAL_TOP_K = "FILTERED_BY_FINAL_TOP_K";
     private static final String FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY = "FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY";
+    private static final int STRUCTURE_ANCHOR_MAX_PER_ANCHOR = 2;
+    private static final int STRUCTURE_ANCHOR_MAX_TOTAL = 4;
 
     private final List<RetrievalChannel> retrievalChannels;
     private final ChatRagProperties properties;
@@ -181,9 +186,12 @@ public class RagRetrievalEngine {
             mergedCandidates,
             properties.getParentEvidenceMaxChars()
         );
-        List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, parentCandidates, plan, usedChannels, notes);
+        List<Document> structureAnchorCandidates = expandStructureAnchoredEvidence(parentCandidates, plan, notes, subQuestionIndex);
+        List<Document> rerankInputCandidates = mergeStructureAnchorCandidates(parentCandidates, structureAnchorCandidates);
+        List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, rerankInputCandidates, plan, usedChannels, notes);
+        List<Document> finalCandidates = mergeStructureAnchorCandidates(rerankedCandidates, structureAnchorCandidates);
 
-        List<Document> finalDocuments = selectFinalDocuments(rerankedCandidates, plan);
+        List<Document> finalDocuments = selectFinalDocuments(finalCandidates, plan);
         if (markEvidenceApplicability(finalDocuments, plan)) {
             notes.add("子问题" + subQuestionIndex + "最终证据未明确支持当前目标对象，仅保留为相似但不适用证据。");
         }
@@ -199,7 +207,7 @@ public class RagRetrievalEngine {
                 recordChannelObservations(traceRecorder, subQuestionIndex, subQuestion,
                     rawChannelResults, channelResults, channelTraces, finalDocuments);
                 recordRetrievalResultObservations(traceRecorder, subQuestionIndex, subQuestion,
-                    rawChannelResults, channelResults, mergedCandidates, rerankedCandidates, finalDocuments, plan);
+                    rawChannelResults, channelResults, mergedCandidates, finalCandidates, finalDocuments, plan);
             } catch (RuntimeException exception) {
                 log.warn("记录检索观测数据失败, subQuestionIndex={}", subQuestionIndex, exception);
             }
@@ -212,8 +220,8 @@ public class RagRetrievalEngine {
             new ArrayList<>(),
             channelTraces,
             mergedCandidates.size(),
-            parentCandidates.size(),
-            rerankedCandidates.size()
+            rerankInputCandidates.size(),
+            finalCandidates.size()
         );
     }
 
@@ -237,7 +245,197 @@ public class RagRetrievalEngine {
         }
         return rerankedCandidates.stream()
             .limit(limit)
-            .toList();
+            .collect(java.util.stream.Collectors.collectingAndThen(
+                java.util.stream.Collectors.toCollection(ArrayList::new),
+                limited -> appendReserveWindowBypassCandidates(limited, rerankedCandidates)
+            ));
+    }
+
+    private List<Document> appendReserveWindowBypassCandidates(List<Document> limitedCandidates, List<Document> allCandidates) {
+        if (allCandidates == null || allCandidates.isEmpty()) {
+            return limitedCandidates == null ? List.of() : limitedCandidates;
+        }
+        List<Document> result = limitedCandidates == null ? new ArrayList<>() : new ArrayList<>(limitedCandidates);
+        for (Document candidate : allCandidates) {
+            if (!isStructureAnchorReserveCandidate(candidate)) {
+                continue;
+            }
+            if (result.stream().noneMatch(selected -> sameEvidenceIdentity(selected, candidate))) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
+    private List<Document> expandStructureAnchoredEvidence(List<Document> parentCandidates,
+                                                           ConversationExecutionPlan plan,
+                                                           List<String> notes,
+                                                           int subQuestionIndex) {
+        StructureAnchoredEvidenceRequest request = buildStructureAnchoredEvidenceRequest(parentCandidates, plan);
+        if (request == null) {
+            return List.of();
+        }
+        try {
+            List<Document> expanded = documentKnowledgeService.expandStructureAnchoredEvidence(request);
+            if (expanded == null || expanded.isEmpty()) {
+                return List.of();
+            }
+            notes.add("子问题" + subQuestionIndex + "结构锚点正文扩展命中 " + expanded.size() + " 条。");
+            return expanded;
+        }
+        catch (RuntimeException exception) {
+            log.warn("结构锚点正文扩展失败: subQuestionIndex={}, message={}", subQuestionIndex, exception.getMessage(), exception);
+            notes.add("子问题" + subQuestionIndex + "结构锚点正文扩展失败，已保留普通检索候选继续回答。");
+            return List.of();
+        }
+    }
+
+    private StructureAnchoredEvidenceRequest buildStructureAnchoredEvidenceRequest(List<Document> parentCandidates,
+                                                                                   ConversationExecutionPlan plan) {
+        List<Long> documentIds = resolvePlanDocumentIds(plan);
+        List<Long> taskIds = resolvePlanTaskIds(plan);
+        if (documentIds.isEmpty() || taskIds.isEmpty()) {
+            return null;
+        }
+
+        LinkedHashSet<Long> structureNodeIds = new LinkedHashSet<>();
+        LinkedHashSet<String> canonicalPaths = new LinkedHashSet<>();
+        LinkedHashSet<String> sectionAnchors = new LinkedHashSet<>();
+        collectPlanStructureAnchors(plan, structureNodeIds, canonicalPaths, sectionAnchors);
+        collectCandidateStructureAnchors(parentCandidates, structureNodeIds, canonicalPaths, sectionAnchors);
+        if (structureNodeIds.isEmpty() && canonicalPaths.isEmpty() && sectionAnchors.isEmpty()) {
+            return null;
+        }
+
+        return StructureAnchoredEvidenceRequest.builder()
+            .candidateDocuments(parentCandidates == null ? List.of() : parentCandidates)
+            .structureNodeIds(new ArrayList<>(structureNodeIds))
+            .canonicalPaths(new ArrayList<>(canonicalPaths))
+            .sectionAnchors(new ArrayList<>(sectionAnchors))
+            .documentIds(documentIds)
+            .taskIds(taskIds)
+            .knowledgeBaseIds(plan == null || plan.getSelectedKnowledgeBaseIds() == null
+                ? List.of()
+                : plan.getSelectedKnowledgeBaseIds().stream().filter(Objects::nonNull).distinct().toList())
+            .maxPerAnchor(STRUCTURE_ANCHOR_MAX_PER_ANCHOR)
+            .maxTotal(STRUCTURE_ANCHOR_MAX_TOTAL)
+            .maxChars(properties.getParentEvidenceMaxChars())
+            .build();
+    }
+
+    private void collectPlanStructureAnchors(ConversationExecutionPlan plan,
+                                             LinkedHashSet<Long> structureNodeIds,
+                                             LinkedHashSet<String> canonicalPaths,
+                                             LinkedHashSet<String> sectionAnchors) {
+        if (plan == null) {
+            return;
+        }
+        QueryUnderstandingResult queryUnderstanding = plan.getQueryUnderstanding();
+        if (queryUnderstanding != null && queryUnderstanding.getSectionAnchors() != null) {
+            queryUnderstanding.getSectionAnchors().stream()
+                .map(this::safeText)
+                .filter(anchor -> !anchor.isBlank())
+                .forEach(sectionAnchors::add);
+        }
+        DocumentNavigationDecision navigationDecision = plan.getNavigationDecision();
+        ConversationStructureAnchor structureAnchor = navigationDecision == null ? null : navigationDecision.getStructureAnchor();
+        if (structureAnchor == null || structureAnchor.isEmpty()) {
+            return;
+        }
+        if (structureAnchor.getStructureNodeId() != null) {
+            structureNodeIds.add(structureAnchor.getStructureNodeId());
+        }
+        if (!safeText(structureAnchor.getCanonicalPath()).isBlank()) {
+            canonicalPaths.add(structureAnchor.getCanonicalPath());
+        }
+        if (!safeText(structureAnchor.getTargetSectionHint()).isBlank()) {
+            sectionAnchors.add(structureAnchor.getTargetSectionHint());
+        }
+        if (!safeText(structureAnchor.getRootSectionCode()).isBlank()) {
+            sectionAnchors.add(structureAnchor.getRootSectionCode());
+        }
+    }
+
+    private void collectCandidateStructureAnchors(List<Document> candidates,
+                                                  LinkedHashSet<Long> structureNodeIds,
+                                                  LinkedHashSet<String> canonicalPaths,
+                                                  LinkedHashSet<String> sectionAnchors) {
+        if (candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        for (Document candidate : candidates) {
+            if (candidate == null || candidate.getMetadata() == null) {
+                continue;
+            }
+            Long structureNodeId = metadataLong(candidate.getMetadata(), DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID);
+            if (structureNodeId != null) {
+                structureNodeIds.add(structureNodeId);
+            }
+            String canonicalPath = safeText(candidate.getMetadata().get(DocumentKnowledgeMetadataKeys.CANONICAL_PATH));
+            if (!canonicalPath.isBlank()) {
+                canonicalPaths.add(canonicalPath);
+            }
+            String sectionPath = safeText(candidate.getMetadata().get(DocumentKnowledgeMetadataKeys.SECTION_PATH));
+            if (!sectionPath.isBlank()) {
+                sectionAnchors.add(sectionPath);
+            }
+        }
+    }
+
+    private List<Long> resolvePlanDocumentIds(ConversationExecutionPlan plan) {
+        if (plan == null) {
+            return List.of();
+        }
+        if (plan.getRetrievalDocumentIds() != null && !plan.getRetrievalDocumentIds().isEmpty()) {
+            return plan.getRetrievalDocumentIds().stream().filter(Objects::nonNull).distinct().toList();
+        }
+        if (plan.getSelectedDocumentId() != null) {
+            return List.of(plan.getSelectedDocumentId());
+        }
+        if (plan.getAllowedKnowledgeBaseDocumentIds() != null && !plan.getAllowedKnowledgeBaseDocumentIds().isEmpty()) {
+            return plan.getAllowedKnowledgeBaseDocumentIds().stream().filter(Objects::nonNull).distinct().toList();
+        }
+        return List.of();
+    }
+
+    private List<Long> resolvePlanTaskIds(ConversationExecutionPlan plan) {
+        if (plan == null) {
+            return List.of();
+        }
+        if (plan.getRetrievalTaskIds() != null && !plan.getRetrievalTaskIds().isEmpty()) {
+            return plan.getRetrievalTaskIds().stream().filter(Objects::nonNull).distinct().toList();
+        }
+        if (plan.getSelectedTaskId() != null) {
+            return List.of(plan.getSelectedTaskId());
+        }
+        return List.of();
+    }
+
+    private List<Document> mergeStructureAnchorCandidates(List<Document> primaryCandidates, List<Document> structureCandidates) {
+        if ((structureCandidates == null || structureCandidates.isEmpty())) {
+            return primaryCandidates == null ? List.of() : primaryCandidates;
+        }
+        List<Document> merged = new ArrayList<>();
+        if (primaryCandidates != null) {
+            merged.addAll(primaryCandidates);
+        }
+        for (Document structureCandidate : structureCandidates) {
+            if (structureCandidate == null) {
+                continue;
+            }
+            if (merged.stream().noneMatch(candidate -> sameEvidenceIdentity(candidate, structureCandidate))) {
+                merged.add(structureCandidate);
+            }
+        }
+        return merged;
+    }
+
+    private boolean isStructureAnchorReserveCandidate(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        Object bypass = document.getMetadata().get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW);
+        return Boolean.TRUE.equals(bypass) || Boolean.parseBoolean(String.valueOf(bypass));
     }
 
     private boolean markEvidenceApplicability(List<Document> finalDocuments, ConversationExecutionPlan plan) {

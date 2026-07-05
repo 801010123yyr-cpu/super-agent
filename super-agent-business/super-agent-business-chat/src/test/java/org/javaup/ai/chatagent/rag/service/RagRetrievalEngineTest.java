@@ -15,6 +15,7 @@ import org.javaup.ai.chatagent.model.ChannelExecutionView;
 import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.StructureAnchoredEvidenceRequest;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.enums.KnowledgeBaseSelectionMode;
@@ -634,6 +635,91 @@ class RagRetrievalEngineTest {
             assertThat(documents).extracting(Document::getId).containsExactly("title", "body");
             assertThat(documents.get(1).getMetadata())
                 .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "SAME_SECTION_BODY");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void structureAnchorEvidenceBypassesReserveWindowAndReplacesTitleOnlyEvidence() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setReserveCandidateTopK(2);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document title = document("title", "#### 14.3.1 检查顺序", 0.99D);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.TASK_ID, 11L);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L);
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1");
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1");
+        title.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE");
+
+        Document unrelated = document("unrelated", "其他章节内容。", 0.98D);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.TASK_ID, 11L);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 999L);
+        unrelated.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "12.3");
+
+        Document structureBody = document("structure-body", "1. 检查机器人策略。\n2. 检查知识召回质量。\n3. 检查人工排队规则。", 0.30D);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.TASK_ID, 11L);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9301L);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "BODY");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, "structure-anchor");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, "NODE_ID");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true);
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.KEYWORD.getName(), List.of(title, unrelated))),
+                properties,
+                null,
+                new StructureExpansionDocumentKnowledgeService(List.of(structureBody)),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GENERAL)
+                .retrievalQuestion("14.3.1")
+                .retrievalSubQuestions(List.of("14.3.1"))
+                .selectedDocumentId(1L)
+                .selectedTaskId(11L)
+                .retrievalDocumentIds(List.of(1L))
+                .retrievalTaskIds(List.of(11L))
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.DOCUMENT_QA)
+                    .sectionAnchors(List.of("14.3.1"))
+                    .confidence(0.84D)
+                    .source("test")
+                    .build())
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).contains("structure-body");
+            Document selectedBody = documents.stream()
+                .filter(document -> "structure-body".equals(document.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(selectedBody.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY")
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "REPLACED_TITLE_ONLY_WITH_BODY");
+            assertThat(context.getRetrievalNotes())
+                .anySatisfy(note -> assertThat(note).contains("结构锚点正文扩展命中 1 条"));
         }
         finally {
             executorService.shutdownNow();
@@ -1341,6 +1427,23 @@ class RagRetrievalEngineTest {
         @Override
         public List<Document> elevateToParentBlocks(List<Document> childDocuments, int maxChars) {
             return childDocuments;
+        }
+    }
+
+    private static class StructureExpansionDocumentKnowledgeService extends PassThroughDocumentKnowledgeService {
+
+        private final List<Document> expanded;
+
+        private StructureExpansionDocumentKnowledgeService(List<Document> expanded) {
+            this.expanded = expanded;
+        }
+
+        @Override
+        public List<Document> expandStructureAnchoredEvidence(StructureAnchoredEvidenceRequest request) {
+            assertThat(request.getDocumentIds()).containsExactly(1L);
+            assertThat(request.getTaskIds()).containsExactly(11L);
+            assertThat(request.getStructureNodeIds()).contains(301L);
+            return expanded;
         }
     }
 
