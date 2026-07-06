@@ -1,6 +1,7 @@
 package org.javaup.ai.chatagent.rag.service;
 
 import cn.hutool.core.util.StrUtil;
+import org.javaup.ai.chatagent.rag.model.EvidenceRole;
 import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
@@ -19,13 +20,27 @@ import java.util.Map;
 @Service
 public class EvidenceApplicabilityService {
 
+    private final EvidenceRoleClassifier evidenceRoleClassifier;
+
+    public EvidenceApplicabilityService() {
+        this(new EvidenceRoleClassifier());
+    }
+
+    public EvidenceApplicabilityService(EvidenceRoleClassifier evidenceRoleClassifier) {
+        this.evidenceRoleClassifier = evidenceRoleClassifier == null ? new EvidenceRoleClassifier() : evidenceRoleClassifier;
+    }
+
     public EvidenceApplicabilityResult evaluate(QueryUnderstandingResult understanding, Document document) {
         if (understanding == null || document == null) {
             return EvidenceApplicabilityResult.unknown("missing understanding or evidence");
         }
+        EvidenceApplicabilityResult roleResult = evaluateExpectedRole(understanding, document);
+        if (roleResult != null && !roleResult.isApplicable()) {
+            return roleResult;
+        }
         List<String> targets = normalizedTerms(understanding.getTargetEntities());
         if (targets.isEmpty()) {
-            return EvidenceApplicabilityResult.unknown("target entity is empty");
+            return roleResult == null ? EvidenceApplicabilityResult.unknown("target entity is empty") : roleResult;
         }
         String evidenceText = normalizedEvidenceText(document);
         boolean targetSupported = targets.stream().anyMatch(evidenceText::contains);
@@ -43,6 +58,49 @@ public class EvidenceApplicabilityService {
             return EvidenceApplicabilityResult.notApplicable("target entity is not explicitly supported by evidence");
         }
         return EvidenceApplicabilityResult.unknown("target entity not found in evidence");
+    }
+
+    private EvidenceApplicabilityResult evaluateExpectedRole(QueryUnderstandingResult understanding, Document document) {
+        List<EvidenceRole> expectedRoles = normalizeExpectedRoles(understanding.getExpectedEvidenceRoles());
+        EvidenceRole actualRole = evidenceRoleClassifier.classify(document);
+        if (document.getMetadata() != null) {
+            document.getMetadata().put(DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE, actualRole.name());
+            if (!expectedRoles.isEmpty()) {
+                document.getMetadata().put(
+                    DocumentKnowledgeMetadataKeys.EXPECTED_EVIDENCE_ROLES,
+                    expectedRoles.stream().map(Enum::name).toList()
+                );
+            }
+        }
+        if (expectedRoles.isEmpty()) {
+            return null;
+        }
+        if (actualRole == EvidenceRole.GENERAL) {
+            return EvidenceApplicabilityResult.unknown("expected evidence role is " + roleText(expectedRoles) + " but evidence role is GENERAL");
+        }
+        if (expectedRoles.contains(actualRole)) {
+            return EvidenceApplicabilityResult.applicable("evidence role matched: " + actualRole.name());
+        }
+        return EvidenceApplicabilityResult.notApplicable(
+            "evidence role mismatch: expected " + roleText(expectedRoles) + ", actual " + actualRole.name()
+        );
+    }
+
+    private List<EvidenceRole> normalizeExpectedRoles(List<EvidenceRole> roles) {
+        if (roles == null || roles.isEmpty()) {
+            return List.of();
+        }
+        return roles.stream()
+            .filter(role -> role != null && role != EvidenceRole.GENERAL)
+            .distinct()
+            .limit(4)
+            .toList();
+    }
+
+    private String roleText(List<EvidenceRole> roles) {
+        return roles == null || roles.isEmpty()
+            ? "GENERAL"
+            : String.join("/", roles.stream().map(Enum::name).toList());
     }
 
     private boolean explicitEvidenceRequired(QueryUnderstandingResult understanding) {

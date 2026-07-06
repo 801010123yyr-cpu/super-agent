@@ -16,6 +16,9 @@ import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationResult;
+import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.chatagent.service.TaskInfo;
@@ -62,6 +65,7 @@ public class ChatPreparationOrchestrator {
     private final KnowledgeRouteService knowledgeRouteService;
     private final DocumentKnowledgeService documentKnowledgeService;
     private final ConversationEvidenceAnchorService conversationEvidenceAnchorService;
+    private final StructureNavigationResolver structureNavigationResolver;
 
     public ChatPreparationOrchestrator(ChatRagProperties properties,
                                        ConversationMemoryService conversationMemoryService,
@@ -71,7 +75,19 @@ public class ChatPreparationOrchestrator {
                                        KnowledgeRouteService knowledgeRouteService,
                                        DocumentKnowledgeService documentKnowledgeService) {
         this(properties, conversationMemoryService, answerHistoryContextAssembler, chatQueryRewriteService,
-            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, null);
+            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, null, null);
+    }
+
+    public ChatPreparationOrchestrator(ChatRagProperties properties,
+                                       ConversationMemoryService conversationMemoryService,
+                                       AnswerHistoryContextAssembler answerHistoryContextAssembler,
+                                       ChatQueryRewriteService chatQueryRewriteService,
+                                       DocumentQuestionRouter documentQuestionRouter,
+                                       KnowledgeRouteService knowledgeRouteService,
+                                       DocumentKnowledgeService documentKnowledgeService,
+                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService) {
+        this(properties, conversationMemoryService, answerHistoryContextAssembler, chatQueryRewriteService,
+            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, conversationEvidenceAnchorService, null);
     }
 
     @Autowired
@@ -82,7 +98,8 @@ public class ChatPreparationOrchestrator {
                                        DocumentQuestionRouter documentQuestionRouter,
                                        KnowledgeRouteService knowledgeRouteService,
                                        DocumentKnowledgeService documentKnowledgeService,
-                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService) {
+                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService,
+                                       StructureNavigationResolver structureNavigationResolver) {
         this.properties = properties;
         this.conversationMemoryService = conversationMemoryService;
         this.answerHistoryContextAssembler = answerHistoryContextAssembler;
@@ -91,6 +108,7 @@ public class ChatPreparationOrchestrator {
         this.knowledgeRouteService = knowledgeRouteService;
         this.documentKnowledgeService = documentKnowledgeService;
         this.conversationEvidenceAnchorService = conversationEvidenceAnchorService;
+        this.structureNavigationResolver = structureNavigationResolver;
     }
 
     public ConversationExecutionPlan prepare(TaskInfo taskInfo) {
@@ -296,6 +314,11 @@ public class ChatPreparationOrchestrator {
                 memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript()
             );
             QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
+            StructureNavigationResult structureNavigationResult = resolveStructureNavigationResult(
+                navigationDecision,
+                routedDocumentId,
+                routedTaskId
+            );
             if (traceRecorder != null) {
                 traceRecorder.completeStage(routeStage, "执行路由完成。", Map.of(
                     "executionMode", navigationDecision == null || navigationDecision.getExecutionMode() == null ? "" : navigationDecision.getExecutionMode().name(),
@@ -307,6 +330,7 @@ public class ChatPreparationOrchestrator {
                         ? RetrievalIntent.GENERAL.name()
                         : navigationDecision.getRetrievalIntent().name(),
                     "queryUnderstanding", buildQueryUnderstandingTrace(queryUnderstanding),
+                    "structureNavigation", buildStructureNavigationTrace(structureNavigationResult),
                     "navigationSummary", navigationDecision == null ? "" : StrUtil.blankToDefault(navigationDecision.getSummaryText(), "")
                 ));
             }
@@ -375,6 +399,27 @@ public class ChatPreparationOrchestrator {
             .build();
     }
 
+    private StructureNavigationResult resolveStructureNavigationResult(DocumentNavigationDecision navigationDecision,
+                                                                      Long routedDocumentId,
+                                                                      Long routedTaskId) {
+        if (structureNavigationResolver == null || navigationDecision == null || routedDocumentId == null) {
+            return null;
+        }
+        QueryUnderstandingResult queryUnderstanding = navigationDecision.getQueryUnderstanding();
+        StructureNavigationIntent intent = queryUnderstanding == null ? null : queryUnderstanding.getStructureNavigationIntent();
+        if (intent == null) {
+            return null;
+        }
+        StructureNavigationResult result = structureNavigationResolver.resolve(
+            routedDocumentId,
+            routedTaskId,
+            intent,
+            navigationDecision.getStructureAnchor()
+        );
+        navigationDecision.setStructureNavigationResult(result);
+        return result;
+    }
+
     private Map<String, Object> buildQueryUnderstandingTrace(QueryUnderstandingResult queryUnderstanding) {
         if (queryUnderstanding == null) {
             return Map.of();
@@ -386,12 +431,63 @@ public class ChatPreparationOrchestrator {
         snapshot.put("targetEntities", queryUnderstanding.getTargetEntities() == null ? List.of() : queryUnderstanding.getTargetEntities());
         snapshot.put("excludedEntities", queryUnderstanding.getExcludedEntities() == null ? List.of() : queryUnderstanding.getExcludedEntities());
         snapshot.put("sectionAnchors", queryUnderstanding.getSectionAnchors() == null ? List.of() : queryUnderstanding.getSectionAnchors());
+        snapshot.put("structureNavigationIntent", buildStructureNavigationIntentTrace(queryUnderstanding.getStructureNavigationIntent()));
         snapshot.put("tableOps", queryUnderstanding.getTableOps() == null ? List.of() : queryUnderstanding.getTableOps());
         snapshot.put("negativeBoundary", queryUnderstanding.isNegativeBoundary());
         snapshot.put("answerExpectation", StrUtil.blankToDefault(queryUnderstanding.getAnswerExpectation(), ""));
         snapshot.put("confidence", queryUnderstanding.getConfidence());
         snapshot.put("source", StrUtil.blankToDefault(queryUnderstanding.getSource(), ""));
         snapshot.put("reasons", queryUnderstanding.getReasons() == null ? List.of() : queryUnderstanding.getReasons());
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNavigationIntentTrace(StructureNavigationIntent intent) {
+        if (intent == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("operations", intent.getOperations() == null ? List.of() : intent.getOperations().stream().map(Enum::name).toList());
+        snapshot.put("anchorStructureNodeId", intent.getAnchorStructureNodeId() == null ? "" : String.valueOf(intent.getAnchorStructureNodeId()));
+        snapshot.put("anchorSectionPath", StrUtil.blankToDefault(intent.getAnchorSectionPath(), ""));
+        snapshot.put("anchorCanonicalPath", StrUtil.blankToDefault(intent.getAnchorCanonicalPath(), ""));
+        snapshot.put("sectionAnchors", intent.getSectionAnchors() == null ? List.of() : intent.getSectionAnchors());
+        snapshot.put("confidence", intent.getConfidence());
+        snapshot.put("source", StrUtil.blankToDefault(intent.getSource(), ""));
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNavigationTrace(StructureNavigationResult result) {
+        if (result == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("documentId", result.getDocumentId() == null ? "" : String.valueOf(result.getDocumentId()));
+        snapshot.put("anchorNodeId", result.getAnchorNodeId() == null ? "" : String.valueOf(result.getAnchorNodeId()));
+        snapshot.put("current", buildStructureNodeTrace(result.getCurrent()));
+        snapshot.put("parent", buildStructureNodeTrace(result.getParent()));
+        snapshot.put("previous", buildStructureNodeTrace(result.getPreviousSibling()));
+        snapshot.put("next", buildStructureNodeTrace(result.getNextSibling()));
+        snapshot.put("directChildren", result.getDirectChildren() == null
+            ? List.of()
+            : result.getDirectChildren().stream().map(this::buildStructureNodeTrace).toList());
+        snapshot.put("deterministic", result.isDeterministic());
+        snapshot.put("missReason", StrUtil.blankToDefault(result.getMissReason(), ""));
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNodeTrace(SuperAgentDocumentStructureNode node) {
+        if (node == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("nodeId", node.getId() == null ? "" : String.valueOf(node.getId()));
+        snapshot.put("nodeNo", node.getNodeNo() == null ? "" : String.valueOf(node.getNodeNo()));
+        snapshot.put("title", StrUtil.blankToDefault(node.getTitle(), ""));
+        snapshot.put("sectionPath", StrUtil.blankToDefault(node.getSectionPath(), ""));
+        snapshot.put("canonicalPath", StrUtil.blankToDefault(node.getCanonicalPath(), ""));
+        snapshot.put("parentNodeId", node.getParentNodeId() == null ? "" : String.valueOf(node.getParentNodeId()));
+        snapshot.put("prevSiblingNodeId", node.getPrevSiblingNodeId() == null ? "" : String.valueOf(node.getPrevSiblingNodeId()));
+        snapshot.put("nextSiblingNodeId", node.getNextSiblingNodeId() == null ? "" : String.valueOf(node.getNextSiblingNodeId()));
         return snapshot;
     }
 

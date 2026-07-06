@@ -37,6 +37,7 @@ public final class SearchReferenceMapper {
         reference.setFinalSelectionReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON), ""));
         reference.setEvidenceApplicabilityStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS), ""));
         reference.setEvidenceApplicabilityReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_REASON), ""));
+        reference.setEvidenceRole(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE), ""));
         reference.setContextIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CONTEXT_IDENTITY), ""));
         reference.setCitationIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_IDENTITY), ""));
         reference.setCitationEvidenceType(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_EVIDENCE_TYPE), ""));

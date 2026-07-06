@@ -2,11 +2,14 @@ package org.javaup.ai.chatagent.rag.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
+import org.javaup.ai.chatagent.rag.model.DocumentNavigationAction;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationOperation;
 import org.javaup.ai.manage.model.graph.GraphItem;
 import org.javaup.ai.manage.model.graph.GraphSection;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
@@ -19,6 +22,49 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DocumentQuestionRouterTest {
+
+    @Test
+    void structureNavigationChildrenIntentKeepsRetrievalAndSetsChildAction() {
+        QueryUnderstandingService queryUnderstandingService = new QueryUnderstandingService(null, null, new ObjectMapper()) {
+            @Override
+            public QueryUnderstandingResult understand(String originalQuestion,
+                                                       String rewrittenQuestion,
+                                                       List<String> subQuestions,
+                                                       String historySummary,
+                                                       String answerRecentTranscript) {
+                return QueryUnderstandingResult.builder()
+                    .queryType(QueryType.STRUCTURE_NAVIGATION)
+                    .channels(List.of(RetrievalIntent.GENERAL, RetrievalIntent.STRUCTURE))
+                    .structureNavigationIntent(StructureNavigationIntent.builder()
+                        .operations(List.of(StructureNavigationOperation.SECTION_WITH_CHILDREN))
+                        .sectionAnchors(List.of("机器人策略设计"))
+                        .confidence(0.91D)
+                        .source("test")
+                        .build())
+                    .confidence(0.91D)
+                    .source("test")
+                    .build();
+            }
+        };
+        DocumentQuestionRouter router = new DocumentQuestionRouter(
+            new StaticDocumentStructureGraphService(),
+            emptyProvider(),
+            provider(queryUnderstandingService)
+        );
+        RagRewriteResult rewrite = new RagRewriteResult(
+            "机器人策略设计都包含哪些章节？",
+            List.of("机器人策略设计都包含哪些章节？"),
+            ""
+        );
+
+        DocumentNavigationDecision decision = router.route(1L, "机器人策略设计都包含哪些章节？", rewrite, "", "");
+
+        assertThat(decision.getExecutionMode()).isEqualTo(ExecutionMode.RETRIEVAL);
+        assertThat(decision.getRetrievalIntent()).isEqualTo(RetrievalIntent.STRUCTURE);
+        assertThat(decision.getNavigationAction()).isEqualTo(DocumentNavigationAction.CHILD_SECTION_DESCEND);
+        assertThat(decision.getQueryUnderstanding().getStructureNavigationIntent().getOperations())
+            .containsExactly(StructureNavigationOperation.SECTION_WITH_CHILDREN);
+    }
 
     @Test
     void followUpItemReferenceWithoutExplicitSectionUsesRetrievalWithSoftAnchor() {

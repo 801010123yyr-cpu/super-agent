@@ -7,6 +7,7 @@ import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.ConversationStructureAnchor;
+import org.javaup.ai.chatagent.rag.model.DocumentNavigationAction;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
 import org.javaup.ai.chatagent.rag.model.QueryType;
@@ -14,6 +15,7 @@ import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationResult;
 import org.javaup.ai.chatagent.rag.model.SubQuestionChannelTrace;
 import org.javaup.ai.chatagent.rag.model.SubQuestionEvidence;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
@@ -23,8 +25,10 @@ import org.javaup.ai.chatagent.rag.support.SearchReferenceMapper;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.model.StructureAnchoredEvidenceRequest;
+import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
+import org.javaup.enums.ChatQueryMode;
 import org.javaup.enums.RetrievalChannelEnum;
 import org.springframework.ai.document.Document;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -68,6 +72,7 @@ public class RagRetrievalEngine {
     private static final String FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY = "FILTERED_NOT_APPLICABLE_TO_TARGET_ENTITY";
     private static final int STRUCTURE_ANCHOR_MAX_PER_ANCHOR = 2;
     private static final int STRUCTURE_ANCHOR_MAX_TOTAL = 4;
+    private static final int ROUTE_CANDIDATE_SOURCE_MAX_PER_DOCUMENT = 2;
 
     private final List<RetrievalChannel> retrievalChannels;
     private final ChatRagProperties properties;
@@ -188,9 +193,11 @@ public class RagRetrievalEngine {
             properties.getParentEvidenceMaxChars()
         );
         List<Document> structureAnchorCandidates = expandStructureAnchoredEvidence(parentCandidates, plan, notes, subQuestionIndex);
+        List<Document> structureNavigationCandidates = buildStructureNavigationContextCandidates(plan, notes, subQuestionIndex);
         List<Document> rerankInputCandidates = mergeStructureAnchorCandidates(parentCandidates, structureAnchorCandidates);
         List<Document> rerankedCandidates = applyRerank(subQuestionIndex, subQuestion, rerankInputCandidates, plan, usedChannels, notes);
         List<Document> finalCandidates = mergeStructureAnchorCandidates(rerankedCandidates, structureAnchorCandidates);
+        finalCandidates = mergeStructureNavigationCandidates(finalCandidates, structureNavigationCandidates);
 
         List<Document> finalDocuments = selectFinalDocuments(finalCandidates, plan);
         if (markEvidenceApplicability(finalDocuments, plan)) {
@@ -258,7 +265,7 @@ public class RagRetrievalEngine {
         }
         List<Document> result = limitedCandidates == null ? new ArrayList<>() : new ArrayList<>(limitedCandidates);
         for (Document candidate : allCandidates) {
-            if (!isStructureAnchorReserveCandidate(candidate)) {
+            if (!isReserveWindowBypassCandidate(candidate)) {
                 continue;
             }
             if (result.stream().noneMatch(selected -> sameEvidenceIdentity(selected, candidate))) {
@@ -340,20 +347,59 @@ public class RagRetrievalEngine {
         }
         DocumentNavigationDecision navigationDecision = plan.getNavigationDecision();
         ConversationStructureAnchor structureAnchor = navigationDecision == null ? null : navigationDecision.getStructureAnchor();
-        if (structureAnchor == null || structureAnchor.isEmpty()) {
+        if (structureAnchor != null && !structureAnchor.isEmpty()) {
+            if (structureAnchor.getStructureNodeId() != null) {
+                structureNodeIds.add(structureAnchor.getStructureNodeId());
+            }
+            if (!safeText(structureAnchor.getCanonicalPath()).isBlank()) {
+                canonicalPaths.add(structureAnchor.getCanonicalPath());
+            }
+            if (!safeText(structureAnchor.getTargetSectionHint()).isBlank()) {
+                sectionAnchors.add(structureAnchor.getTargetSectionHint());
+            }
+            if (!safeText(structureAnchor.getRootSectionCode()).isBlank()) {
+                sectionAnchors.add(structureAnchor.getRootSectionCode());
+            }
+        }
+        collectStructureNavigationResultAnchors(
+            navigationDecision == null ? null : navigationDecision.getStructureNavigationResult(),
+            structureNodeIds,
+            canonicalPaths,
+            sectionAnchors
+        );
+    }
+
+    private void collectStructureNavigationResultAnchors(StructureNavigationResult result,
+                                                         LinkedHashSet<Long> structureNodeIds,
+                                                         LinkedHashSet<String> canonicalPaths,
+                                                         LinkedHashSet<String> sectionAnchors) {
+        if (result == null) {
             return;
         }
-        if (structureAnchor.getStructureNodeId() != null) {
-            structureNodeIds.add(structureAnchor.getStructureNodeId());
+        collectStructureNavigationNodeAnchor(result.getCurrent(), structureNodeIds, canonicalPaths, sectionAnchors);
+        collectStructureNavigationNodeAnchor(result.getParent(), structureNodeIds, canonicalPaths, sectionAnchors);
+        collectStructureNavigationNodeAnchor(result.getPreviousSibling(), structureNodeIds, canonicalPaths, sectionAnchors);
+        collectStructureNavigationNodeAnchor(result.getNextSibling(), structureNodeIds, canonicalPaths, sectionAnchors);
+        if (result.getDirectChildren() != null) {
+            result.getDirectChildren().forEach(node -> collectStructureNavigationNodeAnchor(node, structureNodeIds, canonicalPaths, sectionAnchors));
         }
-        if (!safeText(structureAnchor.getCanonicalPath()).isBlank()) {
-            canonicalPaths.add(structureAnchor.getCanonicalPath());
+    }
+
+    private void collectStructureNavigationNodeAnchor(SuperAgentDocumentStructureNode node,
+                                                      LinkedHashSet<Long> structureNodeIds,
+                                                      LinkedHashSet<String> canonicalPaths,
+                                                      LinkedHashSet<String> sectionAnchors) {
+        if (node == null) {
+            return;
         }
-        if (!safeText(structureAnchor.getTargetSectionHint()).isBlank()) {
-            sectionAnchors.add(structureAnchor.getTargetSectionHint());
+        if (node.getId() != null) {
+            structureNodeIds.add(node.getId());
         }
-        if (!safeText(structureAnchor.getRootSectionCode()).isBlank()) {
-            sectionAnchors.add(structureAnchor.getRootSectionCode());
+        if (!safeText(node.getCanonicalPath()).isBlank()) {
+            canonicalPaths.add(node.getCanonicalPath());
+        }
+        if (!safeText(node.getSectionPath()).isBlank()) {
+            sectionAnchors.add(node.getSectionPath());
         }
     }
 
@@ -431,12 +477,144 @@ public class RagRetrievalEngine {
         return merged;
     }
 
+    private List<Document> buildStructureNavigationContextCandidates(ConversationExecutionPlan plan,
+                                                                     List<String> notes,
+                                                                     int subQuestionIndex) {
+        DocumentNavigationDecision decision = plan == null ? null : plan.getNavigationDecision();
+        StructureNavigationResult result = decision == null ? null : decision.getStructureNavigationResult();
+        QueryUnderstandingResult understanding = plan == null ? null : plan.getQueryUnderstanding();
+        QueryType queryType = understanding == null || understanding.getQueryType() == null
+            ? QueryType.DOCUMENT_QA
+            : understanding.getQueryType();
+        if (queryType != QueryType.STRUCTURE_NAVIGATION || result == null || !result.isDeterministic()) {
+            return List.of();
+        }
+        List<Document> candidates = new ArrayList<>();
+        DocumentNavigationAction action = decision.getNavigationAction();
+        if (action == DocumentNavigationAction.CHILD_SECTION_DESCEND) {
+            addStructureNavigationCandidate(candidates, result.getCurrent(), "CURRENT", FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_CURRENT, plan);
+            if (result.getDirectChildren() != null) {
+                result.getDirectChildren().forEach(node -> addStructureNavigationCandidate(
+                    candidates,
+                    node,
+                    "CHILD",
+                    FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_CHILD,
+                    plan
+                ));
+            }
+        }
+        else {
+            addStructureNavigationCandidate(candidates, result.getCurrent(), "CURRENT", FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_CURRENT, plan);
+            addStructureNavigationCandidate(candidates, result.getParent(), "PARENT", FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_PARENT, plan);
+            addStructureNavigationCandidate(candidates, result.getPreviousSibling(), "SIBLING", FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_SIBLING, plan);
+            addStructureNavigationCandidate(candidates, result.getNextSibling(), "SIBLING", FinalEvidenceSelectionPolicy.RESERVE_STRUCTURE_NAVIGATION_SIBLING, plan);
+        }
+        if (!candidates.isEmpty()) {
+            notes.add("子问题" + subQuestionIndex + "结构导航确定性上下文命中 " + candidates.size() + " 个节点。");
+        }
+        return candidates;
+    }
+
+    private void addStructureNavigationCandidate(List<Document> candidates,
+                                                 SuperAgentDocumentStructureNode node,
+                                                 String role,
+                                                 String reserveType,
+                                                 ConversationExecutionPlan plan) {
+        if (node == null || node.getId() == null) {
+            return;
+        }
+        String documentId = "structure-navigation:" + role + ":" + node.getId();
+        if (candidates.stream().anyMatch(candidate -> Objects.equals(candidate.getId(), documentId))) {
+            return;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "STRUCTURE_NAVIGATION");
+        metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, "structure-navigation");
+        metadata.put(DocumentKnowledgeMetadataKeys.SCORE, structureNavigationScore(role, node));
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, firstNonNull(node.getDocumentId(), plan == null ? null : plan.getSelectedDocumentId()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, firstNonNull(node.getParseTaskId(), plan == null ? null : plan.getSelectedTaskId()));
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, node.getId());
+        metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, safeText(node.getSectionPath()));
+        metadata.put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, safeText(node.getCanonicalPath()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(node.getTitle()));
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE");
+        metadata.put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, reserveType);
+        metadata.put(DocumentKnowledgeMetadataKeys.CONTEXT_ONLY, true);
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_EVIDENCE_RESOLVED, false);
+        Document document = Document.builder()
+            .id(documentId)
+            .text(buildStructureNavigationText(role, node))
+            .metadata(metadata)
+            .score(structureNavigationScore(role, node))
+            .build();
+        candidates.add(document);
+    }
+
+    private List<Document> mergeStructureNavigationCandidates(List<Document> primaryCandidates, List<Document> navigationCandidates) {
+        if (navigationCandidates == null || navigationCandidates.isEmpty()) {
+            return primaryCandidates == null ? List.of() : primaryCandidates;
+        }
+        List<Document> merged = new ArrayList<>();
+        navigationCandidates.stream()
+            .filter(Objects::nonNull)
+            .forEach(merged::add);
+        if (primaryCandidates != null) {
+            for (Document candidate : primaryCandidates) {
+                if (candidate != null && merged.stream().noneMatch(existing -> sameEvidenceIdentity(existing, candidate))) {
+                    merged.add(candidate);
+                }
+            }
+        }
+        return merged;
+    }
+
+    private String buildStructureNavigationText(String role, SuperAgentDocumentStructureNode node) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("结构导航节点：").append(safeText(node.getTitle()));
+        builder.append("\n节点角色：").append(role);
+        if (!safeText(node.getSectionPath()).isBlank()) {
+            builder.append("\n章节路径：").append(safeText(node.getSectionPath()));
+        }
+        if (!safeText(node.getCanonicalPath()).isBlank()) {
+            builder.append("\ncanonicalPath：").append(safeText(node.getCanonicalPath()));
+        }
+        return builder.toString();
+    }
+
+    private double structureNavigationScore(String role, SuperAgentDocumentStructureNode node) {
+        double score = switch (safeText(role)) {
+            case "CURRENT" -> 1.40D;
+            case "CHILD" -> 1.35D;
+            case "PARENT" -> 1.30D;
+            case "SIBLING" -> 1.25D;
+            default -> 1.0D;
+        };
+        Integer nodeNo = node == null ? null : node.getNodeNo();
+        return nodeNo == null ? score : score - Math.min(0.20D, nodeNo * 0.000001D);
+    }
+
+    private Long firstNonNull(Long first, Long second) {
+        return first == null ? second : first;
+    }
+
     private boolean isStructureAnchorReserveCandidate(Document document) {
         if (document == null || document.getMetadata() == null) {
             return false;
         }
         Object bypass = document.getMetadata().get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW);
         return Boolean.TRUE.equals(bypass) || Boolean.parseBoolean(String.valueOf(bypass));
+    }
+
+    private boolean isReserveWindowBypassCandidate(Document document) {
+        return isStructureAnchorReserveCandidate(document) || isRouteCandidateSourceReserve(document);
+    }
+
+    private boolean isRouteCandidateSourceReserve(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        String reserveType = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
+        return FinalEvidenceSelectionPolicy.RESERVE_ROUTE_CANDIDATE_SOURCE.equals(reserveType);
     }
 
     private boolean markEvidenceApplicability(List<Document> finalDocuments, ConversationExecutionPlan plan) {
@@ -584,32 +762,107 @@ public class RagRetrievalEngine {
             .limit(candidateTopK)
             .toList());
         boolean preferCrossDocumentCommunity = shouldReserveCrossDocumentCommunityEvidence(plan);
-        if (selected.stream().anyMatch(holder ->
+        if (selected.stream().noneMatch(holder ->
             isRequiredGraphRagReserveCandidate(holder.document, plan, preferCrossDocumentCommunity))) {
-            return selected;
+            CandidateHolder graphRagReserve = selectGraphRagReserveHolder(
+                sortedHolders,
+                candidateTopK,
+                selected,
+                plan,
+                preferCrossDocumentCommunity
+            );
+            if (graphRagReserve == null && preferCrossDocumentCommunity) {
+                graphRagReserve = selectGraphRagReserveHolder(sortedHolders, candidateTopK, selected, plan, false);
+            }
+            if (graphRagReserve != null) {
+                int replaceIndex = weakestNonReservedEvidenceIndex(
+                    selected.stream().map(holder -> holder.document).toList(),
+                    plan
+                );
+                if (replaceIndex >= 0) {
+                    selected.set(replaceIndex, graphRagReserve);
+                }
+            }
         }
-
-        CandidateHolder graphRagReserve = selectGraphRagReserveHolder(
-            sortedHolders,
-            candidateTopK,
-            selected,
-            plan,
-            preferCrossDocumentCommunity
-        );
-        if (graphRagReserve == null && preferCrossDocumentCommunity) {
-            graphRagReserve = selectGraphRagReserveHolder(sortedHolders, candidateTopK, selected, plan, false);
-        }
-        if (graphRagReserve == null) {
-            return selected;
-        }
-        int replaceIndex = weakestNonReservedEvidenceIndex(
-            selected.stream().map(holder -> holder.document).toList(),
-            plan
-        );
-        if (replaceIndex >= 0) {
-            selected.set(replaceIndex, graphRagReserve);
-        }
+        appendRouteCandidateSourceReserveHolders(sortedHolders, selected, plan);
         return selected;
+    }
+
+    private void appendRouteCandidateSourceReserveHolders(List<CandidateHolder> sortedHolders,
+                                                          List<CandidateHolder> selected,
+                                                          ConversationExecutionPlan plan) {
+        List<Long> routeDocumentIds = routeCandidateDocumentIds(plan);
+        if (routeDocumentIds.size() < 2 || sortedHolders == null || sortedHolders.isEmpty()) {
+            return;
+        }
+        Map<Long, Integer> selectedCounts = routeDocumentSourceCounts(selected, routeDocumentIds);
+        for (CandidateHolder holder : sortedHolders) {
+            if (holder == null || holder.document == null || !isRouteCandidateSourceEvidence(holder.document, routeDocumentIds)) {
+                continue;
+            }
+            Long documentId = metadataLong(holder.document.getMetadata(), DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+            if (documentId == null || selectedCounts.getOrDefault(documentId, 0) >= ROUTE_CANDIDATE_SOURCE_MAX_PER_DOCUMENT) {
+                continue;
+            }
+            if (selected.stream().anyMatch(selectedHolder -> sameEvidenceIdentity(selectedHolder.document, holder.document))) {
+                continue;
+            }
+            markRouteCandidateSourceReserve(holder.document);
+            selected.add(holder);
+            selectedCounts.put(documentId, selectedCounts.getOrDefault(documentId, 0) + 1);
+        }
+    }
+
+    private Map<Long, Integer> routeDocumentSourceCounts(List<CandidateHolder> selected, List<Long> routeDocumentIds) {
+        Map<Long, Integer> counts = new LinkedHashMap<>();
+        routeDocumentIds.forEach(documentId -> counts.put(documentId, 0));
+        if (selected == null || selected.isEmpty()) {
+            return counts;
+        }
+        for (CandidateHolder holder : selected) {
+            if (holder == null || holder.document == null || holder.document.getMetadata() == null
+                || !EvidenceIdentityResolver.isCitationCapable(holder.document)) {
+                continue;
+            }
+            Long documentId = metadataLong(holder.document.getMetadata(), DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+            if (documentId != null && counts.containsKey(documentId)) {
+                counts.put(documentId, counts.getOrDefault(documentId, 0) + 1);
+            }
+        }
+        return counts;
+    }
+
+    private boolean isRouteCandidateSourceEvidence(Document document, List<Long> routeDocumentIds) {
+        if (document == null || document.getMetadata() == null || routeDocumentIds == null || routeDocumentIds.isEmpty()) {
+            return false;
+        }
+        Long documentId = metadataLong(document.getMetadata(), DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
+        return documentId != null
+            && routeDocumentIds.contains(documentId)
+            && EvidenceIdentityResolver.isCitationCapable(document);
+    }
+
+    private void markRouteCandidateSourceReserve(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return;
+        }
+        document.getMetadata().putIfAbsent(
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE,
+            FinalEvidenceSelectionPolicy.RESERVE_ROUTE_CANDIDATE_SOURCE
+        );
+    }
+
+    private List<Long> routeCandidateDocumentIds(ConversationExecutionPlan plan) {
+        if (plan == null
+            || plan.getChatMode() != ChatQueryMode.AUTO_DOCUMENT
+            || plan.getRetrievalDocumentIds() == null
+            || plan.getRetrievalDocumentIds().size() < 2) {
+            return List.of();
+        }
+        return plan.getRetrievalDocumentIds().stream()
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
     }
 
     private CandidateHolder selectGraphRagReserveHolder(List<CandidateHolder> sortedHolders,
@@ -1272,8 +1525,11 @@ public class RagRetrievalEngine {
         int rerankCandidateTopK = resolveRerankCandidateTopK(candidates, plan);
         List<Document> rerankInput = candidates.stream()
             .limit(rerankCandidateTopK)
-            .toList();
-        markRerankWindow(candidates, rerankInput.size());
+            .collect(java.util.stream.Collectors.collectingAndThen(
+                java.util.stream.Collectors.toCollection(ArrayList::new),
+                limited -> appendRerankWindowBypassCandidates(limited, candidates)
+            ));
+        markRerankWindow(candidates, rerankInput);
         try {
             List<Document> rerankedCandidates = ragRerankService.rerank(subQuestion, rerankInput);
             markUsedChannel(usedChannels, RetrievalChannelEnum.RERANK.getName());
@@ -1305,10 +1561,27 @@ public class RagRetrievalEngine {
         return Math.min(configured, candidates.size());
     }
 
-    private void markRerankWindow(List<Document> candidates, int acceptedCount) {
+    private List<Document> appendRerankWindowBypassCandidates(List<Document> limitedCandidates, List<Document> allCandidates) {
+        if (allCandidates == null || allCandidates.isEmpty()) {
+            return limitedCandidates == null ? List.of() : limitedCandidates;
+        }
+        List<Document> result = limitedCandidates == null ? new ArrayList<>() : new ArrayList<>(limitedCandidates);
+        for (Document candidate : allCandidates) {
+            if (!isReserveWindowBypassCandidate(candidate)) {
+                continue;
+            }
+            if (result.stream().noneMatch(selected -> sameEvidenceIdentity(selected, candidate))) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
+    private void markRerankWindow(List<Document> candidates, List<Document> rerankInput) {
         if (candidates == null || candidates.isEmpty()) {
             return;
         }
+        int acceptedCount = rerankInput == null ? 0 : rerankInput.size();
         for (int index = 0; index < candidates.size(); index++) {
             Document candidate = candidates.get(index);
             if (candidate == null || candidate.getMetadata() == null) {
@@ -1316,7 +1589,9 @@ public class RagRetrievalEngine {
             }
             candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_CANDIDATE_COUNT, acceptedCount);
             candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_TOP_K, acceptedCount);
-            if (index >= acceptedCount) {
+            boolean accepted = rerankInput != null
+                && rerankInput.stream().anyMatch(input -> sameEvidenceIdentity(input, candidate));
+            if (!accepted) {
                 candidate.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_STATUS, "SKIPPED_BY_RERANK_CANDIDATE_TOP_K");
             }
         }

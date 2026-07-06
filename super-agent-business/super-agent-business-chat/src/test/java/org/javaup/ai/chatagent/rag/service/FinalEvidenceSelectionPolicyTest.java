@@ -19,6 +19,49 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FinalEvidenceSelectionPolicyTest {
 
     @Test
+    void preservesStructureNavigationContextReasonForDirectoryAnswer() {
+        ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+            .retrievalIntent(RetrievalIntent.STRUCTURE)
+            .queryUnderstanding(QueryUnderstandingResult.builder()
+                .queryType(QueryType.STRUCTURE_NAVIGATION)
+                .confidence(0.91D)
+                .source("test")
+                .build())
+            .build();
+
+        Document parent = doc("nav-parent", "结构导航节点：十三、上线观察与值班规则", 1.20D, metadata(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.TASK_ID, 11L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 130L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "十三、上线观察与值班规则",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "十三、上线观察与值班规则",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE",
+            DocumentKnowledgeMetadataKeys.CHANNEL, "structure-navigation",
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_NAVIGATION_PARENT"
+        ));
+        Document next = doc("nav-next", "结构导航节点：13.2 值班安排", 1.19D, metadata(
+            DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L,
+            DocumentKnowledgeMetadataKeys.TASK_ID, 11L,
+            DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 132L,
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "十三、上线观察与值班规则 > 13.2 值班安排",
+            DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "十三、上线观察与值班规则/13.2 值班安排",
+            DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TITLE",
+            DocumentKnowledgeMetadataKeys.CHANNEL, "structure-navigation",
+            DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_NAVIGATION_SIBLING"
+        ));
+
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setFinalTopK(2);
+        List<Document> selected = new FinalEvidenceSelectionPolicy(properties).select(List.of(parent, next), plan);
+
+        assertThat(selected).extracting(Document::getId).containsExactly("nav-parent", "nav-next");
+        assertThat(parent.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "SELECTED_STRUCTURE_NAVIGATION_PARENT");
+        assertThat(next.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "SELECTED_STRUCTURE_NAVIGATION_SIBLING");
+    }
+
+    @Test
     void keepsBodyEvidenceWhenTitleCandidateRanksAboveBodyCandidate() {
         ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
             .retrievalIntent(RetrievalIntent.GENERAL)

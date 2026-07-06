@@ -3,6 +3,7 @@ package org.javaup.ai.chatagent.rag.service;
 import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
+import org.javaup.ai.chatagent.rag.model.AnswerPlan;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
@@ -31,11 +32,14 @@ public class RagPromptAssemblyService {
 
     private final ChatRagProperties properties;
     private final PromptTemplateService promptTemplateService;
+    private final AnswerPlanService answerPlanService;
 
     public RagPromptAssemblyService(ChatRagProperties properties,
-                                    PromptTemplateService promptTemplateService) {
+                                    PromptTemplateService promptTemplateService,
+                                    AnswerPlanService answerPlanService) {
         this.properties = properties;
         this.promptTemplateService = promptTemplateService;
+        this.answerPlanService = answerPlanService == null ? new AnswerPlanService() : answerPlanService;
     }
 
     public String buildSystemPrompt() {
@@ -70,6 +74,10 @@ public class RagPromptAssemblyService {
         String boundaryInstruction = buildAnswerBoundaryInstruction(plan, context);
         if (StrUtil.isNotBlank(boundaryInstruction)) {
             userPrompt = boundaryInstruction + "\n\n" + userPrompt;
+        }
+        String roleInstruction = buildAnswerRoleInstruction(plan);
+        if (StrUtil.isNotBlank(roleInstruction)) {
+            userPrompt = roleInstruction + "\n\n" + userPrompt;
         }
         return new RagPromptAssemblyResult(
             buildSystemPrompt(),
@@ -189,6 +197,9 @@ public class RagPromptAssemblyService {
 
     private String buildDocumentReferenceBlock(SearchReference reference) {
         String snippet = trimSnippet(reference.getSnippet(), 1100);
+        if (StrUtil.isNotBlank(reference.getEvidenceRole())) {
+            snippet = "【证据角色】证据角色：" + reference.getEvidenceRole() + "\n" + snippet;
+        }
         if (EvidenceApplicabilityResult.NOT_APPLICABLE.equals(reference.getEvidenceApplicabilityStatus())) {
             snippet = "【证据适用性】这条证据不适用于当前目标对象，只能作为相似但不适用的线索。原因："
                 + StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), "-")
@@ -212,6 +223,11 @@ public class RagPromptAssemblyService {
             "sectionPath", StrUtil.blankToDefault(reference.getSectionPath(), "未识别"),
             "snippet", snippet
         )) + "\n\n";
+    }
+
+    private String buildAnswerRoleInstruction(ConversationExecutionPlan plan) {
+        AnswerPlan answerPlan = answerPlanService.build(plan == null ? null : plan.getQueryUnderstanding());
+        return answerPlan == null ? "" : StrUtil.blankToDefault(answerPlan.getInstruction(), "");
     }
 
     private String buildAnswerBoundaryInstruction(ConversationExecutionPlan plan, RagRetrievalContext context) {

@@ -35,6 +35,11 @@ public class QueryUnderstandingResult {
     @Builder.Default
     private List<String> sectionAnchors = new ArrayList<>();
 
+    private StructureNavigationIntent structureNavigationIntent;
+
+    @Builder.Default
+    private List<EvidenceRole> expectedEvidenceRoles = new ArrayList<>();
+
     @Builder.Default
     private List<String> tableOps = new ArrayList<>();
 

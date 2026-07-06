@@ -61,6 +61,8 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String STRUCTURE_BODY_CANDIDATE_KIND = "structureBodyCandidateKind";
     public static final String EVIDENCE_APPLICABILITY_STATUS = "evidenceApplicabilityStatus";
     public static final String EVIDENCE_APPLICABILITY_REASON = "evidenceApplicabilityReason";
+    public static final String EVIDENCE_ROLE = "evidenceRole";
+    public static final String EXPECTED_EVIDENCE_ROLES = "expectedEvidenceRoles";
     public static final String CONTEXT_IDENTITY = "contextIdentity";
     public static final String CITATION_IDENTITY = "citationIdentity";
     public static final String CITATION_EVIDENCE_TYPE = "citationEvidenceType";

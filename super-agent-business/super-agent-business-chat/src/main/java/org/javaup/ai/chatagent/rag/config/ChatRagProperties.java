@@ -25,9 +25,9 @@ public class ChatRagProperties {
 
     private int maxSubQuestions = 4;
 
-    private int vectorTopK = 8;
+    private int vectorTopK = 10;
 
-    private int keywordTopK = 8;
+    private int keywordTopK = 10;
 
     private int graphRagTopK = 5;
 
@@ -49,13 +49,13 @@ public class ChatRagProperties {
 
     private double raptorSummaryQualityFloor = 0.42D;
 
-    private int candidateTopK = 10;
+    private int candidateTopK = 40;
 
-    private int rerankCandidateTopK = 16;
+    private int rerankCandidateTopK = 24;
 
-    private int reserveCandidateTopK = 8;
+    private int reserveCandidateTopK = 30;
 
-    private int finalTopK = 5;
+    private int finalTopK = 6;
 
     private double minVectorSimilarity = 0.45D;
 

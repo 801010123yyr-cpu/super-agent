@@ -209,9 +209,9 @@ app:
       # 单轮最多拆分多少个子问题，避免一次提问被过度切碎。
       max-sub-questions: 4
       # 向量通道每个子问题默认召回数量。
-      vector-top-k: 8
+      vector-top-k: 10
       # 关键词通道每个子问题默认召回数量。
-      keyword-top-k: 8
+      keyword-top-k: 10
       # GraphRAG 通道每个子问题默认召回数量。
       # 该通道基于 super_agent_kg_entity / relation / evidence / community，
       # 与 Document/Section/Item 文档结构图是两套概念。
@@ -242,16 +242,16 @@ app:
       # RAPTOR 摘要质量分低于该阈值时，Java 不保存该摘要节点，也不会写入向量或 BM25 索引。
       raptor-summary-quality-floor: ${SUPER_AGENT_RAPTOR_SUMMARY_QUALITY_FLOOR:0.42}
       # 多通道合并后进入精排前，最多保留多少个候选片段。
-      candidate-top-k: 10
+      candidate-top-k: 40
       # 进入 rerank/cross-encoder 精排的候选数量。
       # 该值通常应大于 candidate-top-k 或与其保持一致，用于避免正确证据在精排前过早丢失。
-      rerank-candidate-top-k: 16
+      rerank-candidate-top-k: 24
       # final evidence policy 可以从 rerank 后尾部候选中补保留的窗口大小。
       # 用于保留同章节正文、GraphRAG quote、RAPTOR source chunk 等高价值证据。
-      reserve-candidate-top-k: 8
+      reserve-candidate-top-k: 30
       # 最终注入 Prompt 的证据片段数量。
       # 这一层已经是“融合/精排后的定稿证据数”，不是每个通道各自的 topK。
-      final-top-k: 5
+      final-top-k: 6
       # 向量召回最小相似度，低于这个阈值的候选不会继续进入融合。
       # 作用是防止“数据库总能返回 topK，但这些片段其实根本不够相关”。
       min-vector-similarity: 0.45

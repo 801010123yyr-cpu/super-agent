@@ -207,6 +207,8 @@ public class SearchReference {
 
     private String evidenceApplicabilityReason;
 
+    private String evidenceRole;
+
     private String contextIdentity;
 
     private String citationIdentity;

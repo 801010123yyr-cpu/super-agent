@@ -22,5 +22,21 @@ public interface DocumentStructureNodeService {
 
     Map<Long, SuperAgentDocumentStructureNode> nodeMap(Long documentId, Long parseTaskId);
 
+    default List<SuperAgentDocumentStructureNode> listChildren(Long documentId, Long parseTaskId, Long parentNodeId) {
+        return List.of();
+    }
+
+    default SuperAgentDocumentStructureNode findById(Long documentId, Long parseTaskId, Long nodeId) {
+        return null;
+    }
+
+    default SuperAgentDocumentStructureNode findPreviousSibling(Long documentId, Long parseTaskId, Long nodeId) {
+        return null;
+    }
+
+    default SuperAgentDocumentStructureNode findNextSibling(Long documentId, Long parseTaskId, Long nodeId) {
+        return null;
+    }
+
     void deleteByDocumentId(Long documentId);
 }

@@ -29,6 +29,12 @@ public class FinalEvidenceSelectionPolicy {
     public static final String RESERVE_STRUCTURE_ANCHOR = "STRUCTURE_ANCHOR";
     public static final String RESERVE_STRUCTURE_ANCHOR_BODY = "STRUCTURE_ANCHOR_BODY";
     public static final String RESERVE_STRUCTURE_DESCENDANT_BODY = "STRUCTURE_DESCENDANT_BODY";
+    public static final String RESERVE_STRUCTURE_NAVIGATION_CURRENT = "STRUCTURE_NAVIGATION_CURRENT";
+    public static final String RESERVE_STRUCTURE_NAVIGATION_PARENT = "STRUCTURE_NAVIGATION_PARENT";
+    public static final String RESERVE_STRUCTURE_NAVIGATION_SIBLING = "STRUCTURE_NAVIGATION_SIBLING";
+    public static final String RESERVE_STRUCTURE_NAVIGATION_CHILD = "STRUCTURE_NAVIGATION_CHILD";
+    public static final String RESERVE_ROUTE_CANDIDATE_SOURCE = "ROUTE_CANDIDATE_SOURCE";
+    public static final String RESERVE_MULTI_DOC_DIVERSITY = "MULTI_DOC_DIVERSITY_RESERVE";
     public static final String RESERVE_GRAPH_RAG_QUOTE = "GRAPH_RAG_QUOTE";
     public static final String RESERVE_RAPTOR_SOURCE_CHUNK = "RAPTOR_SOURCE_CHUNK";
     public static final String SELECTED_TOP_RANK = "SELECTED_TOP_RANK";
@@ -36,6 +42,12 @@ public class FinalEvidenceSelectionPolicy {
     public static final String SELECTED_STRUCTURE_ANCHOR = "SELECTED_STRUCTURE_ANCHOR";
     public static final String SELECTED_STRUCTURE_ANCHOR_BODY = "SELECTED_STRUCTURE_ANCHOR_BODY";
     public static final String SELECTED_STRUCTURE_DESCENDANT_BODY = "SELECTED_STRUCTURE_DESCENDANT_BODY";
+    public static final String SELECTED_STRUCTURE_NAVIGATION_CURRENT = "SELECTED_STRUCTURE_NAVIGATION_CURRENT";
+    public static final String SELECTED_STRUCTURE_NAVIGATION_PARENT = "SELECTED_STRUCTURE_NAVIGATION_PARENT";
+    public static final String SELECTED_STRUCTURE_NAVIGATION_SIBLING = "SELECTED_STRUCTURE_NAVIGATION_SIBLING";
+    public static final String SELECTED_STRUCTURE_NAVIGATION_CHILD = "SELECTED_STRUCTURE_NAVIGATION_CHILD";
+    public static final String SELECTED_ROUTE_CANDIDATE_RESERVE = "SELECTED_ROUTE_CANDIDATE_RESERVE";
+    public static final String SELECTED_MULTI_DOC_DIVERSITY_RESERVE = "SELECTED_MULTI_DOC_DIVERSITY_RESERVE";
     public static final String REPLACED_TITLE_ONLY_WITH_BODY = "REPLACED_TITLE_ONLY_WITH_BODY";
     public static final String SELECTED_GRAPH_RAG_QUOTE = "SELECTED_GRAPH_RAG_QUOTE";
     public static final String SELECTED_RAPTOR_SOURCE_CHUNK = "SELECTED_RAPTOR_SOURCE_CHUNK";
@@ -58,13 +70,14 @@ public class FinalEvidenceSelectionPolicy {
         List<Document> selected = new ArrayList<>(rerankedCandidates.stream()
             .limit(finalTopK)
             .toList());
-        selected.forEach(document -> markReserve(document, RESERVE_TOP_RANK));
+        selected.forEach(this::markInitialSelection);
         reserveStructureAnchorBodyCandidates(rerankedCandidates, selected);
         if (rerankedCandidates.size() <= finalTopK) {
             return selected;
         }
         reserveSameSectionBody(rerankedCandidates, selected);
         reserveStructureAnchor(rerankedCandidates, selected, plan);
+        reserveRouteCandidateSourceEvidence(rerankedCandidates, selected, plan);
         reserveRaptorSourceEvidence(rerankedCandidates, finalTopK, selected, plan);
         reserveGraphRagEvidence(rerankedCandidates, finalTopK, selected, plan);
         return selected;
@@ -159,6 +172,37 @@ public class FinalEvidenceSelectionPolicy {
         }
         if (graphRagReserve != null) {
             replaceGraphRagSummaryOnlyOrWeakestEvidence(selected, graphRagReserve, RESERVE_GRAPH_RAG_QUOTE);
+        }
+    }
+
+    private void reserveRouteCandidateSourceEvidence(List<Document> candidates,
+                                                     List<Document> selected,
+                                                     ConversationExecutionPlan plan) {
+        if (!isMultiDocumentAutoRetrieval(plan) || candidates == null || candidates.isEmpty()) {
+            return;
+        }
+        List<Document> reserves = candidates.stream()
+            .filter(this::isRouteCandidateSourceReserve)
+            .filter(EvidenceIdentityResolver::isCitationCapable)
+            .filter(candidate -> !containsSameCitationEvidence(selected, candidate))
+            .sorted(Comparator.comparingDouble(this::finalDocumentScore).reversed())
+            .toList();
+        if (reserves.isEmpty()) {
+            return;
+        }
+        for (Document reserve : reserves) {
+            if (containsSameCitationEvidence(selected, reserve)) {
+                continue;
+            }
+            int replaceIndex = firstReplaceableContextOnlyOrSummaryIndex(selected);
+            if (replaceIndex < 0) {
+                replaceIndex = weakestReplaceableEvidenceIndex(selected);
+            }
+            if (replaceIndex < 0) {
+                return;
+            }
+            markReserve(reserve, RESERVE_ROUTE_CANDIDATE_SOURCE);
+            selected.set(replaceIndex, reserve);
         }
     }
 
@@ -278,6 +322,22 @@ public class FinalEvidenceSelectionPolicy {
         return -1;
     }
 
+    private int firstReplaceableContextOnlyOrSummaryIndex(List<Document> selected) {
+        for (int index = 0; index < selected.size(); index++) {
+            Document document = selected.get(index);
+            if (isProtectedReserve(document)) {
+                continue;
+            }
+            if (EvidenceIdentityResolver.isContextOnly(document)
+                || isTitleEvidence(document)
+                || isRaptorSummaryOnly(document)
+                || isGraphRagCommunitySummaryOnly(document)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     private int weakestReplaceableEvidenceIndex(List<Document> selected) {
         int replaceIndex = -1;
         double weakestScore = Double.MAX_VALUE;
@@ -304,6 +364,9 @@ public class FinalEvidenceSelectionPolicy {
             || RESERVE_STRUCTURE_ANCHOR.equals(reserveType)
             || RESERVE_STRUCTURE_ANCHOR_BODY.equals(reserveType)
             || RESERVE_STRUCTURE_DESCENDANT_BODY.equals(reserveType)
+            || isStructureNavigationReserveType(reserveType)
+            || RESERVE_ROUTE_CANDIDATE_SOURCE.equals(reserveType)
+            || RESERVE_MULTI_DOC_DIVERSITY.equals(reserveType)
             || RESERVE_GRAPH_RAG_QUOTE.equals(reserveType)
             || RESERVE_RAPTOR_SOURCE_CHUNK.equals(reserveType);
     }
@@ -314,6 +377,21 @@ public class FinalEvidenceSelectionPolicy {
         }
         document.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, selectedReasonCode(reserveType));
         document.getMetadata().putIfAbsent(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, reserveType);
+    }
+
+    private void markInitialSelection(Document document) {
+        String reserveType = safeText(document == null || document.getMetadata() == null
+            ? null
+            : document.getMetadata().get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
+        if (isStructureNavigationReserveType(reserveType)) {
+            markReserve(document, reserveType, selectedReasonCode(reserveType));
+            return;
+        }
+        if (RESERVE_ROUTE_CANDIDATE_SOURCE.equals(reserveType) || RESERVE_MULTI_DOC_DIVERSITY.equals(reserveType)) {
+            markReserve(document, reserveType, selectedReasonCode(reserveType));
+            return;
+        }
+        markReserve(document, RESERVE_TOP_RANK);
     }
 
     private void markReserve(Document document, String reserveType, String reasonCode) {
@@ -330,10 +408,23 @@ public class FinalEvidenceSelectionPolicy {
             case RESERVE_STRUCTURE_ANCHOR -> SELECTED_STRUCTURE_ANCHOR;
             case RESERVE_STRUCTURE_ANCHOR_BODY -> SELECTED_STRUCTURE_ANCHOR_BODY;
             case RESERVE_STRUCTURE_DESCENDANT_BODY -> SELECTED_STRUCTURE_DESCENDANT_BODY;
+            case RESERVE_STRUCTURE_NAVIGATION_CURRENT -> SELECTED_STRUCTURE_NAVIGATION_CURRENT;
+            case RESERVE_STRUCTURE_NAVIGATION_PARENT -> SELECTED_STRUCTURE_NAVIGATION_PARENT;
+            case RESERVE_STRUCTURE_NAVIGATION_SIBLING -> SELECTED_STRUCTURE_NAVIGATION_SIBLING;
+            case RESERVE_STRUCTURE_NAVIGATION_CHILD -> SELECTED_STRUCTURE_NAVIGATION_CHILD;
+            case RESERVE_ROUTE_CANDIDATE_SOURCE -> SELECTED_ROUTE_CANDIDATE_RESERVE;
+            case RESERVE_MULTI_DOC_DIVERSITY -> SELECTED_MULTI_DOC_DIVERSITY_RESERVE;
             case RESERVE_GRAPH_RAG_QUOTE -> SELECTED_GRAPH_RAG_QUOTE;
             case RESERVE_RAPTOR_SOURCE_CHUNK -> SELECTED_RAPTOR_SOURCE_CHUNK;
             default -> SELECTED_TOP_RANK;
         };
+    }
+
+    private boolean isStructureNavigationReserveType(String reserveType) {
+        return RESERVE_STRUCTURE_NAVIGATION_CURRENT.equals(reserveType)
+            || RESERVE_STRUCTURE_NAVIGATION_PARENT.equals(reserveType)
+            || RESERVE_STRUCTURE_NAVIGATION_SIBLING.equals(reserveType)
+            || RESERVE_STRUCTURE_NAVIGATION_CHILD.equals(reserveType);
     }
 
     private boolean isTitleEvidence(Document document) {
@@ -383,6 +474,20 @@ public class FinalEvidenceSelectionPolicy {
             || "structure-anchor".equalsIgnoreCase(channel)
             || Boolean.TRUE.equals(bypass)
             || Boolean.parseBoolean(String.valueOf(bypass));
+    }
+
+    private boolean isRouteCandidateSourceReserve(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return false;
+        }
+        String reserveType = safeText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
+        return RESERVE_ROUTE_CANDIDATE_SOURCE.equals(reserveType);
+    }
+
+    private boolean isMultiDocumentAutoRetrieval(ConversationExecutionPlan plan) {
+        return plan != null
+            && plan.getRetrievalDocumentIds() != null
+            && plan.getRetrievalDocumentIds().stream().filter(Objects::nonNull).distinct().limit(2).count() > 1;
     }
 
     private boolean isTechnicalWrapperEvidence(Document document) {

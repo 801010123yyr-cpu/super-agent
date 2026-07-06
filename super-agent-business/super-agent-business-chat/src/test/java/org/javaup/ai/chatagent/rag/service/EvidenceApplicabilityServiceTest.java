@@ -1,5 +1,6 @@
 package org.javaup.ai.chatagent.rag.service;
 
+import org.javaup.ai.chatagent.rag.model.EvidenceRole;
 import org.javaup.ai.chatagent.rag.model.EvidenceApplicabilityResult;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
@@ -56,6 +57,50 @@ class EvidenceApplicabilityServiceTest {
 
         assertThat(result.isApplicable()).isTrue();
         assertThat(result.getStatus()).isEqualTo("APPLICABLE");
+    }
+
+    @Test
+    void doesNotInferEvidenceRoleFromSectionTitle() {
+        QueryUnderstandingResult understanding = QueryUnderstandingResult.builder()
+            .expectedEvidenceRoles(List.of(EvidenceRole.SYMPTOM))
+            .confidence(0.9D)
+            .source("test")
+            .build();
+
+        Document evidence = doc("cause", "父子块策略配置错误、索引任务未完成、finalTopK 被下调。", 0.9D, Map.of(
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "十四、常见问题处理 > 14.1 检索命中率突然下降 > 14.1.2 可能原因",
+            DocumentKnowledgeMetadataKeys.TITLE, "14.1.2 可能原因"
+        ));
+
+        EvidenceApplicabilityResult result = service.evaluate(understanding, evidence);
+
+        assertThat(result.isApplicable()).isTrue();
+        assertThat(result.getStatus()).isEqualTo(EvidenceApplicabilityResult.APPLICABLE_UNKNOWN);
+        assertThat(result.getReason()).contains("evidence role is GENERAL");
+        assertThat(evidence.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE, "GENERAL");
+    }
+
+    @Test
+    void keepsEvidenceWhenStructuredRoleMatches() {
+        QueryUnderstandingResult understanding = QueryUnderstandingResult.builder()
+            .expectedEvidenceRoles(List.of(EvidenceRole.SYMPTOM))
+            .confidence(0.9D)
+            .source("test")
+            .build();
+
+        Document evidence = doc("symptom", "日志中 finalTopK 下降明显，召回片段数量低于平时。", 0.9D, Map.of(
+            DocumentKnowledgeMetadataKeys.SECTION_PATH, "十四、常见问题处理 > 14.1 检索命中率突然下降 > 14.1.1 现象",
+            DocumentKnowledgeMetadataKeys.TITLE, "14.1.1 现象",
+            DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE, "SYMPTOM"
+        ));
+
+        EvidenceApplicabilityResult result = service.evaluate(understanding, evidence);
+
+        assertThat(result.isApplicable()).isTrue();
+        assertThat(result.getReason()).contains("evidence role matched");
+        assertThat(evidence.getMetadata())
+            .containsEntry(DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE, "SYMPTOM");
     }
 
     private static Document doc(String id, String text, double score, Map<String, Object> metadata) {

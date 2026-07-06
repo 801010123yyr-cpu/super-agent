@@ -2,11 +2,13 @@ package org.javaup.ai.chatagent.rag.service;
 
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRetrievalContext;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationResult;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
@@ -16,8 +18,10 @@ import org.javaup.ai.chatagent.model.RetrievalResultView;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.model.StructureAnchoredEvidenceRequest;
+import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
+import org.javaup.enums.ChatQueryMode;
 import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.javaup.enums.RetrievalChannelEnum;
 import org.junit.jupiter.api.Test;
@@ -32,6 +36,76 @@ import java.util.concurrent.Executors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RagRetrievalEngineTest {
+
+    @Test
+    void structureNavigationResultEntersFinalEvidenceWhenChannelsAreEmpty() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(false);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(10);
+        properties.setFinalTopK(4);
+
+        StructureNavigationResult structureResult = StructureNavigationResult.builder()
+            .documentId(1L)
+            .anchorNodeId(131L)
+            .current(structureNode(131L, 1L, 11L, 131, "13.1 观察时长", 130L, null, 132L,
+                "十三、上线观察与值班规则 > 13.1 观察时长", "十三、上线观察与值班规则/13.1 观察时长"))
+            .parent(structureNode(130L, 1L, 11L, 130, "十三、上线观察与值班规则", null, null, null,
+                "十三、上线观察与值班规则", "十三、上线观察与值班规则"))
+            .nextSibling(structureNode(132L, 1L, 11L, 132, "13.2 值班安排", 130L, 131L, null,
+                "十三、上线观察与值班规则 > 13.2 值班安排", "十三、上线观察与值班规则/13.2 值班安排"))
+            .deterministic(true)
+            .build();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of())),
+                properties,
+                null,
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.STRUCTURE)
+                .retrievalQuestion("观察时长属于哪个章节，下一节是什么？")
+                .retrievalSubQuestions(List.of("观察时长属于哪个章节，下一节是什么？"))
+                .selectedDocumentId(1L)
+                .selectedTaskId(11L)
+                .retrievalDocumentIds(List.of(1L))
+                .retrievalTaskIds(List.of(11L))
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.STRUCTURE_NAVIGATION)
+                    .confidence(0.91D)
+                    .source("test")
+                    .build())
+                .navigationDecision(DocumentNavigationDecision.builder()
+                    .structureNavigationResult(structureResult)
+                    .retrievalIntent(RetrievalIntent.STRUCTURE)
+                    .build())
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents)
+                .extracting(Document::getId)
+                .contains("structure-navigation:CURRENT:131", "structure-navigation:PARENT:130", "structure-navigation:SIBLING:132");
+            Document next = documents.stream()
+                .filter(document -> "structure-navigation:SIBLING:132".equals(document.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(next.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.CHANNEL, "structure-navigation")
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "SELECTED_STRUCTURE_NAVIGATION_SIBLING");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
 
     @Test
     void weightedHybridUsesMetadataBoostAndRecordsChannelScores() {
@@ -1304,6 +1378,72 @@ class RagRetrievalEngineTest {
         }
     }
 
+    @Test
+    void autoDocumentRouteCandidateSourceEvidenceBypassesCandidateAndRerankWindows() {
+        ChatRagProperties properties = new ChatRagProperties();
+        properties.setRerankEnabled(true);
+        properties.setMinVectorSimilarity(0D);
+        properties.setKeywordRelativeScoreFloor(0D);
+        properties.setCandidateTopK(2);
+        properties.setRerankCandidateTopK(2);
+        properties.setReserveCandidateTopK(2);
+        properties.setFinalTopK(2);
+        properties.getHybrid().setOriginalScoreWeight(1D);
+        properties.getHybrid().setMetadataBoostWeight(0D);
+
+        Document docAFirst = sourceChunk("doc-a-1", 10L, 1001L, "发布流程背景证据。", 0.99D);
+        Document docASecond = sourceChunk("doc-a-2", 10L, 1002L, "发布验证背景证据。", 0.98D);
+        Document docBTarget = sourceChunk("doc-b-target", 20L, 2001L, "NovaRAG 检索服务降级时，应先启用缓存，再关闭重排序，缩小检索范围，最后人工接管。", 0.50D);
+
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        try {
+            RagRetrievalEngine engine = new RagRetrievalEngine(
+                List.of(new StaticRetrievalChannel(RetrievalChannelEnum.VECTOR.getName(), List.of(docAFirst, docASecond, docBTarget))),
+                properties,
+                new RagRerankService(null, properties) {
+                    @Override
+                    public List<Document> rerank(String query, List<Document> candidates) {
+                        assertThat(candidates).extracting(Document::getId)
+                            .containsExactly("doc-a-1", "doc-a-2", "doc-b-target");
+                        docAFirst.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 1);
+                        docASecond.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 2);
+                        docBTarget.getMetadata().put(DocumentKnowledgeMetadataKeys.RERANK_RANK, 3);
+                        return List.of(docAFirst, docASecond, docBTarget);
+                    }
+                },
+                new PassThroughDocumentKnowledgeService(),
+                executorService
+            );
+
+            ConversationExecutionPlan plan = ConversationExecutionPlan.builder()
+                .mode(ExecutionMode.RETRIEVAL)
+                .chatMode(ChatQueryMode.AUTO_DOCUMENT)
+                .knowledgeBaseSelectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(3001L))
+                .retrievalDocumentIds(List.of(10L, 20L))
+                .retrievalTaskIds(List.of(110L, 220L))
+                .retrievalQuestion("NovaRAG 检索服务降级时，按什么顺序处理？")
+                .retrievalSubQuestions(List.of("NovaRAG 检索服务降级时，按什么顺序处理？"))
+                .build();
+
+            RagRetrievalContext context = engine.retrieve(plan, null);
+
+            assertThat(context.getSubQuestionEvidenceList().get(0).getRerankedCandidateCount()).isEqualTo(3);
+            List<Document> documents = context.getSubQuestionEvidenceList().get(0).getDocuments();
+            assertThat(documents).extracting(Document::getId).contains("doc-b-target");
+            Document selectedTarget = documents.stream()
+                .filter(document -> "doc-b-target".equals(document.getId()))
+                .findFirst()
+                .orElseThrow();
+            assertThat(selectedTarget.getMetadata())
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "ROUTE_CANDIDATE_SOURCE")
+                .containsEntry(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON, "SELECTED_ROUTE_CANDIDATE_RESERVE");
+        }
+        finally {
+            executorService.shutdownNow();
+        }
+    }
+
     private static Document document(String id, String text, double score) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, score);
@@ -1312,6 +1452,40 @@ class RagRetrievalEngineTest {
             .text(text)
             .metadata(metadata)
             .build();
+    }
+
+    private static Document sourceChunk(String id, Long documentId, Long chunkId, String text, double score) {
+        Document document = document(id, text, score);
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, RetrievalChannelEnum.VECTOR.getName());
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, documentId);
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_ID, chunkId);
+        document.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, "TEXT");
+        return document;
+    }
+
+    private static SuperAgentDocumentStructureNode structureNode(Long id,
+                                                                 Long documentId,
+                                                                 Long parseTaskId,
+                                                                 Integer nodeNo,
+                                                                 String title,
+                                                                 Long parentNodeId,
+                                                                 Long prevSiblingNodeId,
+                                                                 Long nextSiblingNodeId,
+                                                                 String sectionPath,
+                                                                 String canonicalPath) {
+        SuperAgentDocumentStructureNode node = new SuperAgentDocumentStructureNode();
+        node.setId(id);
+        node.setDocumentId(documentId);
+        node.setParseTaskId(parseTaskId);
+        node.setNodeNo(nodeNo);
+        node.setTitle(title);
+        node.setParentNodeId(parentNodeId);
+        node.setPrevSiblingNodeId(prevSiblingNodeId);
+        node.setNextSiblingNodeId(nextSiblingNodeId);
+        node.setSectionPath(sectionPath);
+        node.setCanonicalPath(canonicalPath);
+        return node;
     }
 
     private static String reasonByDocumentId(List<RetrievalResultView> results, Long documentId) {

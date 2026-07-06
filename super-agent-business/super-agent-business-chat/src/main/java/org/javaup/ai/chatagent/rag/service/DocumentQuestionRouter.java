@@ -12,6 +12,8 @@ import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalQuestionPlan;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationOperation;
 import org.javaup.ai.manage.model.graph.GraphSection;
 import org.javaup.ai.manage.service.DocumentNavigationIndexService;
 import org.javaup.ai.manage.service.DocumentStructureGraphService;
@@ -92,6 +94,21 @@ public class DocumentQuestionRouter {
         RetrievalIntent retrievalIntent = detectRetrievalIntent(questionIntent, queryUnderstanding);
         GraphOnlyIntentDecision graphOnlyIntent = questionIntent.graphOnlyIntent();
         boolean analyticQuestion = questionIntent.analytic();
+
+        DocumentNavigationAction structureNavigationAction = resolveStructureNavigationAction(queryUnderstanding);
+        if (structureNavigationAction != null && subQuestions.size() <= 1) {
+            GraphSection section = resolveSection(documentId, originalQuestion, rewrittenQuestion);
+            return buildDecision(
+                ExecutionMode.RETRIEVAL,
+                structureNavigationAction,
+                section,
+                null,
+                retrievalPlan,
+                queryUnderstanding,
+                RetrievalIntent.STRUCTURE,
+                "高置信结构导航走结构树确定性查询，结构结果作为检索上下文和观测信号。"
+            );
+        }
         
         boolean singleQuestionGraphOnlyMatched = graphOnlyIntent.matched() && subQuestions.size() <= 1;
         if (singleQuestionGraphOnlyMatched) {
@@ -217,6 +234,36 @@ public class DocumentQuestionRouter {
             return RetrievalIntent.STRUCTURE;
         }
         return primaryRetrievalIntent(queryUnderstanding);
+    }
+
+    private DocumentNavigationAction resolveStructureNavigationAction(QueryUnderstandingResult queryUnderstanding) {
+        if (queryUnderstanding == null || queryUnderstanding.getQueryType() != QueryType.STRUCTURE_NAVIGATION) {
+            return null;
+        }
+        if (confidence(queryUnderstanding) < 0.65D) {
+            return null;
+        }
+        StructureNavigationIntent intent = queryUnderstanding.getStructureNavigationIntent();
+        if (intent == null || intent.getOperations() == null || intent.getOperations().isEmpty()) {
+            return null;
+        }
+        List<StructureNavigationOperation> operations = intent.getOperations();
+        if (operations.contains(StructureNavigationOperation.SECTION_WITH_CHILDREN)
+            || operations.contains(StructureNavigationOperation.DIRECT_CHILDREN)) {
+            return DocumentNavigationAction.CHILD_SECTION_DESCEND;
+        }
+        if (operations.contains(StructureNavigationOperation.SECTION_WITH_SIBLINGS)
+            || operations.contains(StructureNavigationOperation.PREVIOUS_SIBLING)
+            || operations.contains(StructureNavigationOperation.NEXT_SIBLING)) {
+            return DocumentNavigationAction.SECTION_ADJACENCY_LOOKUP;
+        }
+        if (operations.contains(StructureNavigationOperation.PARENT_SECTION)) {
+            return DocumentNavigationAction.ANCESTOR_SECTION_RETURN;
+        }
+        if (operations.contains(StructureNavigationOperation.CURRENT_SECTION)) {
+            return DocumentNavigationAction.FRESH_TOPIC;
+        }
+        return null;
     }
 
     private RetrievalIntent primaryRetrievalIntent(QueryUnderstandingResult queryUnderstanding) {
@@ -763,6 +810,10 @@ public class DocumentQuestionRouter {
             }
             if (queryUnderstanding.getSectionAnchors() != null) {
                 queryUnderstanding.getSectionAnchors().forEach(item -> addHint(hints, item));
+            }
+            StructureNavigationIntent structureIntent = queryUnderstanding.getStructureNavigationIntent();
+            if (structureIntent != null && structureIntent.getSectionAnchors() != null) {
+                structureIntent.getSectionAnchors().forEach(item -> addHint(hints, item));
             }
         }
         if (section != null) {
