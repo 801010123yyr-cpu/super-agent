@@ -132,6 +132,9 @@ public class RagChatExecutor implements ConversationExecutor {
         item.put("pageNo", reference.getPageNo());
         item.put("pageRange", StrUtil.blankToDefault(reference.getPageRange(), ""));
         item.put("bboxJson", StrUtil.blankToDefault(reference.getBboxJson(), ""));
+        item.put("finalSelectionReason", StrUtil.blankToDefault(reference.getFinalSelectionReason(), ""));
+        item.put("evidenceApplicabilityStatus", StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), ""));
+        item.put("evidenceApplicabilityReason", StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), ""));
         item.put("tableId", reference.getTableId());
         item.put("tableNo", reference.getTableNo());
         item.put("tableTitle", StrUtil.blankToDefault(reference.getTableTitle(), ""));

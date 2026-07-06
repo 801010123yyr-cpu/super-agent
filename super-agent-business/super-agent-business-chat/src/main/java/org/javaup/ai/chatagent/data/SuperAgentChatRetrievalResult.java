@@ -97,6 +97,9 @@ public class SuperAgentChatRetrievalResult extends BaseTableData {
     @TableField("chunk_id")
     private Long chunkId;
 
+    @TableField("chunk_type")
+    private String chunkType;
+
     @TableField("chunk_no")
     private Integer chunkNo;
 
@@ -114,4 +117,19 @@ public class SuperAgentChatRetrievalResult extends BaseTableData {
 
     @TableField("chunk_char_count")
     private Integer chunkCharCount;
+
+    @TableField("context_identity")
+    private String contextIdentity;
+
+    @TableField("citation_identity")
+    private String citationIdentity;
+
+    @TableField("citation_evidence_type")
+    private String citationEvidenceType;
+
+    @TableField("context_only")
+    private Integer contextOnly;
+
+    @TableField("source_evidence_resolved")
+    private Integer sourceEvidenceResolved;
 }

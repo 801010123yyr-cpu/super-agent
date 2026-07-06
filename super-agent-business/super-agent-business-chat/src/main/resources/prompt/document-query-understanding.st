@@ -8,7 +8,10 @@
   "queryType": "DOCUMENT_QA",
   "channels": ["GENERAL"],
   "entities": [],
+  "targetEntities": [],
+  "excludedEntities": [],
   "sectionAnchors": [],
+  "expectedEvidenceRoles": [],
   "tableOps": [],
   "negativeBoundary": false,
   "confidence": 0.82,
@@ -32,6 +35,18 @@ channels 只能从以下值中选择：
 - GRAPH_RAG：GraphRAG 候选。
 - RAPTOR：RAPTOR 摘要候选。
 
+expectedEvidenceRoles 只能从以下值中选择：
+- SYMPTOM：用户问现象、表现、症状。
+- CAUSE：用户问原因、成因、为什么。
+- HANDLING_STEP：用户问处理步骤、处置流程、怎么处理。
+- CHECK_ORDER：用户问检查顺序、排查顺序。
+- THRESHOLD：用户问阈值、上限、下限。
+- RESPONSIBILITY：用户问负责人、责任、职责。
+- CONFIGURATION：用户问配置项、参数、策略项。
+- RELATION：用户问关系、依赖、影响。
+- SUMMARY：用户问总结、概述、摘要。
+- GENERAL：无法判断或普通问答。无法判断时也可以留空。
+
 重要规则：
 1. channels 是候选建议，不是硬路由。普通文档问答默认包含 GENERAL。
 2. 不要因为出现“关系、总结、表格、步骤、检查顺序”等词就强制单通道。
@@ -42,7 +57,8 @@ channels 只能从以下值中选择：
 7. GraphRAG 和 RAPTOR 只有在问题确实需要关系证据、跨文档关系、全局摘要时作为候选通道加入。
 8. 表格问题只有在用户明确问表格数据、聚合、筛选、分组、排序时加入 TABLE。
 9. confidence 使用 0 到 1 的小数。不确定时低于 0.72。
-10. 只返回 JSON，不要 Markdown，不要解释文本。
+10. expectedEvidenceRoles 是答案证据角色，不是检索硬路由；只输出上面的枚举。
+11. 只返回 JSON，不要 Markdown，不要解释文本。
 
 原始问题：
 <originalQuestion>

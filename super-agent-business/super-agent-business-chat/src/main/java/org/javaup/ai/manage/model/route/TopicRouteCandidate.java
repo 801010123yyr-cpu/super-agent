@@ -16,11 +16,11 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class TopicRouteCandidate {
 
-    private String topicCode;
+    private Long topicId;
 
     private String topicName;
 
-    private String scopeCode;
+    private Long scopeId;
 
     private BigDecimal score;
 

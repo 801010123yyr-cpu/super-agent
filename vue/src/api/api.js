@@ -315,6 +315,13 @@ export const chatApi = {
     })
   },
 
+  listKnowledgeBaseOptions() {
+    return requestApiEnvelope('/api/chat/knowledge-base/options', {
+      method: 'POST',
+      body: {}
+    })
+  },
+
   listSessions(query = {}) {
     return chatApi.listSessionsPage({
       keyword: query.keyword || '',
@@ -482,21 +489,53 @@ export const adminAuthApi = {
 }
 
 export const manageApi = {
-  uploadDocument({ file, documentName, operatorId, knowledgeScopeCode, knowledgeScopeName, businessCategory, documentTags }) {
+  uploadDocument({ file, documentName, operatorId, knowledgeBaseId }) {
     const formData = new FormData()
     formData.append('file', file)
 
     const meta = stringifyManageValue({
       documentName: documentName || '',
       operatorId: operatorId ?? '',
-      knowledgeScopeCode: knowledgeScopeCode || '',
-      knowledgeScopeName: knowledgeScopeName || '',
-      businessCategory: businessCategory || '',
-      documentTags: documentTags || ''
+      knowledgeBaseId: knowledgeBaseId || ''
     })
     formData.append('meta', new Blob([JSON.stringify(meta)], { type: 'application/json' }))
 
     return requestMultipartApiEnvelope('/manage/document/upload', formData)
+  },
+
+  saveKnowledgeBase(payload) {
+    return requestApiEnvelope('/manage/knowledge/base/save', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
+  },
+
+  deleteKnowledgeBase(payload) {
+    return requestApiEnvelope('/manage/knowledge/base/delete', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
+  },
+
+  listKnowledgeBases() {
+    return requestApiEnvelope('/manage/knowledge/base/list', {
+      method: 'POST',
+      body: {}
+    })
+  },
+
+  queryKnowledgeBaseDetail(payload) {
+    return requestApiEnvelope('/manage/knowledge/base/detail', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
+  },
+
+  updateKnowledgeBaseConfig(payload) {
+    return requestApiEnvelope('/manage/knowledge/base/config/update', {
+      method: 'POST',
+      body: stringifyManageValue(payload)
+    })
   },
 
   queryDocumentPage(payload) {
@@ -625,10 +664,10 @@ export const manageApi = {
     })
   },
 
-  listKnowledgeScopes() {
+  listKnowledgeScopes(payload = {}) {
     return requestApiEnvelope('/manage/knowledge/scope/list', {
       method: 'POST',
-      body: {}
+      body: stringifyManageValue(payload)
     })
   },
 

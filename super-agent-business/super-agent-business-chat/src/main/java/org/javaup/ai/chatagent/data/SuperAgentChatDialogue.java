@@ -40,4 +40,13 @@ public class SuperAgentChatDialogue extends BaseTableData {
 
     @TableField("selected_document_name")
     private String selectedDocumentName;
+
+    @TableField("knowledge_base_selection_mode")
+    private String knowledgeBaseSelectionMode;
+
+    @TableField("selected_knowledge_base_ids_json")
+    private String selectedKnowledgeBaseIdsJson;
+
+    @TableField("selected_knowledge_base_names_json")
+    private String selectedKnowledgeBaseNamesJson;
 }

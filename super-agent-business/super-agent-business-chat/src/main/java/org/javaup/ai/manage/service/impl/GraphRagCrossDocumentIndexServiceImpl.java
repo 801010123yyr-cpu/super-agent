@@ -17,6 +17,8 @@ import org.javaup.ai.manage.data.SuperAgentKgEvidence;
 import org.javaup.ai.manage.data.SuperAgentKgRelation;
 import org.javaup.ai.manage.data.SuperAgentKgRelationGroup;
 import org.javaup.ai.manage.data.SuperAgentKgRelationGroupMember;
+import org.javaup.ai.manage.data.SuperAgentKnowledgeTopicNode;
+import org.javaup.ai.manage.data.SuperAgentTopicDocumentRelation;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityGroupMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgCanonicalEntityMemberMapper;
@@ -27,10 +29,13 @@ import org.javaup.ai.manage.mapper.SuperAgentKgEvidenceMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationGroupMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationGroupMemberMapper;
 import org.javaup.ai.manage.mapper.SuperAgentKgRelationMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKnowledgeTopicNodeMapper;
+import org.javaup.ai.manage.mapper.SuperAgentTopicDocumentRelationMapper;
 import org.javaup.ai.manage.model.graph.GraphRagCrossDocumentIndexBuildResult;
 import org.javaup.ai.manage.service.GraphRagCrossDocumentIndexService;
 import org.javaup.ai.manage.support.GraphRagCrossDocumentIndex;
 import org.javaup.ai.manage.support.GraphRagCrossDocumentIndexSupport;
+import org.javaup.ai.manage.support.RaptorScopeSupport;
 import org.javaup.enums.BusinessStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,7 +59,6 @@ import java.util.stream.Collectors;
 @Slf4j
 public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocumentIndexService {
 
-    private static final String SCOPE_PREFIX_KNOWLEDGE = "knowledge:";
     private static final String DERIVED_INDEX_SOURCE_TYPE = "java.cross_document_index.v1";
 
     private final SuperAgentDocumentMapper documentMapper;
@@ -67,6 +71,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
     private final SuperAgentKgRelationGroupMemberMapper relationGroupMemberMapper;
     private final SuperAgentKgCrossDocumentCommunityMapper communityMapper;
     private final SuperAgentKgCrossDocumentCommunityMemberMapper communityMemberMapper;
+    private final SuperAgentKnowledgeTopicNodeMapper topicNodeMapper;
+    private final SuperAgentTopicDocumentRelationMapper topicDocumentRelationMapper;
     private final GraphRagCrossDocumentIndexSupport indexSupport;
     private final UidGenerator uidGenerator;
     private final ObjectMapper objectMapper;
@@ -81,6 +87,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
                                                  SuperAgentKgRelationGroupMemberMapper relationGroupMemberMapper,
                                                  SuperAgentKgCrossDocumentCommunityMapper communityMapper,
                                                  SuperAgentKgCrossDocumentCommunityMemberMapper communityMemberMapper,
+                                                 SuperAgentKnowledgeTopicNodeMapper topicNodeMapper,
+                                                 SuperAgentTopicDocumentRelationMapper topicDocumentRelationMapper,
                                                  GraphRagCrossDocumentIndexSupport indexSupport,
                                                  UidGenerator uidGenerator,
                                                  ObjectMapper objectMapper) {
@@ -94,6 +102,8 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         this.relationGroupMemberMapper = relationGroupMemberMapper;
         this.communityMapper = communityMapper;
         this.communityMemberMapper = communityMemberMapper;
+        this.topicNodeMapper = topicNodeMapper;
+        this.topicDocumentRelationMapper = topicDocumentRelationMapper;
         this.indexSupport = indexSupport;
         this.uidGenerator = uidGenerator;
         this.objectMapper = objectMapper;
@@ -145,9 +155,6 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
         if (CollUtil.isNotEmpty(taskIds)) {
             Set<Long> taskIdSet = new LinkedHashSet<>(taskIds);
             members = members.stream().filter(member -> taskIdSet.contains(member.getTaskId())).toList();
-        }
-        if (members.isEmpty() && !GLOBAL_SCOPE_KEY.equals(scopeKey)) {
-            return loadIndexByScope(GLOBAL_SCOPE_KEY, documentIds, taskIds);
         }
         if (members.isEmpty()) {
             return GraphRagCrossDocumentIndex.empty();
@@ -284,13 +291,35 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
 
         Map<Long, String> scopeByDocumentId = new LinkedHashMap<>();
         for (SuperAgentDocument document : documentMap.values()) {
-            String scopeCode = StrUtil.blankToDefault(document.getKnowledgeScopeCode(), "").trim();
-            if (StrUtil.isNotBlank(scopeCode)) {
-                scopeByDocumentId.put(document.getId(), SCOPE_PREFIX_KNOWLEDGE + scopeCode);
+            if (document.getKnowledgeBaseId() != null) {
+                scopeByDocumentId.put(document.getId(), RaptorScopeSupport.knowledgeBaseScopeKey(document.getKnowledgeBaseId()));
             }
         }
+        appendGroupedScopes(scopes, entities, relations, evidences, scopeByDocumentId);
+
+        Map<Long, List<String>> relationScopeKeysByDocumentId = scopeByDocumentId(documentMap.keySet());
+        LinkedHashSet<String> relationScopeKeys = relationScopeKeysByDocumentId.values().stream()
+            .flatMap(List::stream)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        for (String scopeKey : relationScopeKeys) {
+            Map<Long, String> scopedDocumentMap = new LinkedHashMap<>();
+            relationScopeKeysByDocumentId.forEach((documentId, scopeKeys) -> {
+                if (scopeKeys.contains(scopeKey)) {
+                    scopedDocumentMap.put(documentId, scopeKey);
+                }
+            });
+            appendGroupedScopes(scopes, entities, relations, evidences, scopedDocumentMap);
+        }
+        return scopes;
+    }
+
+    private void appendGroupedScopes(LinkedHashMap<String, ScopeDataset> scopes,
+                                     List<SuperAgentKgEntity> entities,
+                                     List<SuperAgentKgRelation> relations,
+                                     List<SuperAgentKgEvidence> evidences,
+                                     Map<Long, String> scopeByDocumentId) {
         if (scopeByDocumentId.isEmpty()) {
-            return scopes;
+            return;
         }
         Map<String, List<SuperAgentKgEntity>> entitiesByScope = entities.stream()
             .filter(entity -> scopeByDocumentId.containsKey(entity.getDocumentId()))
@@ -308,20 +337,57 @@ public class GraphRagCrossDocumentIndexServiceImpl implements GraphRagCrossDocum
                 .toList();
             scopes.put(entry.getKey(), ScopeDataset.of(entry.getValue(), scopedRelations, scopedEvidences));
         }
-        return scopes;
     }
 
     private String resolveLoadScopeKey(List<Long> documentIds) {
         Map<Long, SuperAgentDocument> documents = listDocuments(new LinkedHashSet<>(documentIds));
-        LinkedHashSet<String> scopeCodes = documents.values().stream()
-            .map(SuperAgentDocument::getKnowledgeScopeCode)
-            .filter(StrUtil::isNotBlank)
-            .map(String::trim)
+        LinkedHashSet<Long> knowledgeBaseIds = documents.values().stream()
+            .map(SuperAgentDocument::getKnowledgeBaseId)
+            .filter(Objects::nonNull)
             .collect(Collectors.toCollection(LinkedHashSet::new));
-        if (scopeCodes.size() == 1) {
-            return SCOPE_PREFIX_KNOWLEDGE + scopeCodes.iterator().next();
+        Map<Long, List<String>> scopeKeysByDocumentId = scopeByDocumentId(new LinkedHashSet<>(documentIds));
+        LinkedHashSet<String> sharedScopeKeys = scopeKeysByDocumentId.values().stream()
+            .flatMap(List::stream)
+            .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (knowledgeBaseIds.size() == 1 && sharedScopeKeys.size() == 1) {
+            return sharedScopeKeys.iterator().next();
+        }
+        if (knowledgeBaseIds.size() == 1) {
+            return RaptorScopeSupport.knowledgeBaseScopeKey(knowledgeBaseIds.iterator().next());
         }
         return GLOBAL_SCOPE_KEY;
+    }
+
+    private Map<Long, List<String>> scopeByDocumentId(Collection<Long> documentIds) {
+        if (CollUtil.isEmpty(documentIds)) {
+            return Map.of();
+        }
+        List<SuperAgentTopicDocumentRelation> relations = topicDocumentRelationMapper.selectList(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
+            .in(SuperAgentTopicDocumentRelation::getDocumentId, documentIds)
+            .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()));
+        if (relations.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, SuperAgentKnowledgeTopicNode> topicById = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+                .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .filter(topic -> topic.getId() != null)
+            .collect(Collectors.toMap(
+                SuperAgentKnowledgeTopicNode::getId,
+                topic -> topic,
+                (left, right) -> left,
+                LinkedHashMap::new));
+        Map<Long, LinkedHashSet<String>> grouped = new LinkedHashMap<>();
+        for (SuperAgentTopicDocumentRelation relation : relations) {
+            SuperAgentKnowledgeTopicNode topic = topicById.get(relation.getTopicId());
+            if (topic == null || topic.getKnowledgeBaseId() == null || topic.getScopeId() == null) {
+                continue;
+            }
+            grouped.computeIfAbsent(relation.getDocumentId(), ignored -> new LinkedHashSet<>())
+                .add(RaptorScopeSupport.knowledgeScopeKey(topic.getKnowledgeBaseId(), topic.getScopeId()));
+        }
+        return grouped.entrySet().stream()
+            .collect(Collectors.toMap(Map.Entry::getKey, entry -> List.copyOf(entry.getValue()), (left, right) -> left, LinkedHashMap::new));
     }
 
     private List<SuperAgentKgEntity> listEntities(List<Long> documentIds, List<Long> taskIds) {

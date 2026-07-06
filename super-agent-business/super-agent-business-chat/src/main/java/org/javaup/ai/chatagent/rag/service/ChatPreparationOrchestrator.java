@@ -9,22 +9,30 @@ import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.AnswerHistoryContext;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
+import org.javaup.ai.chatagent.rag.model.EvidenceAnchor;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
 import org.javaup.ai.chatagent.rag.model.HistoryPlanningContext;
 import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationIntent;
+import org.javaup.ai.chatagent.rag.model.StructureNavigationResult;
+import org.javaup.ai.manage.data.SuperAgentDocumentStructureNode;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.chatagent.service.TaskInfo;
 import org.javaup.ai.chatagent.support.TimeSensitiveQueryHelper;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.ai.manage.model.route.DocumentRouteCandidate;
+import org.javaup.ai.manage.model.route.KnowledgeRouteContext;
 import org.javaup.ai.manage.model.route.KnowledgeRouteDecision;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.KnowledgeRouteService;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -56,6 +64,8 @@ public class ChatPreparationOrchestrator {
     private final DocumentQuestionRouter documentQuestionRouter;
     private final KnowledgeRouteService knowledgeRouteService;
     private final DocumentKnowledgeService documentKnowledgeService;
+    private final ConversationEvidenceAnchorService conversationEvidenceAnchorService;
+    private final StructureNavigationResolver structureNavigationResolver;
 
     public ChatPreparationOrchestrator(ChatRagProperties properties,
                                        ConversationMemoryService conversationMemoryService,
@@ -64,6 +74,32 @@ public class ChatPreparationOrchestrator {
                                        DocumentQuestionRouter documentQuestionRouter,
                                        KnowledgeRouteService knowledgeRouteService,
                                        DocumentKnowledgeService documentKnowledgeService) {
+        this(properties, conversationMemoryService, answerHistoryContextAssembler, chatQueryRewriteService,
+            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, null, null);
+    }
+
+    public ChatPreparationOrchestrator(ChatRagProperties properties,
+                                       ConversationMemoryService conversationMemoryService,
+                                       AnswerHistoryContextAssembler answerHistoryContextAssembler,
+                                       ChatQueryRewriteService chatQueryRewriteService,
+                                       DocumentQuestionRouter documentQuestionRouter,
+                                       KnowledgeRouteService knowledgeRouteService,
+                                       DocumentKnowledgeService documentKnowledgeService,
+                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService) {
+        this(properties, conversationMemoryService, answerHistoryContextAssembler, chatQueryRewriteService,
+            documentQuestionRouter, knowledgeRouteService, documentKnowledgeService, conversationEvidenceAnchorService, null);
+    }
+
+    @Autowired
+    public ChatPreparationOrchestrator(ChatRagProperties properties,
+                                       ConversationMemoryService conversationMemoryService,
+                                       AnswerHistoryContextAssembler answerHistoryContextAssembler,
+                                       ChatQueryRewriteService chatQueryRewriteService,
+                                       DocumentQuestionRouter documentQuestionRouter,
+                                       KnowledgeRouteService knowledgeRouteService,
+                                       DocumentKnowledgeService documentKnowledgeService,
+                                       ConversationEvidenceAnchorService conversationEvidenceAnchorService,
+                                       StructureNavigationResolver structureNavigationResolver) {
         this.properties = properties;
         this.conversationMemoryService = conversationMemoryService;
         this.answerHistoryContextAssembler = answerHistoryContextAssembler;
@@ -71,6 +107,8 @@ public class ChatPreparationOrchestrator {
         this.documentQuestionRouter = documentQuestionRouter;
         this.knowledgeRouteService = knowledgeRouteService;
         this.documentKnowledgeService = documentKnowledgeService;
+        this.conversationEvidenceAnchorService = conversationEvidenceAnchorService;
+        this.structureNavigationResolver = structureNavigationResolver;
     }
 
     public ConversationExecutionPlan prepare(TaskInfo taskInfo) {
@@ -80,6 +118,7 @@ public class ChatPreparationOrchestrator {
         Long selectedDocumentId = taskInfo.selectedDocumentId();
         String selectedDocumentName = taskInfo.selectedDocumentName();
         Long selectedTaskId = taskInfo.selectedTaskId();
+        KnowledgeBaseSelectionSnapshot knowledgeBaseSelection = taskInfo.knowledgeBaseSelectionSnapshot();
         LocalDate currentDate = taskInfo.currentDate();
         String currentDateText = taskInfo.currentDateText();
         ConversationTraceRecorder traceRecorder = taskInfo.traceRecorder();
@@ -111,10 +150,12 @@ public class ChatPreparationOrchestrator {
 
         HistoryPlanningContext historyPlanningContext = buildHistoryPlanningContext(memoryContext);
         String historySummary = buildPlanningHistory(memoryContext, historyPlanningContext);
+        List<EvidenceAnchor> recentEvidenceAnchors = loadRecentEvidenceAnchors(conversationId);
         AnswerHistoryContext answerHistoryContext = buildAnswerHistoryContext(
             question,
             memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
-            null
+            null,
+            List.of()
         );
 
         boolean requiresCurrentDateAnchoring = TimeSensitiveQueryHelper.requiresCurrentDateAnchoring(question);
@@ -125,7 +166,7 @@ public class ChatPreparationOrchestrator {
 
         if (chatMode == ChatQueryMode.OPEN_CHAT) {
             ConversationExecutionPlan plan = basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
-                requiresCurrentDateAnchoring, requiresFreshSearch)
+                requiresCurrentDateAnchoring, requiresFreshSearch, knowledgeBaseSelection)
                 .mode(ExecutionMode.REACT_AGENT)
                 .build();
             if (traceRecorder != null) {
@@ -138,6 +179,12 @@ public class ChatPreparationOrchestrator {
                 ));
             }
             return plan;
+        }
+        if (selectionMode(knowledgeBaseSelection) == KnowledgeBaseSelectionMode.NONE) {
+            return basePlan(question, ChatQueryMode.OPEN_CHAT, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
+                requiresCurrentDateAnchoring, requiresFreshSearch, knowledgeBaseSelection)
+                .mode(ExecutionMode.REACT_AGENT)
+                .build();
         }
 
         if (!properties.isEnabled()) {
@@ -185,9 +232,10 @@ public class ChatPreparationOrchestrator {
         List<Long> routedDocumentIds = routedDocumentId == null ? List.of() : List.of(routedDocumentId);
         List<Long> routedTaskIds = routedTaskId == null ? List.of() : List.of(routedTaskId);
         if (chatMode == ChatQueryMode.AUTO_DOCUMENT) {
-            KnowledgeRouteDecision routeDecision = knowledgeRouteService.route(question, rewriteQuestion);
-            knowledgeRouteService.recordAutoRoute(conversationId, taskInfo.exchangeId(), question, rewriteQuestion, routeDecision);
-            List<DocumentRouteCandidate> candidateDocuments = selectAutoCandidates(routeDecision, question, rewriteQuestion);
+            KnowledgeRouteContext routeContext = buildRouteContext(question, rewriteQuestion, knowledgeBaseSelection);
+            KnowledgeRouteDecision routeDecision = knowledgeRouteService.route(routeContext);
+            knowledgeRouteService.recordAutoRoute(conversationId, taskInfo.exchangeId(), routeContext, routeDecision);
+            List<DocumentRouteCandidate> candidateDocuments = selectAutoCandidates(routeDecision, question, rewriteQuestion, allowedDocuments(knowledgeBaseSelection));
             boolean lowConfidenceMultiDocumentRetrieval = shouldAllowLowConfidenceMultiDocumentRetrieval(routeDecision, candidateDocuments);
             if (lowConfidenceMultiDocumentRetrieval) {
                 log.info("自动知识路由低置信多文档候选进入检索: conversationId={}, confidence={}, candidateDocumentCount={}, threshold=[{}, {})",
@@ -200,7 +248,7 @@ public class ChatPreparationOrchestrator {
             if (shouldAskClarification(routeDecision, candidateDocuments, lowConfidenceMultiDocumentRetrieval)) {
                 recordAutoDocumentRouteTrace(traceRecorder, routeDecision, candidateDocuments, true, false, null);
                 return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, answerHistoryContext, currentDate, currentDateText,
-                    requiresCurrentDateAnchoring, requiresFreshSearch)
+                    requiresCurrentDateAnchoring, requiresFreshSearch, knowledgeBaseSelection)
                     .mode(ExecutionMode.CLARIFICATION)
                     .rewriteQuestion(rewriteQuestion)
                     .rewriteSubQuestions(rewriteSubQuestions)
@@ -249,7 +297,8 @@ public class ChatPreparationOrchestrator {
                 lowConfidenceMultiDocumentRetrieval);
         }
         else if (chatMode == ChatQueryMode.DOCUMENT) {
-            knowledgeRouteService.recordShadowRoute(conversationId, taskInfo.exchangeId(), selectedDocumentId, question, rewriteQuestion);
+            knowledgeRouteService.recordShadowRoute(conversationId, taskInfo.exchangeId(), selectedDocumentId,
+                buildRouteContext(question, rewriteQuestion, knowledgeBaseSelection));
         }
 
         ConversationTraceRecorder.StageHandle routeStage = traceRecorder == null
@@ -265,6 +314,11 @@ public class ChatPreparationOrchestrator {
                 memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript()
             );
             QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
+            StructureNavigationResult structureNavigationResult = resolveStructureNavigationResult(
+                navigationDecision,
+                routedDocumentId,
+                routedTaskId
+            );
             if (traceRecorder != null) {
                 traceRecorder.completeStage(routeStage, "执行路由完成。", Map.of(
                     "executionMode", navigationDecision == null || navigationDecision.getExecutionMode() == null ? "" : navigationDecision.getExecutionMode().name(),
@@ -276,6 +330,7 @@ public class ChatPreparationOrchestrator {
                         ? RetrievalIntent.GENERAL.name()
                         : navigationDecision.getRetrievalIntent().name(),
                     "queryUnderstanding", buildQueryUnderstandingTrace(queryUnderstanding),
+                    "structureNavigation", buildStructureNavigationTrace(structureNavigationResult),
                     "navigationSummary", navigationDecision == null ? "" : StrUtil.blankToDefault(navigationDecision.getSummaryText(), "")
                 ));
             }
@@ -301,10 +356,18 @@ public class ChatPreparationOrchestrator {
             ? RetrievalIntent.GENERAL
             : navigationDecision.getRetrievalIntent();
         QueryUnderstandingResult queryUnderstanding = navigationDecision == null ? null : navigationDecision.getQueryUnderstanding();
+        List<EvidenceAnchor> scopedEvidenceAnchors = filterEvidenceAnchors(
+            recentEvidenceAnchors,
+            chatMode,
+            routedDocumentId,
+            knowledgeBaseSelection
+        );
+        appendAnchorHints(historyPlanningContext, scopedEvidenceAnchors);
         AnswerHistoryContext routedAnswerHistoryContext = buildAnswerHistoryContext(
             question,
             memoryContext == null ? "" : memoryContext.getAnswerRecentTranscript(),
-            queryUnderstanding
+            queryUnderstanding,
+            scopedEvidenceAnchors
         );
 
         log.info("聊天编排完成: conversationId={}, chatMode={}, originalQuestion='{}', rewriteQuestion='{}', retrievalQuestion='{}', executionMode={}, retrievalIntent={}, targetSection='{}'",
@@ -318,7 +381,7 @@ public class ChatPreparationOrchestrator {
             navigationDecision == null || navigationDecision.getStructureAnchor() == null ? "" : safeText(navigationDecision.getStructureAnchor().getTargetSectionHint()));
 
         return basePlan(question, chatMode, memoryContext, historyPlanningContext, historySummary, routedAnswerHistoryContext, currentDate, currentDateText,
-            requiresCurrentDateAnchoring, requiresFreshSearch)
+            requiresCurrentDateAnchoring, requiresFreshSearch, knowledgeBaseSelection)
             .mode(executionMode)
             .navigationDecision(navigationDecision)
             .queryUnderstanding(queryUnderstanding)
@@ -336,6 +399,27 @@ public class ChatPreparationOrchestrator {
             .build();
     }
 
+    private StructureNavigationResult resolveStructureNavigationResult(DocumentNavigationDecision navigationDecision,
+                                                                      Long routedDocumentId,
+                                                                      Long routedTaskId) {
+        if (structureNavigationResolver == null || navigationDecision == null || routedDocumentId == null) {
+            return null;
+        }
+        QueryUnderstandingResult queryUnderstanding = navigationDecision.getQueryUnderstanding();
+        StructureNavigationIntent intent = queryUnderstanding == null ? null : queryUnderstanding.getStructureNavigationIntent();
+        if (intent == null) {
+            return null;
+        }
+        StructureNavigationResult result = structureNavigationResolver.resolve(
+            routedDocumentId,
+            routedTaskId,
+            intent,
+            navigationDecision.getStructureAnchor()
+        );
+        navigationDecision.setStructureNavigationResult(result);
+        return result;
+    }
+
     private Map<String, Object> buildQueryUnderstandingTrace(QueryUnderstandingResult queryUnderstanding) {
         if (queryUnderstanding == null) {
             return Map.of();
@@ -344,12 +428,66 @@ public class ChatPreparationOrchestrator {
         snapshot.put("queryType", queryUnderstanding.getQueryType() == null ? "" : queryUnderstanding.getQueryType().name());
         snapshot.put("channels", queryUnderstanding.getChannels() == null ? List.of() : queryUnderstanding.getChannels().stream().map(Enum::name).toList());
         snapshot.put("entities", queryUnderstanding.getEntities() == null ? List.of() : queryUnderstanding.getEntities());
+        snapshot.put("targetEntities", queryUnderstanding.getTargetEntities() == null ? List.of() : queryUnderstanding.getTargetEntities());
+        snapshot.put("excludedEntities", queryUnderstanding.getExcludedEntities() == null ? List.of() : queryUnderstanding.getExcludedEntities());
         snapshot.put("sectionAnchors", queryUnderstanding.getSectionAnchors() == null ? List.of() : queryUnderstanding.getSectionAnchors());
+        snapshot.put("structureNavigationIntent", buildStructureNavigationIntentTrace(queryUnderstanding.getStructureNavigationIntent()));
         snapshot.put("tableOps", queryUnderstanding.getTableOps() == null ? List.of() : queryUnderstanding.getTableOps());
         snapshot.put("negativeBoundary", queryUnderstanding.isNegativeBoundary());
+        snapshot.put("answerExpectation", StrUtil.blankToDefault(queryUnderstanding.getAnswerExpectation(), ""));
         snapshot.put("confidence", queryUnderstanding.getConfidence());
         snapshot.put("source", StrUtil.blankToDefault(queryUnderstanding.getSource(), ""));
         snapshot.put("reasons", queryUnderstanding.getReasons() == null ? List.of() : queryUnderstanding.getReasons());
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNavigationIntentTrace(StructureNavigationIntent intent) {
+        if (intent == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("operations", intent.getOperations() == null ? List.of() : intent.getOperations().stream().map(Enum::name).toList());
+        snapshot.put("anchorStructureNodeId", intent.getAnchorStructureNodeId() == null ? "" : String.valueOf(intent.getAnchorStructureNodeId()));
+        snapshot.put("anchorSectionPath", StrUtil.blankToDefault(intent.getAnchorSectionPath(), ""));
+        snapshot.put("anchorCanonicalPath", StrUtil.blankToDefault(intent.getAnchorCanonicalPath(), ""));
+        snapshot.put("sectionAnchors", intent.getSectionAnchors() == null ? List.of() : intent.getSectionAnchors());
+        snapshot.put("confidence", intent.getConfidence());
+        snapshot.put("source", StrUtil.blankToDefault(intent.getSource(), ""));
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNavigationTrace(StructureNavigationResult result) {
+        if (result == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("documentId", result.getDocumentId() == null ? "" : String.valueOf(result.getDocumentId()));
+        snapshot.put("anchorNodeId", result.getAnchorNodeId() == null ? "" : String.valueOf(result.getAnchorNodeId()));
+        snapshot.put("current", buildStructureNodeTrace(result.getCurrent()));
+        snapshot.put("parent", buildStructureNodeTrace(result.getParent()));
+        snapshot.put("previous", buildStructureNodeTrace(result.getPreviousSibling()));
+        snapshot.put("next", buildStructureNodeTrace(result.getNextSibling()));
+        snapshot.put("directChildren", result.getDirectChildren() == null
+            ? List.of()
+            : result.getDirectChildren().stream().map(this::buildStructureNodeTrace).toList());
+        snapshot.put("deterministic", result.isDeterministic());
+        snapshot.put("missReason", StrUtil.blankToDefault(result.getMissReason(), ""));
+        return snapshot;
+    }
+
+    private Map<String, Object> buildStructureNodeTrace(SuperAgentDocumentStructureNode node) {
+        if (node == null) {
+            return Map.of();
+        }
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        snapshot.put("nodeId", node.getId() == null ? "" : String.valueOf(node.getId()));
+        snapshot.put("nodeNo", node.getNodeNo() == null ? "" : String.valueOf(node.getNodeNo()));
+        snapshot.put("title", StrUtil.blankToDefault(node.getTitle(), ""));
+        snapshot.put("sectionPath", StrUtil.blankToDefault(node.getSectionPath(), ""));
+        snapshot.put("canonicalPath", StrUtil.blankToDefault(node.getCanonicalPath(), ""));
+        snapshot.put("parentNodeId", node.getParentNodeId() == null ? "" : String.valueOf(node.getParentNodeId()));
+        snapshot.put("prevSiblingNodeId", node.getPrevSiblingNodeId() == null ? "" : String.valueOf(node.getPrevSiblingNodeId()));
+        snapshot.put("nextSiblingNodeId", node.getNextSiblingNodeId() == null ? "" : String.valueOf(node.getNextSiblingNodeId()));
         return snapshot;
     }
 
@@ -362,7 +500,8 @@ public class ChatPreparationOrchestrator {
                                                                                 LocalDate currentDate,
                                                                                 String currentDateText,
                                                                                 boolean requiresCurrentDateAnchoring,
-                                                                                boolean requiresFreshSearch) {
+                                                                                boolean requiresFreshSearch,
+                                                                                KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
         return ConversationExecutionPlan.builder()
             .chatMode(chatMode)
             .originalQuestion(question)
@@ -385,6 +524,11 @@ public class ChatPreparationOrchestrator {
             .currentDateText(currentDateText)
             .requiresCurrentDateAnchoring(requiresCurrentDateAnchoring)
             .requiresFreshSearch(requiresFreshSearch)
+            .knowledgeBaseSelectionMode(selectionMode(knowledgeBaseSelection))
+            .selectedKnowledgeBaseIds(selectedKnowledgeBaseIds(knowledgeBaseSelection))
+            .selectedKnowledgeBaseNames(selectedKnowledgeBaseNames(knowledgeBaseSelection))
+            .allowedKnowledgeBaseDocumentIds(allowedDocumentIds(knowledgeBaseSelection))
+            .ragRuntimeOptions(knowledgeBaseSelection == null ? null : knowledgeBaseSelection.getRagRuntimeOptions())
             .noEvidenceReply(properties.getNoEvidenceReply());
     }
 
@@ -468,7 +612,7 @@ public class ChatPreparationOrchestrator {
             .limit(5)
             .map(scope -> {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("scopeCode", StrUtil.blankToDefault(scope.getScopeCode(), ""));
+                item.put("scopeId", scope.getScopeId() == null ? "" : String.valueOf(scope.getScopeId()));
                 item.put("scopeName", StrUtil.blankToDefault(scope.getScopeName(), ""));
                 item.put("score", scope.getScore() == null ? "" : scope.getScore().toPlainString());
                 item.put("reason", StrUtil.blankToDefault(scope.getReason(), ""));
@@ -485,8 +629,8 @@ public class ChatPreparationOrchestrator {
             .limit(5)
             .map(topic -> {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("scopeCode", StrUtil.blankToDefault(topic.getScopeCode(), ""));
-                item.put("topicCode", StrUtil.blankToDefault(topic.getTopicCode(), ""));
+                item.put("scopeId", topic.getScopeId() == null ? "" : String.valueOf(topic.getScopeId()));
+                item.put("topicId", topic.getTopicId() == null ? "" : String.valueOf(topic.getTopicId()));
                 item.put("topicName", StrUtil.blankToDefault(topic.getTopicName(), ""));
                 item.put("score", topic.getScore() == null ? "" : topic.getScore().toPlainString());
                 item.put("reason", StrUtil.blankToDefault(topic.getReason(), ""));
@@ -506,10 +650,6 @@ public class ChatPreparationOrchestrator {
                 item.put("documentId", StrUtil.blankToDefault(document.getDocumentId(), ""));
                 item.put("documentName", StrUtil.blankToDefault(document.getDocumentName(), ""));
                 item.put("lastIndexTaskId", StrUtil.blankToDefault(document.getLastIndexTaskId(), ""));
-                item.put("knowledgeScopeCode", StrUtil.blankToDefault(document.getKnowledgeScopeCode(), ""));
-                item.put("knowledgeScopeName", StrUtil.blankToDefault(document.getKnowledgeScopeName(), ""));
-                item.put("businessCategory", StrUtil.blankToDefault(document.getBusinessCategory(), ""));
-                item.put("documentTags", StrUtil.blankToDefault(document.getDocumentTags(), ""));
                 item.put("score", document.getScore() == null ? "" : document.getScore().toPlainString());
                 item.put("reason", StrUtil.blankToDefault(document.getReason(), ""));
                 return item;
@@ -572,7 +712,96 @@ public class ChatPreparationOrchestrator {
     private AnswerHistoryContext buildAnswerHistoryContext(String question,
                                                            String answerRecentTranscript,
                                                            QueryUnderstandingResult queryUnderstanding) {
-        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript, queryUnderstanding);
+        return buildAnswerHistoryContext(question, answerRecentTranscript, queryUnderstanding, List.of());
+    }
+
+    private AnswerHistoryContext buildAnswerHistoryContext(String question,
+                                                           String answerRecentTranscript,
+                                                           QueryUnderstandingResult queryUnderstanding,
+                                                           List<EvidenceAnchor> recentEvidenceAnchors) {
+        return answerHistoryContextAssembler.assemble(question, answerRecentTranscript, queryUnderstanding, recentEvidenceAnchors);
+    }
+
+    private List<EvidenceAnchor> loadRecentEvidenceAnchors(String conversationId) {
+        if (conversationEvidenceAnchorService == null || StrUtil.isBlank(conversationId)) {
+            return List.of();
+        }
+        try {
+            return conversationEvidenceAnchorService.loadRecentEvidenceAnchors(conversationId, 5);
+        }
+        catch (RuntimeException exception) {
+            log.warn("加载上一轮 evidence anchor 失败: conversationId={}, message={}",
+                conversationId,
+                exception.getMessage(),
+                exception);
+            return List.of();
+        }
+    }
+
+    private List<EvidenceAnchor> filterEvidenceAnchors(List<EvidenceAnchor> anchors,
+                                                       ChatQueryMode chatMode,
+                                                       Long selectedDocumentId,
+                                                       KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        if (anchors == null || anchors.isEmpty()) {
+            return List.of();
+        }
+        if (chatMode == ChatQueryMode.DOCUMENT && selectedDocumentId != null) {
+            return anchors.stream()
+                .filter(anchor -> anchor != null && Objects.equals(anchor.getDocumentId(), selectedDocumentId))
+                .toList();
+        }
+        if (chatMode == ChatQueryMode.AUTO_DOCUMENT
+            && knowledgeBaseSelection != null
+            && knowledgeBaseSelection.getAllowedDocumentIds() != null
+            && !knowledgeBaseSelection.getAllowedDocumentIds().isEmpty()) {
+            return anchors.stream()
+                .filter(anchor -> anchor != null && anchor.getDocumentId() != null)
+                .filter(anchor -> knowledgeBaseSelection.getAllowedDocumentIds().contains(anchor.getDocumentId()))
+                .toList();
+        }
+        return anchors;
+    }
+
+    private void appendAnchorHints(HistoryPlanningContext historyPlanningContext, List<EvidenceAnchor> anchors) {
+        if (historyPlanningContext == null || anchors == null || anchors.isEmpty()) {
+            return;
+        }
+        List<String> hints = new ArrayList<>(historyPlanningContext.getQueryContextHints() == null
+            ? List.of()
+            : historyPlanningContext.getQueryContextHints());
+        anchors.stream()
+            .map(this::anchorHint)
+            .filter(StrUtil::isNotBlank)
+            .limit(5)
+            .forEach(hints::add);
+        historyPlanningContext.setQueryContextHints(hints);
+    }
+
+    private String anchorHint(EvidenceAnchor anchor) {
+        if (anchor == null) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        appendHintPart(builder, "documentId", anchor.getDocumentId());
+        appendHintPart(builder, "sectionPath", anchor.getSectionPath());
+        appendHintPart(builder, "structureNodeId", anchor.getStructureNodeId());
+        appendHintPart(builder, "parentBlockId", anchor.getParentBlockId());
+        appendHintPart(builder, "chunkId", anchor.getChunkId());
+        return builder.toString().trim();
+    }
+
+    private void appendHintPart(StringBuilder builder, String name, Object value) {
+        if (value == null) {
+            return;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return;
+        }
+        if (!builder.isEmpty()) {
+            builder.append("; ");
+        }
+        builder.append(name).append('=').append(text);
     }
 
     private String buildStructuredPlanningHistory(HistoryPlanningContext historyPlanningContext) {
@@ -657,28 +886,36 @@ public class ChatPreparationOrchestrator {
 
     private List<DocumentRouteCandidate> selectAutoCandidates(KnowledgeRouteDecision routeDecision,
                                                               String question,
-                                                              String rewriteQuestion) {
+                                                              String rewriteQuestion,
+                                                              List<KnowledgeDocumentDescriptor> allowedDocuments) {
         if (routeDecision == null || routeDecision.getDocuments() == null || routeDecision.getDocuments().isEmpty()) {
-            return expandCandidatesByDocumentProfile(question, rewriteQuestion, 5);
+            return expandCandidatesByDocumentProfile(question, rewriteQuestion, allowedDocuments, 5);
         }
         int candidateLimit = routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() >= 0.80D ? 3 : 5;
+        List<Long> allowedDocumentIds = allowedDocuments == null
+            ? List.of()
+            : allowedDocuments.stream().map(KnowledgeDocumentDescriptor::getDocumentId).filter(Objects::nonNull).toList();
         List<DocumentRouteCandidate> candidates = routeDecision.getDocuments().stream()
             .filter(item -> StrUtil.isNotBlank(item.getDocumentId()) && StrUtil.isNotBlank(item.getLastIndexTaskId()))
+            .filter(item -> allowedDocumentIds.isEmpty() || allowedDocumentIds.contains(Long.valueOf(item.getDocumentId())))
             .limit(candidateLimit)
             .toList();
         if (candidates.isEmpty()) {
-            return expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit);
+            return expandCandidatesByDocumentProfile(question, rewriteQuestion, allowedDocuments, candidateLimit);
         }
         if (routeDecision.getConfidence() != null && routeDecision.getConfidence().doubleValue() < confidentDocumentThreshold()) {
-            return mergeCandidates(candidates, expandCandidatesByDocumentProfile(question, rewriteQuestion, candidateLimit), candidateLimit);
+            return mergeCandidates(candidates, expandCandidatesByDocumentProfile(question, rewriteQuestion, allowedDocuments, candidateLimit), candidateLimit);
         }
         return candidates;
     }
 
     private List<DocumentRouteCandidate> expandCandidatesByDocumentProfile(String question,
                                                                            String rewriteQuestion,
+                                                                           List<KnowledgeDocumentDescriptor> allowedDocuments,
                                                                            int limit) {
-        List<KnowledgeDocumentDescriptor> descriptors = documentKnowledgeService.listRetrievableDocuments();
+        List<KnowledgeDocumentDescriptor> descriptors = allowedDocuments == null || allowedDocuments.isEmpty()
+            ? List.of()
+            : allowedDocuments;
         if (descriptors == null || descriptors.isEmpty()) {
             return List.of();
         }
@@ -693,14 +930,54 @@ public class ChatPreparationOrchestrator {
                 String.valueOf(item.getDocumentId()),
                 item.getDocumentName(),
                 item.getLastIndexTaskId() == null ? "" : String.valueOf(item.getLastIndexTaskId()),
-                StrUtil.blankToDefault(item.getKnowledgeScopeCode(), ""),
-                StrUtil.blankToDefault(item.getKnowledgeScopeName(), ""),
-                StrUtil.blankToDefault(item.getBusinessCategory(), ""),
-                StrUtil.blankToDefault(item.getDocumentTags(), ""),
                 BigDecimal.valueOf(descriptorRouteScore(item, queryTerms)).setScale(4, RoundingMode.HALF_UP),
                 "低置信度时基于文档画像扩展候选范围"
             ))
             .toList();
+    }
+
+    private KnowledgeRouteContext buildRouteContext(String question,
+                                                    String rewriteQuestion,
+                                                    KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return KnowledgeRouteContext.builder()
+            .question(question)
+            .rewriteQuestion(rewriteQuestion)
+            .knowledgeBaseSelectionMode(selectionMode(knowledgeBaseSelection))
+            .selectedKnowledgeBaseIds(selectedKnowledgeBaseIds(knowledgeBaseSelection))
+            .selectedKnowledgeBaseNames(selectedKnowledgeBaseNames(knowledgeBaseSelection))
+            .allowedDocuments(allowedDocuments(knowledgeBaseSelection))
+            .allowedDocumentIds(allowedDocumentIds(knowledgeBaseSelection))
+            .build();
+    }
+
+    private KnowledgeBaseSelectionMode selectionMode(KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return knowledgeBaseSelection == null || knowledgeBaseSelection.getSelectionMode() == null
+            ? KnowledgeBaseSelectionMode.NONE
+            : knowledgeBaseSelection.getSelectionMode();
+    }
+
+    private List<Long> selectedKnowledgeBaseIds(KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return knowledgeBaseSelection == null || knowledgeBaseSelection.getSelectedKnowledgeBaseIds() == null
+            ? List.of()
+            : knowledgeBaseSelection.getSelectedKnowledgeBaseIds();
+    }
+
+    private List<String> selectedKnowledgeBaseNames(KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return knowledgeBaseSelection == null || knowledgeBaseSelection.getSelectedKnowledgeBaseNames() == null
+            ? List.of()
+            : knowledgeBaseSelection.getSelectedKnowledgeBaseNames();
+    }
+
+    private List<KnowledgeDocumentDescriptor> allowedDocuments(KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return knowledgeBaseSelection == null || knowledgeBaseSelection.getAllowedDocuments() == null
+            ? List.of()
+            : knowledgeBaseSelection.getAllowedDocuments();
+    }
+
+    private List<Long> allowedDocumentIds(KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
+        return knowledgeBaseSelection == null || knowledgeBaseSelection.getAllowedDocumentIds() == null
+            ? List.of()
+            : knowledgeBaseSelection.getAllowedDocumentIds();
     }
 
     private List<DocumentRouteCandidate> mergeCandidates(List<DocumentRouteCandidate> primary,
@@ -735,8 +1012,7 @@ public class ChatPreparationOrchestrator {
         if (topScore == null || secondScore == null) {
             return false;
         }
-        return topScore.subtract(secondScore).doubleValue() <= 3D
-            && !Objects.equals(candidateDocuments.get(0).getKnowledgeScopeCode(), candidateDocuments.get(1).getKnowledgeScopeCode());
+        return topScore.subtract(secondScore).doubleValue() <= 3D;
     }
 
     private boolean shouldAllowLowConfidenceMultiDocumentRetrieval(KnowledgeRouteDecision routeDecision,
@@ -790,11 +1066,6 @@ public class ChatPreparationOrchestrator {
                 .append(". 《")
                 .append(StrUtil.blankToDefault(item.getDocumentName(), item.getDocumentId()))
                 .append("》");
-            if (StrUtil.isNotBlank(item.getKnowledgeScopeName()) || StrUtil.isNotBlank(item.getKnowledgeScopeCode())) {
-                builder.append("（")
-                    .append(StrUtil.blankToDefault(item.getKnowledgeScopeName(), item.getKnowledgeScopeCode()))
-                    .append("）");
-            }
             builder.append('\n');
         }
         builder.append("你可以直接回复文档名，或者改用“当前文档问答”模式明确指定文档。");
@@ -844,10 +1115,7 @@ public class ChatPreparationOrchestrator {
     private double descriptorRouteScore(KnowledgeDocumentDescriptor descriptor, List<String> queryTerms) {
         String content = normalizeRouteExpansionText(String.join(" ",
             StrUtil.blankToDefault(descriptor.getDocumentName(), ""),
-            StrUtil.blankToDefault(descriptor.getKnowledgeScopeCode(), ""),
-            StrUtil.blankToDefault(descriptor.getKnowledgeScopeName(), ""),
-            StrUtil.blankToDefault(descriptor.getBusinessCategory(), ""),
-            StrUtil.blankToDefault(descriptor.getDocumentTags(), "")
+            StrUtil.blankToDefault(descriptor.getKnowledgeBaseName(), "")
         ));
         if (queryTerms == null || queryTerms.isEmpty() || content.isBlank()) {
             return 0D;

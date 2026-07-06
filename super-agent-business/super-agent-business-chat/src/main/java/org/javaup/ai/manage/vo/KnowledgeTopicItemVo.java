@@ -16,11 +16,11 @@ public class KnowledgeTopicItemVo {
 
     private String id;
 
-    private String topicCode;
+    private String knowledgeBaseId;
 
     private String topicName;
 
-    private String scopeCode;
+    private String scopeId;
 
     private String description;
 

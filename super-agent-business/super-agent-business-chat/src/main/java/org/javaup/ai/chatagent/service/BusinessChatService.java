@@ -37,10 +37,15 @@ import org.javaup.ai.chatagent.vo.ConversationSessionListVo;
 import org.javaup.ai.chatagent.vo.ConversationStopVo;
 import org.javaup.ai.prompt.PromptTemplateNames;
 import org.javaup.ai.prompt.PromptTemplateService;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.enums.ChatTurnStatus;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.javaup.exception.SuperAgentFrameException;
 import org.javaup.lease.RedisLeaseManager;
+import org.javaup.ai.manage.service.KnowledgeBaseManageService;
+import org.javaup.ai.manage.service.KnowledgeBaseRetrievalScopeService;
+import org.javaup.ai.manage.vo.KnowledgeBaseOptionVo;
 import org.springframework.ai.chat.messages.AbstractMessage;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.stereotype.Service;
@@ -99,6 +104,8 @@ public class BusinessChatService {
     private final StageBenchmarkService stageBenchmarkService;
     private final PromptTemplateService promptTemplateService;
     private final RagCitationRepairService ragCitationRepairService;
+    private final KnowledgeBaseRetrievalScopeService knowledgeBaseRetrievalScopeService;
+    private final KnowledgeBaseManageService knowledgeBaseManageService;
 
     public Flux<String> openConversationStream(ChatRequestDto request) {
 
@@ -151,7 +158,8 @@ public class BusinessChatService {
                 launchPlan.getQuestion(),
                 launchPlan.getChatMode(),
                 launchPlan.getSelectedDocumentId(),
-                launchPlan.getSelectedDocumentName()
+                launchPlan.getSelectedDocumentName(),
+                launchPlan.getKnowledgeBaseSelectionSnapshot()
             );
 
             TaskInfo taskInfo = createTaskInfo(launchPlan, exchangeView);
@@ -229,6 +237,7 @@ public class BusinessChatService {
             launchPlan.getSelectedDocumentId(),
             launchPlan.getSelectedDocumentName(),
             launchPlan.getSelectedTaskId(),
+            launchPlan.getKnowledgeBaseSelectionSnapshot(),
             launchPlan.getCurrentDate(),
             launchPlan.getCurrentDateText(),
             null,
@@ -306,8 +315,15 @@ public class BusinessChatService {
 
         String conversationId = normalizeConversationId(request.getConversationId());
         ChatQueryMode chatMode = parseRequiredChatMode(request.getChatMode());
+        KnowledgeBaseSelectionMode selectionMode = parseKnowledgeBaseSelectionMode(request.getKnowledgeBaseSelectionMode());
+        validateChatModeAndKnowledgeBaseSelection(chatMode, selectionMode);
 
-        KnowledgeDocumentDescriptor selectedDocument = resolveSelectedDocument(chatMode, request.getSelectedDocumentId());
+        KnowledgeBaseSelectionSnapshot knowledgeBaseSelection = knowledgeBaseRetrievalScopeService.resolve(
+            chatMode,
+            selectionMode,
+            request.getSelectedKnowledgeBaseIds()
+        );
+        KnowledgeDocumentDescriptor selectedDocument = resolveSelectedDocument(chatMode, request.getSelectedDocumentId(), knowledgeBaseSelection);
 
         LocalDate currentDate = LocalDate.now(CHAT_ZONE_ID);
         String currentDateText = formatCurrentDate(currentDate);
@@ -318,6 +334,7 @@ public class BusinessChatService {
             selectedDocument == null ? null : selectedDocument.getDocumentId(),
             selectedDocument == null ? "" : selectedDocument.getDocumentName(),
             selectedDocument == null ? null : selectedDocument.getLastIndexTaskId(),
+            knowledgeBaseSelection,
 
             buildChatLeaseKey(conversationId),
 
@@ -518,6 +535,10 @@ public class BusinessChatService {
         return documentKnowledgeService.listRetrievableDocuments().stream()
             .map(this::toKnowledgeDocumentOptionView)
             .toList();
+    }
+
+    public List<KnowledgeBaseOptionVo> listKnowledgeBaseOptions() {
+        return knowledgeBaseManageService.listOptions();
     }
 
     public ConversationMemorySummaryView rebuildConversationSummary(String conversationId) {
@@ -933,7 +954,8 @@ public class BusinessChatService {
                 taskInfo.conversationId(),
                 executionPlan.getChatMode(),
                 executionPlan.getSelectedDocumentId(),
-                executionPlan.getSelectedDocumentName()
+                executionPlan.getSelectedDocumentName(),
+                taskInfo.knowledgeBaseSelectionSnapshot()
             );
             putContextIfNotNull(taskInfo.runnableConfig(), ChatContextKeys.SELECTED_DOCUMENT_ID, executionPlan.getSelectedDocumentId());
             putContextIfNotBlank(taskInfo.runnableConfig(), ChatContextKeys.SELECTED_DOCUMENT_NAME, executionPlan.getSelectedDocumentName());
@@ -980,6 +1002,9 @@ public class BusinessChatService {
             archiveRecord.chatMode(),
             archiveRecord.selectedDocumentId() == null ? "" : String.valueOf(archiveRecord.selectedDocumentId()),
             archiveRecord.selectedDocumentName(),
+            archiveRecord.knowledgeBaseSelectionMode(),
+            archiveRecord.selectedKnowledgeBaseIds(),
+            archiveRecord.selectedKnowledgeBaseNames(),
             archiveRecord.createdAt(),
             archiveRecord.updatedAt(),
             exchanges,
@@ -1040,12 +1065,18 @@ public class BusinessChatService {
             exchange.getErrorMessage(),
             toNullable(taskInfo.firstResponseTimeMs().get()),
             System.currentTimeMillis() - taskInfo.startTime(),
+            exchange.getKnowledgeBaseSelectionMode(),
+            exchange.getSelectedKnowledgeBaseIds(),
+            exchange.getSelectedKnowledgeBaseNames(),
+            exchange.getRetrievalConfigSnapshotJson(),
             exchange.getCreateTime(),
             exchange.getEditTime()
         );
     }
 
-    private KnowledgeDocumentDescriptor resolveSelectedDocument(ChatQueryMode chatMode, String selectedDocumentId) {
+    private KnowledgeDocumentDescriptor resolveSelectedDocument(ChatQueryMode chatMode,
+                                                                String selectedDocumentId,
+                                                                KnowledgeBaseSelectionSnapshot knowledgeBaseSelection) {
         if (chatMode == null) {
             throw new IllegalArgumentException("chatMode 不能为空");
         }
@@ -1068,19 +1099,22 @@ public class BusinessChatService {
             throw new IllegalArgumentException("当前文档问答模式下必须选择一个文档");
         }
         final Long resolvedDocumentId = parseRequiredLong(normalizedDocumentId, "selectedDocumentId");
-        return documentKnowledgeService.listRetrievableDocuments().stream()
+        List<KnowledgeDocumentDescriptor> searchableDocuments = knowledgeBaseSelection == null
+            || knowledgeBaseSelection.getSelectionMode() == KnowledgeBaseSelectionMode.NONE
+            ? List.of()
+            : knowledgeBaseSelection.getAllowedDocuments();
+        return searchableDocuments.stream()
             .filter(item -> Objects.equals(item.getDocumentId(), resolvedDocumentId))
             .findFirst()
-            .orElseThrow(() -> new IllegalArgumentException("所选文档当前不可检索: " + normalizedDocumentId));
+            .orElseThrow(() -> new IllegalArgumentException("所选文档不在当前知识库范围内，或当前不可检索: " + normalizedDocumentId));
     }
 
     private KnowledgeDocumentOptionView toKnowledgeDocumentOptionView(KnowledgeDocumentDescriptor descriptor) {
         return new KnowledgeDocumentOptionView(
             descriptor.getDocumentId() == null ? "" : String.valueOf(descriptor.getDocumentId()),
             descriptor.getDocumentName(),
-            descriptor.getKnowledgeScopeName(),
-            descriptor.getBusinessCategory(),
-            descriptor.getDocumentTags()
+            descriptor.getKnowledgeBaseId() == null ? "" : String.valueOf(descriptor.getKnowledgeBaseId()),
+            descriptor.getKnowledgeBaseName()
         );
     }
 
@@ -1128,6 +1162,32 @@ public class BusinessChatService {
             throw new IllegalArgumentException("chatMode 不能为空");
         }
         return chatMode;
+    }
+
+    private KnowledgeBaseSelectionMode parseKnowledgeBaseSelectionMode(String value) {
+        try {
+            return KnowledgeBaseSelectionMode.fromName(value);
+        }
+        catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException("knowledgeBaseSelectionMode 非法: " + value, exception);
+        }
+    }
+
+    private void validateChatModeAndKnowledgeBaseSelection(ChatQueryMode chatMode,
+                                                           KnowledgeBaseSelectionMode selectionMode) {
+        KnowledgeBaseSelectionMode mode = selectionMode == null ? KnowledgeBaseSelectionMode.NONE : selectionMode;
+        if (chatMode == ChatQueryMode.OPEN_CHAT) {
+            if (mode != KnowledgeBaseSelectionMode.NONE) {
+                throw new IllegalArgumentException("开放式提问模式必须使用 NONE 知识库选择模式");
+            }
+            return;
+        }
+        if (chatMode == ChatQueryMode.AUTO_DOCUMENT && mode == KnowledgeBaseSelectionMode.NONE) {
+            throw new IllegalArgumentException("自动知识问答模式必须选择知识库或使用全部知识库");
+        }
+        if (chatMode == ChatQueryMode.DOCUMENT && mode == KnowledgeBaseSelectionMode.NONE) {
+            throw new IllegalArgumentException("当前文档问答模式必须选择知识库或使用全部知识库");
+        }
     }
 
     private ChatTurnStatus parseOptionalTurnStatus(String value) {

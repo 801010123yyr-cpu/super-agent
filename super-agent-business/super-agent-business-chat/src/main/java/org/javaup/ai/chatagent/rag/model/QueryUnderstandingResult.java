@@ -27,12 +27,25 @@ public class QueryUnderstandingResult {
     private List<String> entities = new ArrayList<>();
 
     @Builder.Default
+    private List<String> targetEntities = new ArrayList<>();
+
+    @Builder.Default
+    private List<String> excludedEntities = new ArrayList<>();
+
+    @Builder.Default
     private List<String> sectionAnchors = new ArrayList<>();
+
+    private StructureNavigationIntent structureNavigationIntent;
+
+    @Builder.Default
+    private List<EvidenceRole> expectedEvidenceRoles = new ArrayList<>();
 
     @Builder.Default
     private List<String> tableOps = new ArrayList<>();
 
     private boolean negativeBoundary;
+
+    private String answerExpectation;
 
     private double confidence;
 

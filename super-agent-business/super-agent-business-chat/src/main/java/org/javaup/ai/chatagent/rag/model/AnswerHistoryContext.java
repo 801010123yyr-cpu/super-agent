@@ -5,6 +5,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * @program: 企业级别深度设计 AI Agent。添加 阿星不是程序员 微信，添加时备注 super 来获取项目的完整资料
  * @description: 回答阶段最终使用的历史上下文
@@ -23,6 +26,11 @@ public class AnswerHistoryContext {
 
     private String recentContext;
 
+    @Builder.Default
+    private List<EvidenceAnchor> evidenceAnchors = new ArrayList<>();
+
+    private String resolvedTopic;
+
     private boolean followUpQuestion;
 
     private Integer totalBudget;
@@ -32,6 +40,7 @@ public class AnswerHistoryContext {
     private Integer structuredBudget;
 
     public boolean isEmpty() {
-        return renderedText == null || renderedText.isBlank();
+        return (renderedText == null || renderedText.isBlank())
+            && (evidenceAnchors == null || evidenceAnchors.isEmpty());
     }
 }

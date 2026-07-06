@@ -16,7 +16,7 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class ScopeRouteCandidate {
 
-    private String scopeCode;
+    private Long scopeId;
 
     private String scopeName;
 

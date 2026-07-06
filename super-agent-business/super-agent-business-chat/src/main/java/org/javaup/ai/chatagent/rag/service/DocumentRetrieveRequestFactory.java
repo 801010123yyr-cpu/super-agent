@@ -114,8 +114,6 @@ public class DocumentRetrieveRequestFactory {
             return DocumentRetrieveFilters.builder().build();
         }
         LinkedHashSet<String> documentNameHints = new LinkedHashSet<>();
-        LinkedHashSet<String> businessCategoryHints = new LinkedHashSet<>();
-        LinkedHashSet<String> documentTagHints = new LinkedHashSet<>();
         LinkedHashSet<String> sectionPathHints = new LinkedHashSet<>();
         LinkedHashSet<String> yearHints = new LinkedHashSet<>();
 
@@ -131,12 +129,10 @@ public class DocumentRetrieveRequestFactory {
             }
         }
 
-        collectQueryUnderstandingHints(queryUnderstanding, documentNameHints, businessCategoryHints, documentTagHints, sectionPathHints);
+        collectQueryUnderstandingHints(queryUnderstanding, documentNameHints, sectionPathHints);
 
         return DocumentRetrieveFilters.builder()
             .documentNameHints(new ArrayList<>(documentNameHints))
-            .businessCategoryHints(new ArrayList<>(businessCategoryHints))
-            .documentTagHints(new ArrayList<>(documentTagHints))
             .sectionPathHints(new ArrayList<>(sectionPathHints))
             .yearHints(new ArrayList<>(yearHints))
             .build();
@@ -144,8 +140,6 @@ public class DocumentRetrieveRequestFactory {
 
     private void collectQueryUnderstandingHints(QueryUnderstandingResult queryUnderstanding,
                                                 LinkedHashSet<String> documentNameHints,
-                                                LinkedHashSet<String> businessCategoryHints,
-                                                LinkedHashSet<String> documentTagHints,
                                                 LinkedHashSet<String> sectionPathHints) {
         if (queryUnderstanding == null) {
             return;
@@ -155,11 +149,7 @@ public class DocumentRetrieveRequestFactory {
                 .filter(StrUtil::isNotBlank)
                 .map(String::trim)
                 .limit(8)
-                .forEach(entity -> {
-                    documentNameHints.add(entity);
-                    businessCategoryHints.add(entity);
-                    documentTagHints.add(entity);
-                });
+                .forEach(documentNameHints::add);
         }
         if (queryUnderstanding.getSectionAnchors() != null) {
             queryUnderstanding.getSectionAnchors().stream()

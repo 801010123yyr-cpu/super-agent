@@ -81,6 +81,8 @@ public class GraphThenEvidenceExecutor implements ConversationExecutor {
                 taskInfo.traceRecorder().completeStage(graphStage, "结构图定位完成，但证据不满足约束。", Map.of(
                     "targetSection", graphResult == null || graphResult.getTargetSection() == null ? "" : StrUtil.blankToDefault(graphResult.getTargetSection().displayTitle(), ""),
                     "targetItemIndex", graphResult == null || graphResult.getTargetItem() == null || graphResult.getTargetItem().getItemIndex() == null ? "" : String.valueOf(graphResult.getTargetItem().getItemIndex()),
+                    "graphThenEvidenceFailed", true,
+                    "fallbackRecommendation", ExecutionMode.RETRIEVAL.name(),
                     "notes", List.of("结构图未定位到满足条件的章节或编号项。")
                 ));
             }

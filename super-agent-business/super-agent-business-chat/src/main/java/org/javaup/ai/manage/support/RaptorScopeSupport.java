@@ -1,12 +1,10 @@
 package org.javaup.ai.manage.support;
 
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 
 public final class RaptorScopeSupport {
 
@@ -23,8 +21,12 @@ public final class RaptorScopeSupport {
         return "document:" + documentId;
     }
 
-    public static String knowledgeScopeKey(String knowledgeScopeCode) {
-        return "knowledge:" + normalizeScopeCode(knowledgeScopeCode);
+    public static String knowledgeBaseScopeKey(Long knowledgeBaseId) {
+        return "kb:" + knowledgeBaseId;
+    }
+
+    public static String knowledgeScopeKey(Long knowledgeBaseId, Long scopeId) {
+        return knowledgeBaseScopeKey(knowledgeBaseId) + ":scope:" + scopeId;
     }
 
     public static List<String> searchScopeKeys(List<SuperAgentDocument> documents) {
@@ -33,23 +35,16 @@ public final class RaptorScopeSupport {
         }
         LinkedHashSet<String> scopeKeys = new LinkedHashSet<>();
         for (SuperAgentDocument document : documents) {
-            if (document == null || StrUtil.isBlank(document.getKnowledgeScopeCode())) {
+            if (document == null || document.getKnowledgeBaseId() == null) {
                 continue;
             }
-            scopeKeys.add(knowledgeScopeKey(document.getKnowledgeScopeCode()));
+            scopeKeys.add(knowledgeBaseScopeKey(document.getKnowledgeBaseId()));
         }
-        scopeKeys.add(GLOBAL_SCOPE_KEY);
         return List.copyOf(scopeKeys);
     }
 
     public static boolean isDatasetScope(String scopeType) {
-        return SCOPE_TYPE_DATASET.equalsIgnoreCase(StrUtil.blankToDefault(scopeType, ""));
+        return SCOPE_TYPE_DATASET.equalsIgnoreCase(scopeType == null ? "" : scopeType);
     }
 
-    public static String normalizeScopeCode(String knowledgeScopeCode) {
-        return StrUtil.blankToDefault(knowledgeScopeCode, "")
-            .trim()
-            .toLowerCase(Locale.ROOT)
-            .replaceAll("[^a-z0-9._-]+", "_");
-    }
 }

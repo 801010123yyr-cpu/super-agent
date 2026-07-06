@@ -11,16 +11,22 @@ import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.config.DocumentManageProperties;
 import org.javaup.ai.manage.data.SuperAgentDocument;
 import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
+import org.javaup.ai.manage.data.SuperAgentKnowledgeTopicNode;
 import org.javaup.ai.manage.data.SuperAgentRaptorNode;
+import org.javaup.ai.manage.data.SuperAgentTopicDocumentRelation;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
+import org.javaup.ai.manage.mapper.SuperAgentKnowledgeTopicNodeMapper;
 import org.javaup.ai.manage.mapper.SuperAgentRaptorNodeMapper;
+import org.javaup.ai.manage.mapper.SuperAgentTopicDocumentRelationMapper;
+import org.javaup.ai.manage.model.KnowledgeBaseIndexingOptions;
 import org.javaup.ai.manage.model.raptor.RaptorBuildResult;
 import org.javaup.ai.manage.model.raptor.RaptorQualityReport;
 import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.RaptorQualityService;
 import org.javaup.ai.manage.service.RaptorSummaryIndexService;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
+import org.javaup.ai.manage.support.KnowledgeBaseIndexingConfigResolver;
 import org.javaup.ai.manage.support.MybatisBatchExecutor;
 import org.javaup.ai.manage.support.RaptorDatasetBuildSupport;
 import org.javaup.ai.manage.support.RaptorScopeSupport;
@@ -105,6 +111,10 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private final SuperAgentDocumentChunkMapper chunkMapper;
 
+    private final SuperAgentKnowledgeTopicNodeMapper topicNodeMapper;
+
+    private final SuperAgentTopicDocumentRelationMapper topicDocumentRelationMapper;
+
     private final RagToolsClient ragToolsClient;
 
     private final ObjectMapper objectMapper;
@@ -123,6 +133,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
     private final RaptorDatasetBuildSupport raptorDatasetBuildSupport;
 
     private final ObjectProvider<RaptorSummaryIndexService> raptorSummaryIndexServiceProvider;
+
+    private final KnowledgeBaseIndexingConfigResolver indexingConfigResolver;
 
     @Value("${spring.ai.openai.embedding.options.model:}")
     private String embeddingModelName;
@@ -143,6 +155,11 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
     @Transactional(rollbackFor = Exception.class)
     public RaptorBuildResult rebuildDocumentTree(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks) {
         deleteByTask(documentId, taskId);
+        KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorOptions = raptorBuildOptionsByDocumentId(documentId);
+        if (!Boolean.TRUE.equals(raptorOptions.getRaptorBuildEnabled())) {
+            log.info("知识库配置已关闭 RAPTOR 构建，跳过文档摘要树构建: documentId={}, taskId={}", documentId, taskId);
+            return RaptorBuildResult.builder().build();
+        }
         if (documentId == null || taskId == null || CollUtil.isEmpty(chunks)) {
             return RaptorBuildResult.builder().build();
         }
@@ -151,14 +168,15 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         log.info("开始构建 RAPTOR 摘要树，documentId={}, taskId={}, chunkCount={}", documentId, taskId, chunks.size());
         String scopeKey = RaptorScopeSupport.documentScopeKey(documentId);
         long pythonStartedNanos = System.nanoTime();
-        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(documentId, taskId, chunks));
+        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildRequest(documentId, taskId, chunks, raptorOptions));
         log.info("Python RAPTOR 构建调用完成，documentId={}, taskId={}, scopeType={}, scopeKey={}, costMillis={}",
             documentId, taskId, RaptorScopeSupport.SCOPE_TYPE_DOCUMENT, scopeKey, elapsedMillis(pythonStartedNanos));
         if (response == null) {
             throw new IllegalStateException("Python RAPTOR 构建接口返回为空。");
         }
-        logLlmSummaryFallbacks(documentId, taskId, response.getNodes());
-        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor());
+        logLlmSummaryFallbacks(documentId, taskId, response.getNodes(), Boolean.TRUE.equals(raptorOptions.getRaptorLlmSummaryEnabled()));
+        double qualityFloor = qualityFloor(raptorOptions);
+        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor);
         log.info("Python RAPTOR 原始摘要质量评测完成，documentId={}, taskId={}, nodeCount={}, avgQuality={}, minQuality={}, p10Quality={}, medianQuality={}, recommendedFloor={}, lowQualityCount={}",
             documentId,
             taskId,
@@ -170,7 +188,7 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             sourceQualityReport.getRecommendedQualityFloor(),
             sourceQualityReport.getLowQualityNodeCount());
 
-        Map<String, Long> idMap = allocateNodeIds(response.getNodes());
+        Map<String, Long> idMap = allocateNodeIds(response.getNodes(), qualityFloor);
         List<SuperAgentRaptorNode> nodes = buildNodeEntities(
             documentId,
             taskId,
@@ -180,14 +198,15 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             idMap,
             distinctChunkDocumentIds(chunks),
             distinctChunkTaskIds(chunks),
-            null
+            null,
+            qualityFloor
         );
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR 构建结果没有达到质量阈值的摘要节点，documentId={}, taskId={}, qualityFloor={}",
-                documentId, taskId, qualityFloor());
+                documentId, taskId, qualityFloor);
             return RaptorBuildResult.builder()
                 .sourceQualityReport(sourceQualityReport)
-                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor()))
+                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor))
                 .build();
         }
         long insertStartedNanos = System.nanoTime();
@@ -221,14 +240,50 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public RaptorBuildResult rebuildKnowledgeScopeTree(String knowledgeScopeCode) {
-        String normalizedScopeCode = RaptorScopeSupport.normalizeScopeCode(knowledgeScopeCode);
-        if (StrUtil.isBlank(normalizedScopeCode)) {
+    public RaptorBuildResult rebuildKnowledgeScopeTree(Long knowledgeBaseId, Long scopeId) {
+        if (knowledgeBaseId == null || scopeId == null || scopeId <= 0) {
             return RaptorBuildResult.builder().build();
         }
-        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(normalizedScopeCode);
+        String scopeKey = RaptorScopeSupport.knowledgeScopeKey(knowledgeBaseId, scopeId);
+        KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorOptions = raptorBuildOptionsByKnowledgeBaseId(knowledgeBaseId);
+        if (!Boolean.TRUE.equals(raptorOptions.getRaptorBuildEnabled())) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("知识库配置已关闭 RAPTOR 构建，跳过 dataset-level 摘要树构建: knowledgeBaseId={}, scopeId={}, scopeKey={}",
+                knowledgeBaseId, scopeId, scopeKey);
+            return RaptorBuildResult.builder().build();
+        }
+        List<Long> topicIds = topicNodeMapper.selectList(new LambdaQueryWrapper<SuperAgentKnowledgeTopicNode>()
+                .eq(SuperAgentKnowledgeTopicNode::getKnowledgeBaseId, knowledgeBaseId)
+                .eq(SuperAgentKnowledgeTopicNode::getScopeId, scopeId)
+                .eq(SuperAgentKnowledgeTopicNode::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .map(SuperAgentKnowledgeTopicNode::getId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (topicIds.isEmpty()) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识范围没有可用主题: scopeKey={}", scopeKey);
+            return RaptorBuildResult.builder().build();
+        }
+        List<Long> documentIds = topicDocumentRelationMapper.selectList(new LambdaQueryWrapper<SuperAgentTopicDocumentRelation>()
+                .eq(SuperAgentTopicDocumentRelation::getKnowledgeBaseId, knowledgeBaseId)
+                .in(SuperAgentTopicDocumentRelation::getTopicId, topicIds)
+                .eq(SuperAgentTopicDocumentRelation::getStatus, BusinessStatus.YES.getCode()))
+            .stream()
+            .map(SuperAgentTopicDocumentRelation::getDocumentId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (documentIds.isEmpty()) {
+            deleteByScope(RaptorScopeSupport.SCOPE_TYPE_DATASET, scopeKey);
+            log.info("跳过 RAPTOR dataset-level 构建，知识范围没有主题文档关联: scopeKey={}, topicCount={}",
+                scopeKey, topicIds.size());
+            return RaptorBuildResult.builder().build();
+        }
         List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
-            .eq(SuperAgentDocument::getKnowledgeScopeCode, knowledgeScopeCode)
+            .in(SuperAgentDocument::getId, documentIds)
+            .eq(SuperAgentDocument::getKnowledgeBaseId, knowledgeBaseId)
             .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
             .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
             .isNotNull(SuperAgentDocument::getLastIndexTaskId)
@@ -273,13 +328,14 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         long buildStartedNanos = System.nanoTime();
         log.info("开始构建 RAPTOR dataset-level 摘要树，scopeKey={}, documentCount={}, originalChunkCount={}, inputMode={}, inputCount={}, reusableSummaryCount={}",
             scopeKey, sourceDocumentIds.size(), chunks.size(), datasetInputs.inputMode(), datasetInputs.inputs().size(), reusableSummaryNodes.size());
-        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildDatasetRequest(DATASET_DOCUMENT_ID, DATASET_TASK_ID, datasetInputs));
+        RagToolsRaptorBuildResponse response = ragToolsClient.buildRaptor(buildDatasetRequest(DATASET_DOCUMENT_ID, DATASET_TASK_ID, datasetInputs, raptorOptions));
         if (response == null) {
             throw new IllegalStateException("Python RAPTOR dataset-level 构建接口返回为空。");
         }
-        logLlmSummaryFallbacks(DATASET_DOCUMENT_ID, DATASET_TASK_ID, response.getNodes());
-        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor());
-        Map<String, Long> idMap = allocateNodeIds(response.getNodes());
+        logLlmSummaryFallbacks(DATASET_DOCUMENT_ID, DATASET_TASK_ID, response.getNodes(), Boolean.TRUE.equals(raptorOptions.getRaptorLlmSummaryEnabled()));
+        double qualityFloor = qualityFloor(raptorOptions);
+        RaptorQualityReport sourceQualityReport = raptorQualityService.evaluatePythonNodes(response.getNodes(), qualityFloor);
+        Map<String, Long> idMap = allocateNodeIds(response.getNodes(), qualityFloor);
         List<SuperAgentRaptorNode> nodes = buildNodeEntities(
             DATASET_DOCUMENT_ID,
             DATASET_TASK_ID,
@@ -289,14 +345,15 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             idMap,
             sourceDocumentIds,
             sourceTaskIds,
-            datasetInputs
+            datasetInputs,
+            qualityFloor
         );
         if (CollUtil.isEmpty(nodes)) {
             log.info("RAPTOR dataset-level 构建没有达到质量阈值的摘要节点，scopeKey={}, qualityFloor={}",
-                scopeKey, qualityFloor());
+                scopeKey, qualityFloor);
             return RaptorBuildResult.builder()
                 .sourceQualityReport(sourceQualityReport)
-                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor()))
+                .savedQualityReport(raptorQualityService.evaluatePythonNodes(List.of(), qualityFloor))
                 .build();
         }
         MybatisBatchExecutor.insertBatch(SuperAgentRaptorNode.class, nodes);
@@ -321,7 +378,7 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
             .reusableSummaryInputCount(datasetInputs.reusableSummaryInputCount())
             .originalChunkInputCount(datasetInputs.originalChunkInputCount())
             .sourceQualityReport(sourceQualityReport)
-            .savedQualityReport(raptorQualityService.evaluate(nodes, qualityFloor()))
+            .savedQualityReport(raptorQualityService.evaluate(nodes, qualityFloor))
             .build();
         log.info("RAPTOR dataset-level 摘要树构建完成: scopeKey={}, documentCount={}, inputMode={}, inputCount={}, nodeCount={}, levelCount={}, sourceChunkCount={}, costMillis={}",
             scopeKey, sourceDocumentIds.size(), result.getInputMode(), result.getInputCount(), result.getNodeCount(), result.getLevelCount(), result.getSourceChunkCount(), elapsedMillis(buildStartedNanos));
@@ -378,13 +435,16 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         }
     }
 
-    private RagToolsRaptorBuildRequest buildRequest(Long documentId, Long taskId, List<SuperAgentDocumentChunk> chunks) {
+    private RagToolsRaptorBuildRequest buildRequest(Long documentId,
+                                                    Long taskId,
+                                                    List<SuperAgentDocumentChunk> chunks,
+                                                    KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorOptions) {
         RagToolsRaptorBuildRequest request = new RagToolsRaptorBuildRequest();
         request.setDocumentId(documentId);
         request.setTaskId(taskId);
-        request.setMaxClusterSize(maxClusterSize);
-        request.setMaxLevels(maxLevels);
-        request.setLlmSummaryEnabled(Boolean.TRUE.equals(llmSummaryEnabled));
+        request.setMaxClusterSize(raptorOptions.getRaptorMaxClusterSize());
+        request.setMaxLevels(raptorOptions.getRaptorMaxLevels());
+        request.setLlmSummaryEnabled(Boolean.TRUE.equals(raptorOptions.getRaptorLlmSummaryEnabled()));
 
         List<RagToolsRaptorBuildRequest.Chunk> requestChunks = new ArrayList<>();
         for (SuperAgentDocumentChunk chunk : chunks) {
@@ -413,13 +473,14 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
 
     private RagToolsRaptorBuildRequest buildDatasetRequest(Long documentId,
                                                            Long taskId,
-                                                           RaptorDatasetBuildSupport.DatasetInputs datasetInputs) {
+                                                           RaptorDatasetBuildSupport.DatasetInputs datasetInputs,
+                                                           KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorOptions) {
         RagToolsRaptorBuildRequest request = new RagToolsRaptorBuildRequest();
         request.setDocumentId(documentId);
         request.setTaskId(taskId);
-        request.setMaxClusterSize(maxClusterSize);
-        request.setMaxLevels(maxLevels);
-        request.setLlmSummaryEnabled(Boolean.TRUE.equals(llmSummaryEnabled));
+        request.setMaxClusterSize(raptorOptions.getRaptorMaxClusterSize());
+        request.setMaxLevels(raptorOptions.getRaptorMaxLevels());
+        request.setLlmSummaryEnabled(Boolean.TRUE.equals(raptorOptions.getRaptorLlmSummaryEnabled()));
 
         List<RagToolsRaptorBuildRequest.Chunk> requestChunks = new ArrayList<>();
         int chunkNo = 1;
@@ -445,13 +506,14 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return metadata;
     }
 
-    private Map<String, Long> allocateNodeIds(List<RagToolsRaptorBuildResponse.Node> extractedNodes) {
+    private Map<String, Long> allocateNodeIds(List<RagToolsRaptorBuildResponse.Node> extractedNodes,
+                                              double qualityFloor) {
         Map<String, Long> idMap = new LinkedHashMap<>();
         if (CollUtil.isEmpty(extractedNodes)) {
             return idMap;
         }
         for (RagToolsRaptorBuildResponse.Node node : extractedNodes) {
-            if (node != null && StrUtil.isNotBlank(node.getId()) && summaryQualityScore(node) >= qualityFloor()) {
+            if (node != null && StrUtil.isNotBlank(node.getId()) && summaryQualityScore(node) >= qualityFloor) {
                 idMap.put(node.getId(), uidGenerator.getUid());
             }
         }
@@ -466,7 +528,8 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                                                          Map<String, Long> idMap,
                                                          List<Long> sourceDocumentIds,
                                                          List<Long> sourceTaskIds,
-                                                         RaptorDatasetBuildSupport.DatasetInputs datasetInputs) {
+                                                         RaptorDatasetBuildSupport.DatasetInputs datasetInputs,
+                                                         double qualityFloor) {
         if (CollUtil.isEmpty(extractedNodes)) {
             return List.of();
         }
@@ -520,9 +583,9 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
                 "summaryQualityScore", summaryQualityScore(extracted),
                 "sourceMetadata", extracted.getMetadata()
             )));
-            if (summaryQualityScore(extracted) < qualityFloor()) {
+            if (summaryQualityScore(extracted) < qualityFloor) {
                 log.info("跳过低质量 RAPTOR 摘要节点: documentId={}, taskId={}, sourceNodeId={}, qualityScore={}, floor={}",
-                    documentId, taskId, extracted.getId(), summaryQualityScore(extracted), qualityFloor());
+                    documentId, taskId, extracted.getId(), summaryQualityScore(extracted), qualityFloor);
                 continue;
             }
             node.setStatus(BusinessStatus.YES.getCode());
@@ -685,6 +748,30 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return Math.min(configured, EMBEDDING_BATCH_SIZE_LIMIT);
     }
 
+    private KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorBuildOptionsByDocumentId(Long documentId) {
+        if (indexingConfigResolver == null) {
+            return defaultRaptorBuildOptions();
+        }
+        return indexingConfigResolver.resolveByDocumentId(documentId).getRaptor();
+    }
+
+    private KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorBuildOptionsByKnowledgeBaseId(Long knowledgeBaseId) {
+        if (indexingConfigResolver == null) {
+            return defaultRaptorBuildOptions();
+        }
+        return indexingConfigResolver.resolveByKnowledgeBaseId(knowledgeBaseId).getRaptor();
+    }
+
+    private KnowledgeBaseIndexingOptions.RaptorBuildOptions defaultRaptorBuildOptions() {
+        return KnowledgeBaseIndexingOptions.fromDefaults(
+            properties,
+            maxClusterSize,
+            maxLevels,
+            llmSummaryEnabled,
+            summaryQualityFloor
+        ).getRaptor();
+    }
+
     private long elapsedMillis(long startedNanos) {
         return (System.nanoTime() - startedNanos) / 1_000_000L;
     }
@@ -728,8 +815,11 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return metadata;
     }
 
-    private void logLlmSummaryFallbacks(Long documentId, Long taskId, List<RagToolsRaptorBuildResponse.Node> extractedNodes) {
-        if (!Boolean.TRUE.equals(llmSummaryEnabled) || CollUtil.isEmpty(extractedNodes)) {
+    private void logLlmSummaryFallbacks(Long documentId,
+                                        Long taskId,
+                                        List<RagToolsRaptorBuildResponse.Node> extractedNodes,
+                                        boolean llmSummaryRequested) {
+        if (!llmSummaryRequested || CollUtil.isEmpty(extractedNodes)) {
             return;
         }
         for (RagToolsRaptorBuildResponse.Node node : extractedNodes) {
@@ -778,11 +868,12 @@ public class RaptorBuildServiceImpl implements RaptorBuildService {
         return Math.max(0D, Math.min(1D, extracted.getQualityScore()));
     }
 
-    private double qualityFloor() {
-        if (summaryQualityFloor == null) {
+    private double qualityFloor(KnowledgeBaseIndexingOptions.RaptorBuildOptions raptorOptions) {
+        Double configuredFloor = raptorOptions == null ? summaryQualityFloor : raptorOptions.getRaptorSummaryQualityFloor();
+        if (configuredFloor == null) {
             return 0.42D;
         }
-        return Math.max(0D, Math.min(1D, summaryQualityFloor));
+        return Math.max(0D, Math.min(1D, configuredFloor));
     }
 
     private Object metadataValue(String json, String key) {

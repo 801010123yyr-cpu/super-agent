@@ -15,6 +15,8 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String SCORE = "score";
     public static final String DOCUMENT_ID = "documentId";
     public static final String DOCUMENT_NAME = "documentName";
+    public static final String KNOWLEDGE_BASE_ID = "knowledgeBaseId";
+    public static final String KNOWLEDGE_BASE_NAME = "knowledgeBaseName";
     public static final String TASK_ID = "taskId";
     public static final String PARENT_BLOCK_ID = "parentBlockId";
     public static final String PARENT_BLOCK_NO = "parentBlockNo";
@@ -33,10 +35,6 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String PAGE_RANGE = "pageRange";
     public static final String BBOX_JSON = "bboxJson";
     public static final String SOURCE_BLOCK_IDS = "sourceBlockIds";
-    public static final String KNOWLEDGE_SCOPE_CODE = "knowledgeScopeCode";
-    public static final String KNOWLEDGE_SCOPE_NAME = "knowledgeScopeName";
-    public static final String BUSINESS_CATEGORY = "businessCategory";
-    public static final String DOCUMENT_TAGS = "documentTags";
     public static final String TITLE = "title";
     public static final String URL = "url";
     public static final String TOOL_NAME = "toolName";
@@ -53,6 +51,23 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String RERANK_ERROR = "rerankError";
     public static final String RERANK_CANDIDATE_COUNT = "rerankCandidateCount";
     public static final String RERANK_TOP_K = "rerankTopK";
+    public static final String FINAL_SELECTION_REASON = "finalSelectionReason";
+    public static final String FINAL_SELECTION_RESERVE_TYPE = "finalSelectionReserveType";
+    public static final String SOURCE_STRUCTURE_ANCHOR = "sourceStructureAnchor";
+    public static final String STRUCTURE_ANCHOR_MATCH_TYPE = "structureAnchorMatchType";
+    public static final String STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW = "structureAnchorBypassReserveWindow";
+    public static final String STRUCTURE_ANCHOR_RAW_BODY = "structureAnchorRawBody";
+    public static final String STRUCTURE_BODY_RESOLVED_FROM = "structureBodyResolvedFrom";
+    public static final String STRUCTURE_BODY_CANDIDATE_KIND = "structureBodyCandidateKind";
+    public static final String EVIDENCE_APPLICABILITY_STATUS = "evidenceApplicabilityStatus";
+    public static final String EVIDENCE_APPLICABILITY_REASON = "evidenceApplicabilityReason";
+    public static final String EVIDENCE_ROLE = "evidenceRole";
+    public static final String EXPECTED_EVIDENCE_ROLES = "expectedEvidenceRoles";
+    public static final String CONTEXT_IDENTITY = "contextIdentity";
+    public static final String CITATION_IDENTITY = "citationIdentity";
+    public static final String CITATION_EVIDENCE_TYPE = "citationEvidenceType";
+    public static final String CONTEXT_ONLY = "contextOnly";
+    public static final String SOURCE_EVIDENCE_RESOLVED = "sourceEvidenceResolved";
     public static final String RETRIEVAL_INTENT = "retrievalIntent";
     public static final String CHANNEL_WEIGHT = "channelWeight";
     public static final String TABLE_ID = "tableId";
@@ -85,6 +100,7 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_RELATION_GROUP_EVIDENCE_COUNT = "kgRelationGroupEvidenceCount";
     public static final String KG_RELATION_GROUP_DOCUMENT_COUNT = "kgRelationGroupDocumentCount";
     public static final String KG_EVIDENCE_ID = "kgEvidenceId";
+    public static final String KG_EVIDENCE_GROUNDING_LEVEL = "kgEvidenceGroundingLevel";
     public static final String KG_GRAPH_PATH = "kgGraphPath";
     public static final String KG_HOP_COUNT = "kgHopCount";
     public static final String KG_QUERY_PLAN_SOURCE = "kgQueryPlanSource";
@@ -96,6 +112,7 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String KG_COMMUNITY_ID = "kgCommunityId";
     public static final String KG_COMMUNITY_TITLE = "kgCommunityTitle";
     public static final String KG_COMMUNITY_SUMMARY = "kgCommunitySummary";
+    public static final String KG_COMMUNITY_SUMMARY_ONLY = "kgCommunitySummaryOnly";
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_KEY = "kgCrossDocumentCommunityKey";
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT = "kgCrossDocumentCommunityEntityCount";
     public static final String KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT = "kgCrossDocumentCommunityRelationGroupCount";
@@ -126,6 +143,7 @@ public final class DocumentKnowledgeMetadataKeys {
         KG_RELATION_GROUP_EVIDENCE_COUNT,
         KG_RELATION_GROUP_DOCUMENT_COUNT,
         KG_EVIDENCE_ID,
+        KG_EVIDENCE_GROUNDING_LEVEL,
         KG_GRAPH_PATH,
         KG_HOP_COUNT,
         KG_QUERY_PLAN_SOURCE,
@@ -137,6 +155,7 @@ public final class DocumentKnowledgeMetadataKeys {
         KG_COMMUNITY_ID,
         KG_COMMUNITY_TITLE,
         KG_COMMUNITY_SUMMARY,
+        KG_COMMUNITY_SUMMARY_ONLY,
         KG_CROSS_DOCUMENT_COMMUNITY_KEY,
         KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT,
         KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT,
@@ -156,6 +175,7 @@ public final class DocumentKnowledgeMetadataKeys {
     public static final String RAPTOR_NODE_TITLE = "raptorNodeTitle";
     public static final String RAPTOR_NODE_LEVEL = "raptorNodeLevel";
     public static final String RAPTOR_SUMMARY = "raptorSummary";
+    public static final String RAPTOR_SOURCE_STATUS = "raptorSourceStatus";
 
     private DocumentKnowledgeMetadataKeys() {
     }

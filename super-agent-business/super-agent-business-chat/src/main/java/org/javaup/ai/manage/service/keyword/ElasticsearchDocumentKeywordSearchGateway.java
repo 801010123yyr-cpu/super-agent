@@ -214,24 +214,9 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
                         bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                             .query(retrievalQuery)
                             .fields("title^10", "sectionPath^8", "contentWithWeight^6", "questions^5",
-                                "keywords^5", "documentName^4", "knowledgeScopeName^3", "chunkText^2")
+                                "keywords^5", "documentName^4", "chunkText^2")
                             .type(TextQueryType.BestFields)
                         ));
-                        if (filters != null && CollUtil.isNotEmpty(filters.getBusinessCategoryHints())) {
-
-                            bool.should(should -> should.multiMatch(multiMatch -> multiMatch
-                                .query(String.join(" ", filters.getBusinessCategoryHints()))
-                                .fields("businessCategory^5", "knowledgeScopeName^2")
-                                .type(TextQueryType.BestFields)
-                            ));
-                        }
-                        if (filters != null && CollUtil.isNotEmpty(filters.getDocumentTagHints())) {
-                            bool.should(should -> should.multiMatch(multiMatch -> multiMatch
-                                .query(String.join(" ", filters.getDocumentTagHints()))
-                                .fields("documentTags^4", "keywords^3", "documentName^2", "contentWithWeight^2", "chunkText")
-                                .type(TextQueryType.BestFields)
-                            ));
-                        }
                         if (filters != null && CollUtil.isNotEmpty(filters.getDocumentNameHints())) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", filters.getDocumentNameHints()))
@@ -249,7 +234,7 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
                         if (CollUtil.isNotEmpty(queryContextHints)) {
                             bool.should(should -> should.multiMatch(multiMatch -> multiMatch
                                 .query(String.join(" ", queryContextHints))
-                                .fields("documentName^2", "knowledgeScopeName^2", "title^3", "sectionPath^2",
+                                .fields("documentName^2", "title^3", "sectionPath^2",
                                     "keywords^3", "questions^3", "contentWithWeight^2", "chunkText")
                                 .type(TextQueryType.BestFields)
                             ));
@@ -346,6 +331,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
             .parentBlockId(chunk.getParentBlockId())
             .chunkNo(chunk.getChunkNo())
             .documentName(document == null ? "" : safeText(document.getDocumentName()))
+            .knowledgeBaseId(document == null ? null : document.getKnowledgeBaseId())
+            .knowledgeBaseName(document == null ? "" : safeText(document.getKnowledgeBaseName()))
             .sectionPath(safeText(chunk.getSectionPath()))
             .structureNodeId(chunk.getStructureNodeId())
             .structureNodeType(chunk.getStructureNodeType())
@@ -355,10 +342,6 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
             .pageRange(safeText(chunk.getPageRange()))
             .bboxJson(safeText(chunk.getBboxJson()))
             .sourceBlockIds(safeText(chunk.getSourceBlockIds()))
-            .knowledgeScopeCode(document == null ? "" : safeText(document.getKnowledgeScopeCode()))
-            .knowledgeScopeName(document == null ? "" : safeText(document.getKnowledgeScopeName()))
-            .businessCategory(document == null ? "" : safeText(document.getBusinessCategory()))
-            .documentTags(splitTags(document == null ? "" : document.getDocumentTags()))
             .contentWithWeight(safeText(chunk.getContentWithWeight()))
             .chunkType(safeText(chunk.getChunkType()))
             .title(safeText(chunk.getTitle()))
@@ -389,10 +372,8 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
         metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, safeText(source.getBboxJson()));
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(source.getSourceBlockIds()));
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(source.getDocumentName()));
-        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE, safeText(source.getKnowledgeScopeCode()));
-        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME, safeText(source.getKnowledgeScopeName()));
-        metadata.put(DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY, safeText(source.getBusinessCategory()));
-        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS, String.join(",", source.getDocumentTags()));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, source.getKnowledgeBaseId());
+        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(source.getKnowledgeBaseName()));
         metadata.put(DocumentKnowledgeMetadataKeys.CONTENT_WITH_WEIGHT, safeText(source.getContentWithWeight()));
         metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, safeText(source.getChunkType()));
         metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(source.getTitle()));
@@ -424,17 +405,6 @@ public class ElasticsearchDocumentKeywordSearchGateway implements DocumentKeywor
 
     private int resolveTopK(int topK) {
         return topK <= 0 ? 10 : Math.min(topK, 50);
-    }
-
-    private List<String> splitTags(String documentTags) {
-        if (StrUtil.isBlank(documentTags)) {
-            return List.of();
-        }
-        return Arrays.stream(documentTags.split(","))
-            .map(String::trim)
-            .filter(StrUtil::isNotBlank)
-            .distinct()
-            .toList();
     }
 
     private List<String> readStringArray(String text) {

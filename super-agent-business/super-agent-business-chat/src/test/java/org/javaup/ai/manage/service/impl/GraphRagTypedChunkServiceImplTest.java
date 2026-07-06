@@ -83,6 +83,33 @@ class GraphRagTypedChunkServiceImplTest {
             .containsEntry(DocumentKnowledgeMetadataKeys.KG_RANK_BOOST, 0.82);
     }
 
+    @Test
+    void enrichMetadataDoesNotOverwriteKnowledgeBaseMetadataWithLegacyBlankValues() {
+        ObjectMapper objectMapper = new ObjectMapper();
+        GraphRagTypedChunkMetadataSupport metadataSupport = new GraphRagTypedChunkMetadataSupport(objectMapper);
+        Map<String, Object> legacySourceMetadata = new java.util.LinkedHashMap<>();
+        legacySourceMetadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, "");
+        legacySourceMetadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, "");
+        legacySourceMetadata.put(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "ReleaseControl");
+
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, 1001L);
+        metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, "生产运维知识库");
+
+        metadataSupport.enrichMetadata(
+            metadata,
+            GraphRagTypedChunkMetadataSupport.CHUNK_TYPE_ENTITY,
+            metadataSupport.writeSourceMetadata(legacySourceMetadata)
+        );
+
+        assertThat(metadata)
+            .containsEntry(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "GRAPH_RAG")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, 1001L)
+            .containsEntry(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, "生产运维知识库")
+            .containsEntry(DocumentKnowledgeMetadataKeys.KG_ENTITY_NAME, "ReleaseControl");
+    }
+
     private static List<SuperAgentKgEntity> entities(ObjectMapper objectMapper) {
         return List.of(
             entity(1001L, "SuperAgent", "SYSTEM", "超级智能体主链路。",

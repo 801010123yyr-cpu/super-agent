@@ -53,10 +53,38 @@ public class GraphRagTypedChunkMetadataSupport {
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, SOURCE_TYPE_GRAPH_RAG);
         Map<String, Object> sourceMetadata = readSourceMetadata(sourceBlockIds);
         for (Map.Entry<String, Object> entry : sourceMetadata.entrySet()) {
-            if (entry.getValue() != null) {
-                metadata.put(entry.getKey(), entry.getValue());
+            if (entry.getValue() == null) {
+                continue;
             }
+            if (isKnowledgeBaseMetadataKey(entry.getKey())) {
+                mergeKnowledgeBaseMetadata(metadata, entry.getKey(), entry.getValue());
+                continue;
+            }
+            metadata.put(entry.getKey(), entry.getValue());
         }
+    }
+
+    private void mergeKnowledgeBaseMetadata(Map<String, Object> metadata, String key, Object sourceValue) {
+        if (!isMeaningfulMetadataValue(sourceValue)) {
+            return;
+        }
+        Object existingValue = metadata.get(key);
+        if (isMeaningfulMetadataValue(existingValue)) {
+            return;
+        }
+        metadata.put(key, sourceValue);
+    }
+
+    private boolean isKnowledgeBaseMetadataKey(String key) {
+        return DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID.equals(key)
+            || DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME.equals(key);
+    }
+
+    private boolean isMeaningfulMetadataValue(Object value) {
+        if (value == null) {
+            return false;
+        }
+        return !(value instanceof String text) || !text.isBlank();
     }
 
     public Map<String, Object> readSourceMetadata(String sourceBlockIds) {

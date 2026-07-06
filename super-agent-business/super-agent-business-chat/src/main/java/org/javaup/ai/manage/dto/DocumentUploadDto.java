@@ -15,11 +15,5 @@ public class DocumentUploadDto {
 
     private String operatorId;
 
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
-
-    private String businessCategory;
-
-    private String documentTags;
+    private String knowledgeBaseId;
 }

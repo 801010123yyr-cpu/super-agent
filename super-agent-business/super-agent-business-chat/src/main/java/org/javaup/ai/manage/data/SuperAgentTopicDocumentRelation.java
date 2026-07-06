@@ -26,7 +26,9 @@ public class SuperAgentTopicDocumentRelation extends BaseTableData {
     @TableId(value = "id", type = IdType.INPUT)
     private Long id;
 
-    private String topicCode;
+    private Long knowledgeBaseId;
+
+    private Long topicId;
 
     private Long documentId;
 

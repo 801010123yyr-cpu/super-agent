@@ -81,7 +81,7 @@ public class DocumentStructureNodeServiceImpl implements DocumentStructureNodeSe
         LambdaQueryWrapper<SuperAgentDocumentStructureNode> wrapper = new LambdaQueryWrapper<SuperAgentDocumentStructureNode>()
             .eq(SuperAgentDocumentStructureNode::getDocumentId, documentId)
             .eq(SuperAgentDocumentStructureNode::getStatus, BusinessStatus.YES.getCode())
-            .orderByAsc(SuperAgentDocumentStructureNode::getNodeNo);
+            .orderByAsc(SuperAgentDocumentStructureNode::getNodeNo, SuperAgentDocumentStructureNode::getId);
         if (parseTaskId != null) {
             wrapper.eq(SuperAgentDocumentStructureNode::getParseTaskId, parseTaskId);
         }
@@ -95,6 +95,49 @@ public class DocumentStructureNodeServiceImpl implements DocumentStructureNodeSe
             result.put(node.getId(), node);
         }
         return result;
+    }
+
+    @Override
+    public List<SuperAgentDocumentStructureNode> listChildren(Long documentId, Long parseTaskId, Long parentNodeId) {
+        if (documentId == null || parentNodeId == null) {
+            return List.of();
+        }
+        LambdaQueryWrapper<SuperAgentDocumentStructureNode> wrapper = new LambdaQueryWrapper<SuperAgentDocumentStructureNode>()
+            .eq(SuperAgentDocumentStructureNode::getDocumentId, documentId)
+            .eq(SuperAgentDocumentStructureNode::getParentNodeId, parentNodeId)
+            .eq(SuperAgentDocumentStructureNode::getStatus, BusinessStatus.YES.getCode())
+            .orderByAsc(SuperAgentDocumentStructureNode::getNodeNo, SuperAgentDocumentStructureNode::getId);
+        if (parseTaskId != null) {
+            wrapper.eq(SuperAgentDocumentStructureNode::getParseTaskId, parseTaskId);
+        }
+        return structureNodeMapper.selectList(wrapper);
+    }
+
+    @Override
+    public SuperAgentDocumentStructureNode findById(Long documentId, Long parseTaskId, Long nodeId) {
+        if (documentId == null || nodeId == null) {
+            return null;
+        }
+        LambdaQueryWrapper<SuperAgentDocumentStructureNode> wrapper = new LambdaQueryWrapper<SuperAgentDocumentStructureNode>()
+            .eq(SuperAgentDocumentStructureNode::getDocumentId, documentId)
+            .eq(SuperAgentDocumentStructureNode::getId, nodeId)
+            .eq(SuperAgentDocumentStructureNode::getStatus, BusinessStatus.YES.getCode());
+        if (parseTaskId != null) {
+            wrapper.eq(SuperAgentDocumentStructureNode::getParseTaskId, parseTaskId);
+        }
+        return structureNodeMapper.selectOne(wrapper);
+    }
+
+    @Override
+    public SuperAgentDocumentStructureNode findPreviousSibling(Long documentId, Long parseTaskId, Long nodeId) {
+        SuperAgentDocumentStructureNode node = findById(documentId, parseTaskId, nodeId);
+        return node == null ? null : findById(documentId, parseTaskId, node.getPrevSiblingNodeId());
+    }
+
+    @Override
+    public SuperAgentDocumentStructureNode findNextSibling(Long documentId, Long parseTaskId, Long nodeId) {
+        SuperAgentDocumentStructureNode node = findById(documentId, parseTaskId, nodeId);
+        return node == null ? null : findById(documentId, parseTaskId, node.getNextSiblingNodeId());
     }
 
     @Override

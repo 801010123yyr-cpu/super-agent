@@ -36,6 +36,14 @@ public class SuperAgentKnowledgeRouteTrace extends BaseTableData {
 
     private String mode;
 
+    private String knowledgeBaseSelectionMode;
+
+    private String selectedKnowledgeBaseIdsJson;
+
+    private String selectedKnowledgeBaseNamesJson;
+
+    private String allowedDocumentIdsJson;
+
     private String topScopesJson;
 
     private String topTopicsJson;

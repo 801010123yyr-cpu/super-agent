@@ -1,6 +1,7 @@
 package org.javaup.ai.chatagent.rag.support;
 
 import org.javaup.ai.chatagent.model.SearchReference;
+import org.javaup.ai.chatagent.rag.model.EvidenceIdentity;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.springframework.ai.document.Document;
 
@@ -33,6 +34,15 @@ public final class SearchReferenceMapper {
         reference.setSubQuestion(subQuestion);
         reference.setChannel(asText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL), "vector"));
         reference.setScore(asDouble(metadata.get(DocumentKnowledgeMetadataKeys.SCORE)));
+        reference.setFinalSelectionReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON), ""));
+        reference.setEvidenceApplicabilityStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS), ""));
+        reference.setEvidenceApplicabilityReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_REASON), ""));
+        reference.setEvidenceRole(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_ROLE), ""));
+        reference.setContextIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CONTEXT_IDENTITY), ""));
+        reference.setCitationIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_IDENTITY), ""));
+        reference.setCitationEvidenceType(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_EVIDENCE_TYPE), ""));
+        reference.setContextOnly(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.CONTEXT_ONLY)));
+        reference.setSourceEvidenceResolved(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_EVIDENCE_RESOLVED)));
 
         if ("WEB".equalsIgnoreCase(sourceType)) {
             reference.setTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.TITLE), "网页来源"));
@@ -44,17 +54,18 @@ public final class SearchReferenceMapper {
         reference.setTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME), "文档片段"));
         reference.setDocumentId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID)));
         reference.setDocumentName(asText(metadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME), ""));
+        reference.setKnowledgeBaseId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID)));
+        reference.setKnowledgeBaseName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME), ""));
         reference.setParentBlockId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID)));
         reference.setParentBlockNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO)));
         reference.setChunkId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID)));
+        reference.setChunkType(asText(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE), ""));
         reference.setChunkNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_NO)));
         reference.setSectionPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.SECTION_PATH), ""));
         reference.setStructureNodeId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID)));
         reference.setStructureNodeType(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE)));
         reference.setCanonicalPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.CANONICAL_PATH), ""));
         reference.setItemIndex(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.ITEM_INDEX)));
-        reference.setKnowledgeScopeCode(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE), ""));
-        reference.setKnowledgeScopeName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME), ""));
         reference.setPageNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_NO)));
         reference.setPageRange(asText(metadata.get(DocumentKnowledgeMetadataKeys.PAGE_RANGE), ""));
         reference.setBboxJson(asText(metadata.get(DocumentKnowledgeMetadataKeys.BBOX_JSON), ""));
@@ -89,6 +100,7 @@ public final class SearchReferenceMapper {
         reference.setKgRelationGroupEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_EVIDENCE_COUNT)));
         reference.setKgRelationGroupDocumentCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_GROUP_DOCUMENT_COUNT)));
         reference.setKgEvidenceId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_ID)));
+        reference.setKgEvidenceGroundingLevel(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL), ""));
         reference.setKgGraphPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_GRAPH_PATH), ""));
         reference.setKgHopCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_HOP_COUNT)));
         reference.setKgQueryPlanSource(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_QUERY_PLAN_SOURCE), ""));
@@ -98,6 +110,7 @@ public final class SearchReferenceMapper {
         reference.setKgNhopSeedEntityName(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_SEED_ENTITY_NAME), ""));
         reference.setKgNhopPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_NHOP_PATH), ""));
         reference.setKgCrossDocumentCommunityKey(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_KEY), ""));
+        reference.setKgCommunitySummaryOnly(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY)));
         reference.setKgCrossDocumentCommunityEntityCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_ENTITY_COUNT)));
         reference.setKgCrossDocumentCommunityRelationGroupCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_RELATION_GROUP_COUNT)));
         reference.setKgCrossDocumentCommunityEvidenceCount(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.KG_CROSS_DOCUMENT_COMMUNITY_EVIDENCE_COUNT)));
@@ -114,7 +127,29 @@ public final class SearchReferenceMapper {
         reference.setRaptorNodeTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_TITLE), ""));
         reference.setRaptorNodeLevel(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL)));
         reference.setRaptorSummary(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SUMMARY), ""));
+        reference.setRaptorSourceStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SOURCE_STATUS), ""));
+        reference.setQuoteText(asText(metadata.get(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET), ""));
+        enrichEvidenceIdentity(reference);
         return reference;
+    }
+
+    private static void enrichEvidenceIdentity(SearchReference reference) {
+        EvidenceIdentity citationIdentity = EvidenceIdentityResolver.citationIdentity(reference);
+        EvidenceIdentity contextIdentity = EvidenceIdentityResolver.contextIdentity(reference);
+        if (citationIdentity != null && citationIdentity.present()) {
+            reference.setCitationIdentity(citationIdentity.value());
+            reference.setCitationEvidenceType(citationIdentity.type().name());
+            reference.setSourceEvidenceResolved(true);
+            reference.setContextOnly(false);
+        }
+        else {
+            reference.setCitationEvidenceType("CONTEXT_ONLY");
+            reference.setSourceEvidenceResolved(false);
+            reference.setContextOnly(true);
+        }
+        if (contextIdentity != null && contextIdentity.present()) {
+            reference.setContextIdentity(contextIdentity.value());
+        }
     }
 
     private static String asText(Object value, String defaultValue) {
@@ -131,6 +166,13 @@ public final class SearchReferenceMapper {
 
     private static Double asDouble(Object value) {
         return value instanceof Number number ? number.doubleValue() : null;
+    }
+
+    private static boolean asBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
     }
 
     private static List<Long> asLongList(Object value) {

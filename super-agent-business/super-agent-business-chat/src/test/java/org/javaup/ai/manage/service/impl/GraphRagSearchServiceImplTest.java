@@ -1547,6 +1547,66 @@ class GraphRagSearchServiceImplTest {
         assertThat(results).isEmpty();
     }
 
+    @Test
+    void controlledRelationProfilePromotesResponsibilityQuoteOverWeakRelationAndEntityAlias() {
+        SuperAgentKgEntity serviceEntity = entity(9001L, 90L, 91L, "PaymentService", "PaySvc", "SYSTEM", "PaymentService handles payments.");
+        SuperAgentKgEntity ownerTeam = entity(9002L, 90L, 91L, "OwnerTeam", null, "ORG", "OwnerTeam maintains services.");
+        SuperAgentKgEntity auditLog = entity(9003L, 90L, 91L, "AuditLog", null, "PROCESS", "AuditLog stores events.");
+        SuperAgentKgRelation strongRelation = relation(9101L, 90L, 91L, 9001L, 9002L, "RESPONSIBLE_FOR",
+            "PaymentService is maintained by OwnerTeam.", 0.35D);
+        SuperAgentKgRelation weakRelation = relation(9102L, 90L, 91L, 9001L, 9003L, "ASSOCIATED_WITH",
+            "PaymentService is associated with AuditLog.", 1.0D);
+        SuperAgentKgEvidence strongEvidence = evidence(9201L, 90L, 91L, 9301L, 9401L, 9101L, null,
+            "PaymentService is maintained by OwnerTeam.", 2);
+        SuperAgentKgEvidence weakEvidence = evidence(9202L, 90L, 91L, 9302L, 9402L, 9102L, null,
+            "PaymentService sends audit events to AuditLog.", 3);
+        SuperAgentKgEvidence entityEvidence = evidence(9203L, 90L, 91L, 9303L, 9403L, null, 9001L,
+            "PaySvc is another name for PaymentService.", 4);
+        AtomicInteger advisorCallCount = new AtomicInteger();
+        GraphRagQueryPlanAdvisor advisor = (question, catalog) -> {
+            advisorCallCount.incrementAndGet();
+            return Optional.of(GraphRagQueryPlanAdvice.builder()
+                .graphQuery(true)
+                .entitiesFromQuery(List.of("PaymentService"))
+                .entityNames(List.of("PaymentService"))
+                .answerTypeKeywords(List.of("ORG"))
+                .relationTypes(List.of("RESPONSIBLE_FOR"))
+                .relationQuestion(true)
+                .maxHops(1)
+                .confidence(0.91D)
+                .reason("问题询问责任主体，Java 只采纳 KG 中存在的 RESPONSIBLE_FOR")
+                .build());
+        };
+
+        GraphRagSearchServiceImpl service = new GraphRagSearchServiceImpl(
+            mapper(SuperAgentKgEntityMapper.class, List.of(serviceEntity, ownerTeam, auditLog), null),
+            mapper(SuperAgentKgRelationMapper.class, List.of(strongRelation, weakRelation), null),
+            mapper(SuperAgentKgEvidenceMapper.class, List.of(strongEvidence, weakEvidence, entityEvidence), null),
+            mapper(SuperAgentKgCommunityMapper.class, List.<SuperAgentKgCommunity>of(), null),
+            new ObjectMapper(),
+            advisor
+        );
+
+        List<GraphRagSearchResult> results = service.search(
+            "PaymentService 的责任主体是谁？",
+            List.of(90L),
+            List.of(91L),
+            3,
+            1
+        );
+
+        assertThat(advisorCallCount).hasValue(1);
+        assertThat(results).isNotEmpty();
+        assertThat(results.get(0).getRelationId()).isEqualTo(9101L);
+        assertThat(results.get(0).getRelationType()).isEqualTo("RESPONSIBLE_FOR");
+        assertThat(results)
+            .extracting(GraphRagSearchResult::getRelationId)
+            .contains(9102L);
+        assertThat(results)
+            .filteredOn(item -> Long.valueOf(9203L).equals(item.getEvidenceId()))
+            .isNotEmpty();
+    }
+
     private static SuperAgentKgEntity entity(Long id,
                                              Long documentId,
                                              Long taskId,

@@ -14,19 +14,19 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class TopicDocumentRelationItemVo {
 
-    private String topicCode;
+    private String knowledgeBaseId;
+
+    private String topicId;
+
+    private String topicName;
+
+    private String scopeId;
+
+    private String scopeName;
 
     private String documentId;
 
     private String documentName;
-
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
-
-    private String businessCategory;
-
-    private String documentTags;
 
     private String relationScore;
 

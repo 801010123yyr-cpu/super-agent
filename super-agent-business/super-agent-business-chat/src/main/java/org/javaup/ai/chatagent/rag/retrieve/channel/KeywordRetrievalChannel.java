@@ -3,6 +3,7 @@ package org.javaup.ai.chatagent.rag.retrieve.channel;
 import cn.hutool.core.collection.CollectionUtil;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
+import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.service.DocumentRetrieveRequestFactory;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.enums.RetrievalChannelEnum;
@@ -40,14 +41,14 @@ public class KeywordRetrievalChannel implements RetrievalChannel {
     @Override
     public boolean supports(ConversationExecutionPlan plan) {
 
-        return properties.isKeywordChannelEnabled()
+        return RagRuntimeOptions.resolve(plan, properties).isKeywordChannelEnabled()
             && hasDocumentScope(plan);
     }
 
     @Override
     public RetrievalChannelResult retrieve(String subQuestion, ConversationExecutionPlan plan) {
         List<Document> documentList = documentKnowledgeService.keywordSearch(
-            documentRetrieveRequestFactory.build(subQuestion, plan, properties.getKeywordTopK())
+            documentRetrieveRequestFactory.build(subQuestion, plan, RagRuntimeOptions.resolve(plan, properties).getKeywordTopK())
         );
 
         return new RetrievalChannelResult(

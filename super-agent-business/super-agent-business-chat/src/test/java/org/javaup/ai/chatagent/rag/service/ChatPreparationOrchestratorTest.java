@@ -4,18 +4,24 @@ import org.javaup.ai.chatagent.model.memory.ConversationMemoryContext;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentNavigationDecision;
+import org.javaup.ai.chatagent.rag.model.EvidenceAnchor;
 import org.javaup.ai.chatagent.rag.model.ExecutionMode;
+import org.javaup.ai.chatagent.rag.model.QueryType;
+import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRewriteResult;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
 import org.javaup.ai.chatagent.service.ConversationMemoryService;
 import org.javaup.ai.chatagent.service.TaskInfo;
 import org.javaup.ai.chatagent.support.StreamEventMetadata;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.KnowledgeBaseSelectionSnapshot;
 import org.javaup.ai.manage.model.route.DocumentRouteCandidate;
+import org.javaup.ai.manage.model.route.KnowledgeRouteContext;
 import org.javaup.ai.manage.model.route.KnowledgeRouteDecision;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.KnowledgeRouteService;
 import org.javaup.enums.ChatQueryMode;
+import org.javaup.enums.KnowledgeBaseSelectionMode;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 
@@ -95,15 +101,47 @@ class ChatPreparationOrchestratorTest {
         assertThat(plan.getClarificationReply()).contains("这个问题目前存在文档范围歧义");
     }
 
+    @Test
+    void followUpPlanCarriesPreviousFinalEvidenceAnchor() {
+        ChatRagProperties properties = new ChatRagProperties();
+        EvidenceAnchor anchor = EvidenceAnchor.builder()
+            .documentId(1001L)
+            .documentName("测试文档.md")
+            .sectionPath("14.3.1")
+            .structureNodeId(1431L)
+            .parentBlockId(9001L)
+            .chunkId(8001L)
+            .snippet("上一轮最终证据")
+            .build();
+
+        ChatPreparationOrchestrator orchestrator = new ChatPreparationOrchestrator(
+            properties,
+            new StaticConversationMemoryService(),
+            new AnswerHistoryContextAssembler(properties),
+            new StaticRewriteService(properties),
+            new FollowUpDocumentQuestionRouter(),
+            new StaticKnowledgeRouteService(new KnowledgeRouteDecision()),
+            new StaticDocumentKnowledgeService(),
+            new StaticConversationEvidenceAnchorService(List.of(anchor))
+        );
+
+        ConversationExecutionPlan plan = orchestrator.prepare(documentTaskInfo("第一项和第三项分别是什么？"));
+
+        assertThat(plan.getMode()).isEqualTo(ExecutionMode.RETRIEVAL);
+        assertThat(plan.getAnswerHistoryContext()).isNotNull();
+        assertThat(plan.getAnswerHistoryContext().getEvidenceAnchors()).hasSize(1);
+        assertThat(plan.getAnswerHistoryContext().getStructuredContext())
+            .contains("14.3.1")
+            .contains("9001")
+            .contains("8001");
+        assertThat(plan.getNavigationDecision().getExecutionMode()).isEqualTo(ExecutionMode.RETRIEVAL);
+    }
+
     private static DocumentRouteCandidate candidate(String documentId, String taskId, String name, double score) {
         return new DocumentRouteCandidate(
             documentId,
             name,
             taskId,
-            "scope-a",
-            "测试知识范围",
-            "",
-            "",
             BigDecimal.valueOf(score),
             "test"
         );
@@ -119,6 +157,54 @@ class ChatPreparationOrchestratorTest {
             null,
             "",
             null,
+            KnowledgeBaseSelectionSnapshot.builder()
+                .selectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(1L))
+                .selectedKnowledgeBaseNames(List.of("测试知识库"))
+                .allowedDocuments(List.of(
+                    new KnowledgeDocumentDescriptor(1001L, "O6跨文档图谱-审计系统别名说明B.md", 2001L, 1L, "测试知识库"),
+                    new KnowledgeDocumentDescriptor(1002L, "O6跨文档图谱-审计证据规范A.md", 2002L, 1L, "测试知识库")
+                ))
+                .allowedDocumentIds(List.of(1001L, 1002L))
+                .allowedTaskIds(List.of(2001L, 2002L))
+                .build(),
+            LocalDate.of(2026, 6, 26),
+            "2026年6月26日",
+            null,
+            null,
+            null,
+            null,
+            null,
+            new StreamEventMetadata("conversation-a", 1L),
+            "",
+            "",
+            List.of(),
+            List.of(),
+            Set.of(),
+            System.currentTimeMillis()
+        );
+    }
+
+    private static TaskInfo documentTaskInfo(String question) {
+        return new TaskInfo(
+            "conversation-a",
+            1L,
+            question,
+            ChatQueryMode.DOCUMENT,
+            "trace-a",
+            1001L,
+            "测试文档.md",
+            2001L,
+            KnowledgeBaseSelectionSnapshot.builder()
+                .selectionMode(KnowledgeBaseSelectionMode.SELECTED)
+                .selectedKnowledgeBaseIds(List.of(1L))
+                .selectedKnowledgeBaseNames(List.of("测试知识库"))
+                .allowedDocuments(List.of(
+                    new KnowledgeDocumentDescriptor(1001L, "测试文档.md", 2001L, 1L, "测试知识库")
+                ))
+                .allowedDocumentIds(List.of(1001L))
+                .allowedTaskIds(List.of(2001L))
+                .build(),
             LocalDate.of(2026, 6, 26),
             "2026年6月26日",
             null,
@@ -192,13 +278,22 @@ class ChatPreparationOrchestratorTest {
     private static class StaticDocumentQuestionRouter extends DocumentQuestionRouter {
 
         StaticDocumentQuestionRouter() {
-            super(null, null, null, null, null);
+            super(null, null, null);
         }
 
         @Override
         public DocumentNavigationDecision route(Long documentId,
                                                 String originalQuestion,
                                                 RagRewriteResult rewriteResult) {
+            return route(documentId, originalQuestion, rewriteResult, "", "");
+        }
+
+        @Override
+        public DocumentNavigationDecision route(Long documentId,
+                                                String originalQuestion,
+                                                RagRewriteResult rewriteResult,
+                                                String historySummary,
+                                                String answerRecentTranscript) {
             return DocumentNavigationDecision.builder()
                 .executionMode(ExecutionMode.RETRIEVAL)
                 .retrievalIntent(RetrievalIntent.GRAPH_RAG)
@@ -207,6 +302,49 @@ class ChatPreparationOrchestratorTest {
                     rewriteResult.getSubQuestions()
                 ))
                 .build();
+        }
+    }
+
+    private static class FollowUpDocumentQuestionRouter extends DocumentQuestionRouter {
+
+        FollowUpDocumentQuestionRouter() {
+            super(null, null, null);
+        }
+
+        @Override
+        public DocumentNavigationDecision route(Long documentId,
+                                                String originalQuestion,
+                                                RagRewriteResult rewriteResult,
+                                                String historySummary,
+                                                String answerRecentTranscript) {
+            return DocumentNavigationDecision.builder()
+                .executionMode(ExecutionMode.RETRIEVAL)
+                .retrievalIntent(RetrievalIntent.GENERAL)
+                .queryUnderstanding(QueryUnderstandingResult.builder()
+                    .queryType(QueryType.FOLLOW_UP)
+                    .confidence(0.88D)
+                    .source("test")
+                    .build())
+                .retrievalPlan(new org.javaup.ai.chatagent.rag.model.RetrievalQuestionPlan(
+                    rewriteResult.getRewrittenQuestion(),
+                    rewriteResult.getSubQuestions()
+                ))
+                .build();
+        }
+    }
+
+    private static class StaticConversationEvidenceAnchorService extends ConversationEvidenceAnchorService {
+
+        private final List<EvidenceAnchor> anchors;
+
+        StaticConversationEvidenceAnchorService(List<EvidenceAnchor> anchors) {
+            super(null);
+            this.anchors = anchors;
+        }
+
+        @Override
+        public List<EvidenceAnchor> loadRecentEvidenceAnchors(String conversationId, int limit) {
+            return anchors.stream().limit(Math.max(0, limit)).toList();
         }
     }
 
@@ -219,7 +357,7 @@ class ChatPreparationOrchestratorTest {
         }
 
         @Override
-        public KnowledgeRouteDecision route(String question, String rewriteQuestion) {
+        public KnowledgeRouteDecision route(KnowledgeRouteContext context) {
             return decision;
         }
 
@@ -227,15 +365,13 @@ class ChatPreparationOrchestratorTest {
         public void recordShadowRoute(String conversationId,
                                       long exchangeId,
                                       Long selectedDocumentId,
-                                      String question,
-                                      String rewriteQuestion) {
+                                      KnowledgeRouteContext context) {
         }
 
         @Override
         public void recordAutoRoute(String conversationId,
                                     long exchangeId,
-                                    String question,
-                                    String rewriteQuestion,
+                                    KnowledgeRouteContext context,
                                     KnowledgeRouteDecision decision) {
         }
     }
@@ -244,6 +380,11 @@ class ChatPreparationOrchestratorTest {
 
         @Override
         public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
+            return List.of();
+        }
+
+        @Override
+        public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(java.util.Collection<Long> knowledgeBaseIds) {
             return List.of();
         }
 

@@ -32,6 +32,10 @@ public class DocumentKeywordIndexRecord {
 
     private String documentName;
 
+    private Long knowledgeBaseId;
+
+    private String knowledgeBaseName;
+
     private String sectionPath;
 
     private Long structureNodeId;
@@ -49,15 +53,6 @@ public class DocumentKeywordIndexRecord {
     private String bboxJson;
 
     private String sourceBlockIds;
-
-    private String knowledgeScopeCode;
-
-    private String knowledgeScopeName;
-
-    private String businessCategory;
-
-    @Builder.Default
-    private List<String> documentTags = new ArrayList<>();
 
     private String contentWithWeight;
 

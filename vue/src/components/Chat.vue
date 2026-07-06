@@ -68,14 +68,14 @@
             <div class="mt-3 grid grid-cols-2 gap-3">
               <div v-if="routeExplain.scopePreview?.length" class="grid gap-2">
                 <div class="flex flex-wrap gap-2">
-                  <span v-for="(item, index) in routeExplain.scopePreview" :key="`${message.id}-route-scope-${item.scopeCode || index}`"
-                    class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.scopeName || item.scopeCode }} · {{ item.scoreText }}</span>
+                  <span v-for="(item, index) in routeExplain.scopePreview" :key="`${message.id}-route-scope-${item.scopeId || index}`"
+                    class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.scopeName || `范围 ${item.scopeId || index + 1}` }} · {{ item.scoreText }}</span>
                 </div>
               </div>
               <div v-if="routeExplain.topicPreview?.length" class="grid gap-2">
                 <div class="flex flex-wrap gap-2">
-                  <span v-for="(item, index) in routeExplain.topicPreview" :key="`${message.id}-route-topic-${item.topicCode || index}`"
-                    class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.topicName || item.topicCode }} · {{ item.scoreText }}</span>
+                  <span v-for="(item, index) in routeExplain.topicPreview" :key="`${message.id}-route-topic-${item.topicId || index}`"
+                    class="inline-flex items-center rounded-full border border-foreground/[0.08] bg-white/[0.72] px-3 py-1.5 text-xs text-foreground">{{ item.topicName || `主题 ${item.topicId || index + 1}` }} · {{ item.scoreText }}</span>
                 </div>
               </div>
             </div>

@@ -61,4 +61,16 @@ public class SuperAgentChatExchange extends BaseTableData {
 
     @TableField("total_latency_ms")
     private Long totalResponseTimeMs;
+
+    @TableField("knowledge_base_selection_mode")
+    private String knowledgeBaseSelectionMode;
+
+    @TableField("selected_knowledge_base_ids_json")
+    private String selectedKnowledgeBaseIdsJson;
+
+    @TableField("selected_knowledge_base_names_json")
+    private String selectedKnowledgeBaseNamesJson;
+
+    @TableField("retrieval_config_snapshot_json")
+    private String retrievalConfigSnapshotJson;
 }

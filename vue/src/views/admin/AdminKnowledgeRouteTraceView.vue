@@ -276,12 +276,12 @@ const candidateGroups = computed(() => {
   return [
     {
       title: '范围候选', count: selectedRecord.value.scopes.length,
-      items: selectedRecord.value.scopes.map((c) => ({ name: c.scopeName || c.scopeCode, scoreText: c.scoreText })),
+      items: selectedRecord.value.scopes.map((c, index) => ({ name: c.scopeName || `范围 ${c.scopeId || index + 1}`, scoreText: c.scoreText })),
       empty: '当前没有显式范围候选。'
     },
     {
       title: '主题候选', count: selectedRecord.value.topics.length,
-      items: selectedRecord.value.topics.map((c) => ({ name: c.topicName || c.topicCode, scoreText: c.scoreText })),
+      items: selectedRecord.value.topics.map((c, index) => ({ name: c.topicName || `主题 ${c.topicId || index + 1}`, scoreText: c.scoreText })),
       empty: '当前没有显式主题候选。'
     }
   ]
@@ -382,8 +382,8 @@ function recommendationTitle(item) {
 }
 
 function recommendationText(item) {
-  if (item.lowConfidenceWidened || item.statusKey === 'LOW_CONFIDENCE') return '优先补 documentTags、knowledgeScopeName、topic 别名，以及 topic-document relation 的人工确认。'
-  if (item.statusKey === 'FAILED') return '当前路由没有形成稳定候选，先检查上传元数据、文档画像和主题树是否为空。'
+  if (item.lowConfidenceWidened || item.statusKey === 'LOW_CONFIDENCE') return '优先补 topic 别名、示例问题，以及 topic-document relation 的人工确认。'
+  if (item.statusKey === 'FAILED') return '当前路由没有形成稳定候选，先检查文档画像、主题树和主题文档关联是否为空。'
   if (item.mode === 'shadow' && item.missedTop3) return '人工选文档和自动路由差异较大，建议对比问题表达与文档画像的关键词覆盖情况。'
   return '当前样本已经接近可教学展示状态，下一步重点看不同问题类型下是否还能持续稳定。'
 }

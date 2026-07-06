@@ -18,6 +18,7 @@ import org.javaup.ai.manage.data.SuperAgentDocumentStrategyPlan;
 import org.javaup.ai.manage.data.SuperAgentDocumentStrategyStep;
 import org.javaup.ai.manage.data.SuperAgentDocumentTask;
 import org.javaup.ai.manage.data.SuperAgentDocumentTaskLog;
+import org.javaup.ai.manage.data.SuperAgentKnowledgeBase;
 import org.javaup.ai.manage.data.SuperAgentTopicDocumentRelation;
 import org.javaup.ai.manage.dto.DocumentChunkQueryDto;
 import org.javaup.ai.manage.dto.DocumentChunkDetailQueryDto;
@@ -58,6 +59,7 @@ import org.javaup.ai.manage.service.DocumentStrategyService;
 import org.javaup.ai.manage.service.DocumentTaskLogService;
 import org.javaup.ai.manage.service.DocumentVectorGateway;
 import org.javaup.ai.manage.service.GraphRagBuildService;
+import org.javaup.ai.manage.service.KnowledgeBaseManageService;
 import org.javaup.ai.manage.service.KnowledgeRouteIndexService;
 import org.javaup.ai.manage.service.RaptorBuildService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
@@ -188,6 +190,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
 
     private final RaptorBuildService raptorBuildService;
 
+    private final KnowledgeBaseManageService knowledgeBaseManageService;
+
     private final DocumentKafkaProducer kafkaProducer;
 
     private final TransactionTemplate transactionTemplate;
@@ -220,6 +224,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
 
         byte[] fileBytes = getFileBytes(file);
         Long documentId = uidGenerator.getUid();
+        Long knowledgeBaseId = parseRequiredLong(dto.getKnowledgeBaseId(), "knowledgeBaseId");
+        SuperAgentKnowledgeBase knowledgeBase = knowledgeBaseManageService.requireEnabled(knowledgeBaseId);
 
         StoredObjectInfo storedObjectInfo = storageService.uploadOriginalFile(
                 documentId, originalFileName, fileBytes, file.getContentType());
@@ -241,10 +247,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
         document.setCharCount(0);
         document.setTokenCount(0);
 
-        document.setKnowledgeScopeCode(StrUtil.trimToNull(dto.getKnowledgeScopeCode()));
-        document.setKnowledgeScopeName(StrUtil.trimToNull(dto.getKnowledgeScopeName()));
-        document.setBusinessCategory(StrUtil.trimToNull(dto.getBusinessCategory()));
-        document.setDocumentTags(StrUtil.trimToNull(dto.getDocumentTags()));
+        document.setKnowledgeBaseId(knowledgeBase.getId());
+        document.setKnowledgeBaseName(knowledgeBase.getBaseName());
         document.setStatus(BusinessStatus.YES.getCode());
 
         Long taskId = uidGenerator.getUid();
@@ -1337,10 +1341,8 @@ public class DocumentManageServiceImpl implements DocumentManageService {
             document.getIndexStatus(),
             enumMsg(DocumentIndexStatusEnum.getRc(document.getIndexStatus())),
             document.getParseErrorMsg(),
-            document.getKnowledgeScopeCode(),
-            document.getKnowledgeScopeName(),
-            document.getBusinessCategory(),
-            document.getDocumentTags(),
+            document.getKnowledgeBaseId(),
+            document.getKnowledgeBaseName(),
             document.getCurrentPlanId(),
             document.getLastIndexTaskId(),
             latestTask == null ? null : latestTask.getId(),

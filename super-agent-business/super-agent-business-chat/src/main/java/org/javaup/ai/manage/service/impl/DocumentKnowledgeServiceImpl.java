@@ -6,18 +6,22 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.manage.data.SuperAgentDocument;
+import org.javaup.ai.manage.data.SuperAgentDocumentChunk;
 import org.javaup.ai.manage.data.SuperAgentDocumentParentBlock;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentMapper;
+import org.javaup.ai.manage.mapper.SuperAgentDocumentChunkMapper;
 import org.javaup.ai.manage.mapper.SuperAgentDocumentParentBlockMapper;
 import org.javaup.ai.manage.model.DocumentRetrieveFilters;
 import org.javaup.ai.manage.model.DocumentRetrieveRequest;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
+import org.javaup.ai.manage.model.StructureAnchoredEvidenceRequest;
 import org.javaup.ai.manage.service.DocumentKnowledgeService;
 import org.javaup.ai.manage.service.keyword.DocumentKeywordSearchGateway;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.ai.manage.support.DocumentPgVectorConstants;
 import org.javaup.ai.manage.support.GraphRagTypedChunkMetadataSupport;
 import org.javaup.enums.BusinessStatus;
+import org.javaup.enums.DocumentChunkSourceTypeEnum;
 import org.javaup.enums.DocumentIndexStatusEnum;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -28,6 +32,7 @@ import org.springframework.stereotype.Service;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collection;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -49,6 +54,21 @@ import java.util.stream.IntStream;
 @AllArgsConstructor
 @Service
 public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
+
+    private static final String STRUCTURE_ANCHOR_CHANNEL = "structure-anchor";
+    private static final String STRUCTURE_ANCHOR_BODY_CANDIDATE = "STRUCTURE_ANCHOR_BODY_CANDIDATE";
+    private static final String MATCH_NODE_ID = "NODE_ID";
+    private static final String MATCH_CANONICAL_EXACT = "CANONICAL_EXACT";
+    private static final String MATCH_CANONICAL_DESCENDANT = "CANONICAL_DESCENDANT";
+    private static final String MATCH_TITLE_SAME_SECTION = "TITLE_SAME_SECTION";
+    private static final String BODY_RESOLVED_NODE_TEXT = "NODE_TEXT";
+    private static final String BODY_RESOLVED_PARENT_TEXT = "PARENT_TEXT";
+    private static final String BODY_RESOLVED_CONTINUATION_LIST = "CONTINUATION_LIST";
+    private static final String BODY_RESOLVED_DIRECT_CHILD = "DIRECT_CHILD";
+    private static final String BODY_RESOLVED_DESCENDANT = "DESCENDANT";
+    private static final String BODY_KIND_TEXT_CHUNK = "TEXT_CHUNK";
+    private static final String BODY_KIND_LIST_CONTINUATION = "LIST_CONTINUATION";
+    private static final String BODY_KIND_CHILD_SECTION = "CHILD_SECTION";
 
     private static final String VECTOR_RETRIEVE_SQL_TEMPLATE = """
         SELECT
@@ -82,6 +102,8 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     private final SuperAgentDocumentMapper documentMapper;
     
     private final SuperAgentDocumentParentBlockMapper parentBlockMapper;
+
+    private final SuperAgentDocumentChunkMapper documentChunkMapper;
     
     @Qualifier("documentManagePgVectorJdbcTemplate")
     private final JdbcTemplate pgVectorJdbcTemplate;
@@ -95,12 +117,32 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     @Override
     public List<KnowledgeDocumentDescriptor> listRetrievableDocuments() {
 
-        List<SuperAgentDocument> documents = documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+        return toDescriptors(documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
             .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
             .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
             .isNotNull(SuperAgentDocument::getLastIndexTaskId)
             .orderByDesc(SuperAgentDocument::getEditTime)
-            .orderByDesc(SuperAgentDocument::getId));
+            .orderByDesc(SuperAgentDocument::getId)));
+    }
+
+    @Override
+    public List<KnowledgeDocumentDescriptor> listRetrievableDocumentsByKnowledgeBaseIds(Collection<Long> knowledgeBaseIds) {
+        List<Long> ids = knowledgeBaseIds == null
+            ? List.of()
+            : knowledgeBaseIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        return toDescriptors(documentMapper.selectList(new LambdaQueryWrapper<SuperAgentDocument>()
+            .eq(SuperAgentDocument::getStatus, BusinessStatus.YES.getCode())
+            .eq(SuperAgentDocument::getIndexStatus, DocumentIndexStatusEnum.BUILD_SUCCESS.getCode())
+            .isNotNull(SuperAgentDocument::getLastIndexTaskId)
+            .in(SuperAgentDocument::getKnowledgeBaseId, ids)
+            .orderByDesc(SuperAgentDocument::getEditTime)
+            .orderByDesc(SuperAgentDocument::getId)));
+    }
+
+    private List<KnowledgeDocumentDescriptor> toDescriptors(List<SuperAgentDocument> documents) {
         if (CollUtil.isEmpty(documents)) {
             return List.of();
         }
@@ -110,10 +152,8 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
                 document.getId(),
                 document.getDocumentName(),
                 document.getLastIndexTaskId(),
-                document.getKnowledgeScopeCode(),
-                document.getKnowledgeScopeName(),
-                document.getBusinessCategory(),
-                document.getDocumentTags()
+                document.getKnowledgeBaseId(),
+                document.getKnowledgeBaseName()
             ))
             .toList();
     }
@@ -273,6 +313,499 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         return elevatedDocuments;
     }
 
+    @Override
+    public List<Document> expandStructureAnchoredEvidence(StructureAnchoredEvidenceRequest request) {
+        if (request == null) {
+            return List.of();
+        }
+        int maxTotal = request.getMaxTotal() <= 0 ? 4 : request.getMaxTotal();
+        int maxPerAnchor = request.getMaxPerAnchor() <= 0 ? 2 : request.getMaxPerAnchor();
+        int maxChars = request.getMaxChars() <= 0 ? 2200 : request.getMaxChars();
+
+        List<Long> allowedDocumentIds = normalizeLongs(request.getDocumentIds());
+        List<Long> allowedTaskIds = normalizeLongs(request.getTaskIds());
+        List<Long> allowedKnowledgeBaseIds = normalizeLongs(request.getKnowledgeBaseIds());
+        if (allowedDocumentIds.isEmpty() || allowedTaskIds.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, KnowledgeDocumentDescriptor> descriptorMap = listDescriptorMap(allowedDocumentIds).values().stream()
+            .filter(descriptor -> descriptor != null && descriptor.getDocumentId() != null)
+            .filter(descriptor -> allowedKnowledgeBaseIds.isEmpty()
+                || descriptor.getKnowledgeBaseId() != null && allowedKnowledgeBaseIds.contains(descriptor.getKnowledgeBaseId()))
+            .collect(Collectors.toMap(
+                KnowledgeDocumentDescriptor::getDocumentId,
+                descriptor -> descriptor,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+        if (descriptorMap.isEmpty()) {
+            return List.of();
+        }
+
+        List<StructureAnchorProbe> probes = buildStructureAnchorProbes(request);
+        if (probes.isEmpty()) {
+            return List.of();
+        }
+
+        LinkedHashMap<String, Document> expanded = new LinkedHashMap<>();
+        for (StructureAnchorProbe probe : probes) {
+            if (expanded.size() >= maxTotal) {
+                break;
+            }
+            List<Document> documents = findBodyEvidenceForProbe(
+                probe,
+                descriptorMap,
+                allowedDocumentIds,
+                allowedTaskIds,
+                maxPerAnchor,
+                maxChars
+            );
+            for (Document document : documents) {
+                if (expanded.size() >= maxTotal) {
+                    break;
+                }
+                expanded.putIfAbsent(structureEvidenceIdentity(document), document);
+            }
+        }
+        return new ArrayList<>(expanded.values());
+    }
+
+    private List<StructureAnchorProbe> buildStructureAnchorProbes(StructureAnchoredEvidenceRequest request) {
+        LinkedHashMap<String, StructureAnchorProbe> probes = new LinkedHashMap<>();
+        for (Long structureNodeId : normalizeLongs(request.getStructureNodeIds())) {
+            probes.putIfAbsent("node:" + structureNodeId,
+                new StructureAnchorProbe(structureNodeId, "", "", MATCH_NODE_ID));
+        }
+        for (String canonicalPath : normalizeTexts(request.getCanonicalPaths())) {
+            probes.putIfAbsent("canonical:" + normalizeAnchor(canonicalPath),
+                new StructureAnchorProbe(null, canonicalPath, "", MATCH_CANONICAL_EXACT));
+        }
+        for (String sectionAnchor : normalizeTexts(request.getSectionAnchors())) {
+            probes.putIfAbsent("section:" + normalizeAnchor(sectionAnchor),
+                new StructureAnchorProbe(null, "", sectionAnchor, MATCH_TITLE_SAME_SECTION));
+        }
+        if (request.getCandidateDocuments() != null) {
+            for (Document document : request.getCandidateDocuments()) {
+                if (document == null || document.getMetadata() == null) {
+                    continue;
+                }
+                Long structureNodeId = asLong(document.getMetadata().get(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID));
+                String canonicalPath = asText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.CANONICAL_PATH));
+                String sectionPath = asText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.SECTION_PATH));
+                if (structureNodeId != null) {
+                    probes.putIfAbsent("candidate-node:" + structureNodeId,
+                        new StructureAnchorProbe(structureNodeId, canonicalPath, sectionPath, MATCH_NODE_ID));
+                    continue;
+                }
+                if (StrUtil.isNotBlank(canonicalPath)) {
+                    probes.putIfAbsent("candidate-canonical:" + normalizeAnchor(canonicalPath),
+                        new StructureAnchorProbe(null, canonicalPath, sectionPath, MATCH_CANONICAL_EXACT));
+                }
+                else if (StrUtil.isNotBlank(sectionPath)) {
+                    probes.putIfAbsent("candidate-section:" + normalizeAnchor(sectionPath),
+                        new StructureAnchorProbe(null, "", sectionPath, MATCH_TITLE_SAME_SECTION));
+                }
+            }
+        }
+        return new ArrayList<>(probes.values());
+    }
+
+    private List<Document> findBodyEvidenceForProbe(StructureAnchorProbe probe,
+                                                    Map<Long, KnowledgeDocumentDescriptor> descriptorMap,
+                                                    List<Long> allowedDocumentIds,
+                                                    List<Long> allowedTaskIds,
+                                                    int maxPerAnchor,
+                                                    int maxChars) {
+        List<SuperAgentDocumentParentBlock> parentBlocks = queryParentBlocks(probe, allowedDocumentIds, allowedTaskIds, maxPerAnchor);
+        if (parentBlocks.isEmpty()) {
+            return List.of();
+        }
+        List<Document> bodyEvidence = new ArrayList<>();
+        for (SuperAgentDocumentParentBlock parentBlock : parentBlocks) {
+            KnowledgeDocumentDescriptor descriptor = descriptorMap.get(parentBlock.getDocumentId());
+            if (descriptor == null) {
+                continue;
+            }
+            bodyEvidence.addAll(resolveRawBodyEvidence(parentBlock, descriptor, probe, allowedDocumentIds, allowedTaskIds, maxPerAnchor, maxChars));
+            if (bodyEvidence.size() >= maxPerAnchor) {
+                break;
+            }
+        }
+        return bodyEvidence.stream()
+            .limit(Math.max(1, maxPerAnchor))
+            .toList();
+    }
+
+    private List<SuperAgentDocumentParentBlock> queryParentBlocks(StructureAnchorProbe probe,
+                                                                  List<Long> allowedDocumentIds,
+                                                                  List<Long> allowedTaskIds,
+                                                                  int maxPerAnchor) {
+        LambdaQueryWrapper<SuperAgentDocumentParentBlock> exactWrapper = baseParentBlockWrapper(allowedDocumentIds, allowedTaskIds);
+        boolean hasExact = false;
+        if (probe.structureNodeId() != null) {
+            exactWrapper.eq(SuperAgentDocumentParentBlock::getStructureNodeId, probe.structureNodeId());
+            hasExact = true;
+        }
+        else if (StrUtil.isNotBlank(probe.canonicalPath())) {
+            exactWrapper.eq(SuperAgentDocumentParentBlock::getCanonicalPath, probe.canonicalPath().trim());
+            hasExact = true;
+        }
+        else if (StrUtil.isNotBlank(probe.sectionPath())) {
+            exactWrapper.eq(SuperAgentDocumentParentBlock::getSectionPath, probe.sectionPath().trim());
+            hasExact = true;
+        }
+        if (hasExact) {
+            List<SuperAgentDocumentParentBlock> exact = parentBlockMapper.selectList(exactWrapper
+                .orderByAsc(SuperAgentDocumentParentBlock::getParentNo)
+                .last("LIMIT " + Math.max(1, maxPerAnchor)));
+            if (!exact.isEmpty()) {
+                return exact;
+            }
+        }
+
+        String descendantPath = StrUtil.blankToDefault(probe.canonicalPath(), "");
+        if (StrUtil.isBlank(descendantPath)) {
+            descendantPath = StrUtil.blankToDefault(probe.sectionPath(), "");
+        }
+        if (StrUtil.isBlank(descendantPath)) {
+            return List.of();
+        }
+        return parentBlockMapper.selectList(baseParentBlockWrapper(allowedDocumentIds, allowedTaskIds)
+            .likeRight(SuperAgentDocumentParentBlock::getCanonicalPath, descendantPath.trim() + "/")
+            .orderByAsc(SuperAgentDocumentParentBlock::getCanonicalPath)
+            .orderByAsc(SuperAgentDocumentParentBlock::getParentNo)
+            .last("LIMIT " + Math.max(1, maxPerAnchor)));
+    }
+
+    private LambdaQueryWrapper<SuperAgentDocumentParentBlock> baseParentBlockWrapper(List<Long> allowedDocumentIds,
+                                                                                    List<Long> allowedTaskIds) {
+        return new LambdaQueryWrapper<SuperAgentDocumentParentBlock>()
+            .in(SuperAgentDocumentParentBlock::getDocumentId, allowedDocumentIds)
+            .in(SuperAgentDocumentParentBlock::getTaskId, allowedTaskIds)
+            .eq(SuperAgentDocumentParentBlock::getStatus, BusinessStatus.YES.getCode());
+    }
+
+    private List<Document> resolveRawBodyEvidence(SuperAgentDocumentParentBlock anchorParent,
+                                                  KnowledgeDocumentDescriptor descriptor,
+                                                  StructureAnchorProbe probe,
+                                                  List<Long> allowedDocumentIds,
+                                                  List<Long> allowedTaskIds,
+                                                  int maxPerAnchor,
+                                                  int maxChars) {
+        LinkedHashMap<String, Document> resolved = new LinkedHashMap<>();
+        addChunkEvidence(resolved, queryNodeTextChunks(anchorParent, allowedDocumentIds, allowedTaskIds),
+            anchorParent, descriptor, probe, BODY_RESOLVED_NODE_TEXT, BODY_KIND_TEXT_CHUNK, maxChars);
+        addChunkEvidence(resolved, queryParentTextChunks(anchorParent, allowedDocumentIds, allowedTaskIds),
+            anchorParent, descriptor, probe, BODY_RESOLVED_PARENT_TEXT, BODY_KIND_TEXT_CHUNK, maxChars);
+        if (resolved.isEmpty()) {
+            addChunkEvidence(resolved, queryContinuationListChunks(anchorParent, allowedDocumentIds, allowedTaskIds, Math.max(2, maxPerAnchor)),
+                anchorParent, descriptor, probe, BODY_RESOLVED_CONTINUATION_LIST, BODY_KIND_LIST_CONTINUATION, maxChars);
+        }
+        if (resolved.size() < maxPerAnchor) {
+            addChunkEvidence(resolved, queryDirectChildTextChunks(anchorParent, allowedDocumentIds, allowedTaskIds, maxPerAnchor),
+                anchorParent, descriptor, probe, BODY_RESOLVED_DIRECT_CHILD, BODY_KIND_CHILD_SECTION, maxChars);
+        }
+        if (resolved.size() < maxPerAnchor) {
+            addChunkEvidence(resolved, queryDescendantTextChunks(anchorParent, allowedDocumentIds, allowedTaskIds, maxPerAnchor),
+                anchorParent, descriptor, probe, BODY_RESOLVED_DESCENDANT, BODY_KIND_TEXT_CHUNK, maxChars);
+        }
+        return resolved.values().stream()
+            .limit(Math.max(1, maxPerAnchor))
+            .toList();
+    }
+
+    private void addChunkEvidence(Map<String, Document> target,
+                                  List<SuperAgentDocumentChunk> chunks,
+                                  SuperAgentDocumentParentBlock anchorParent,
+                                  KnowledgeDocumentDescriptor descriptor,
+                                  StructureAnchorProbe probe,
+                                  String resolvedFrom,
+                                  String candidateKind,
+                                  int maxChars) {
+        if (CollUtil.isEmpty(chunks)) {
+            return;
+        }
+        for (SuperAgentDocumentChunk chunk : chunks) {
+            if (!isRawBodyChunk(chunk, BODY_RESOLVED_CONTINUATION_LIST.equals(resolvedFrom))) {
+                continue;
+            }
+            Document evidence = buildStructureAnchorChunkEvidence(chunk, anchorParent, descriptor, probe, resolvedFrom, candidateKind, maxChars);
+            target.putIfAbsent(structureEvidenceIdentity(evidence), evidence);
+        }
+    }
+
+    private List<SuperAgentDocumentChunk> queryNodeTextChunks(SuperAgentDocumentParentBlock anchorParent,
+                                                             List<Long> allowedDocumentIds,
+                                                             List<Long> allowedTaskIds) {
+        if (anchorParent.getStructureNodeId() == null) {
+            return List.of();
+        }
+        return documentChunkMapper.selectList(baseChunkWrapper(allowedDocumentIds, allowedTaskIds)
+            .eq(SuperAgentDocumentChunk::getStructureNodeId, anchorParent.getStructureNodeId())
+            .eq(SuperAgentDocumentChunk::getChunkType, "TEXT")
+            .orderByAsc(SuperAgentDocumentChunk::getChunkNo)
+            .last("LIMIT 4"));
+    }
+
+    private List<SuperAgentDocumentChunk> queryParentTextChunks(SuperAgentDocumentParentBlock anchorParent,
+                                                               List<Long> allowedDocumentIds,
+                                                               List<Long> allowedTaskIds) {
+        if (anchorParent.getId() == null) {
+            return List.of();
+        }
+        return documentChunkMapper.selectList(baseChunkWrapper(allowedDocumentIds, allowedTaskIds)
+            .eq(SuperAgentDocumentChunk::getParentBlockId, anchorParent.getId())
+            .eq(SuperAgentDocumentChunk::getChunkType, "TEXT")
+            .orderByAsc(SuperAgentDocumentChunk::getChunkNo)
+            .last("LIMIT 4"));
+    }
+
+    private List<SuperAgentDocumentChunk> queryContinuationListChunks(SuperAgentDocumentParentBlock anchorParent,
+                                                                     List<Long> allowedDocumentIds,
+                                                                     List<Long> allowedTaskIds,
+                                                                     int limit) {
+        Integer anchorNo = anchorParent.getParentNo();
+        if (anchorNo == null) {
+            return List.of();
+        }
+        List<SuperAgentDocumentChunk> nextChunks = documentChunkMapper.selectList(baseChunkWrapper(allowedDocumentIds, allowedTaskIds)
+            .eq(SuperAgentDocumentChunk::getDocumentId, anchorParent.getDocumentId())
+            .eq(SuperAgentDocumentChunk::getTaskId, anchorParent.getTaskId())
+            .gt(SuperAgentDocumentChunk::getParentBlockId, anchorParent.getId())
+            .orderByAsc(SuperAgentDocumentChunk::getChunkNo)
+            .last("LIMIT " + Math.max(2, limit * 2)));
+        return nextChunks.stream()
+            .filter(this::isListContinuationChunk)
+            .limit(Math.max(1, limit))
+            .toList();
+    }
+
+    private List<SuperAgentDocumentChunk> queryDirectChildTextChunks(SuperAgentDocumentParentBlock anchorParent,
+                                                                    List<Long> allowedDocumentIds,
+                                                                    List<Long> allowedTaskIds,
+                                                                    int limit) {
+        String canonicalPath = normalizeAnchor(anchorParent.getCanonicalPath());
+        if (StrUtil.isBlank(canonicalPath)) {
+            return List.of();
+        }
+        String childPrefix = canonicalPath + "/";
+        return documentChunkMapper.selectList(baseChunkWrapper(allowedDocumentIds, allowedTaskIds)
+            .likeRight(SuperAgentDocumentChunk::getCanonicalPath, childPrefix)
+            .and(wrapper -> wrapper.eq(SuperAgentDocumentChunk::getChunkType, "TEXT")
+                .or()
+                .eq(SuperAgentDocumentChunk::getChunkType, "LIST"))
+            .orderByAsc(SuperAgentDocumentChunk::getCanonicalPath)
+            .orderByAsc(SuperAgentDocumentChunk::getChunkNo)
+            .last("LIMIT " + Math.max(1, limit * 2))).stream()
+            .filter(chunk -> isDirectCanonicalChild(canonicalPath, chunk.getCanonicalPath()))
+            .limit(Math.max(1, limit))
+            .toList();
+    }
+
+    private List<SuperAgentDocumentChunk> queryDescendantTextChunks(SuperAgentDocumentParentBlock anchorParent,
+                                                                   List<Long> allowedDocumentIds,
+                                                                   List<Long> allowedTaskIds,
+                                                                   int limit) {
+        String canonicalPath = normalizeAnchor(anchorParent.getCanonicalPath());
+        if (StrUtil.isBlank(canonicalPath)) {
+            return List.of();
+        }
+        return documentChunkMapper.selectList(baseChunkWrapper(allowedDocumentIds, allowedTaskIds)
+            .likeRight(SuperAgentDocumentChunk::getCanonicalPath, canonicalPath + "/")
+            .and(wrapper -> wrapper.eq(SuperAgentDocumentChunk::getChunkType, "TEXT")
+                .or()
+                .eq(SuperAgentDocumentChunk::getChunkType, "LIST"))
+            .orderByAsc(SuperAgentDocumentChunk::getCanonicalPath)
+            .orderByAsc(SuperAgentDocumentChunk::getChunkNo)
+            .last("LIMIT " + Math.max(1, limit)));
+    }
+
+    private LambdaQueryWrapper<SuperAgentDocumentChunk> baseChunkWrapper(List<Long> allowedDocumentIds,
+                                                                        List<Long> allowedTaskIds) {
+        return new LambdaQueryWrapper<SuperAgentDocumentChunk>()
+            .in(SuperAgentDocumentChunk::getDocumentId, allowedDocumentIds)
+            .in(SuperAgentDocumentChunk::getTaskId, allowedTaskIds)
+            .eq(SuperAgentDocumentChunk::getSourceType, DocumentChunkSourceTypeEnum.ORIGINAL.getCode())
+            .eq(SuperAgentDocumentChunk::getStatus, BusinessStatus.YES.getCode());
+    }
+
+    private Document buildStructureAnchorChunkEvidence(SuperAgentDocumentChunk chunk,
+                                                       SuperAgentDocumentParentBlock anchorParent,
+                                                       KnowledgeDocumentDescriptor descriptor,
+                                                       StructureAnchorProbe probe,
+                                                       String resolvedFrom,
+                                                       String candidateKind,
+                                                       int maxChars) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, "DOCUMENT");
+        metadata.put(DocumentKnowledgeMetadataKeys.CHANNEL, STRUCTURE_ANCHOR_CHANNEL);
+        metadata.put(DocumentKnowledgeMetadataKeys.SCORE, 1D);
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, chunk.getDocumentId());
+        metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, descriptor == null ? "" : safeText(descriptor.getDocumentName()));
+        if (descriptor != null) {
+            putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(descriptor.getKnowledgeBaseName()));
+        }
+        metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, chunk.getTaskId());
+        metadata.put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, chunk.getParentBlockId());
+        metadata.put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO, anchorParent.getParentNo());
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_ID, chunk.getId());
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_NO, chunk.getChunkNo());
+        metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, safeText(chunk.getSectionPath()));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, chunk.getStructureNodeId());
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_TYPE, chunk.getStructureNodeType());
+        metadata.put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, safeText(chunk.getCanonicalPath()));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.ITEM_INDEX, chunk.getItemIndex());
+        metadata.put(DocumentKnowledgeMetadataKeys.CHUNK_TYPE, normalizeBodyChunkType(chunk));
+        metadata.put(DocumentKnowledgeMetadataKeys.CONTENT_WITH_WEIGHT, safeText(chunk.getContentWithWeight()));
+        metadata.put(DocumentKnowledgeMetadataKeys.TITLE, safeText(chunk.getTitle()));
+        metadata.put(DocumentKnowledgeMetadataKeys.KEYWORDS, safeText(chunk.getKeywords()));
+        metadata.put(DocumentKnowledgeMetadataKeys.QUESTIONS, safeText(chunk.getQuestions()));
+        putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, chunk.getPageNo());
+        metadata.put(DocumentKnowledgeMetadataKeys.PAGE_RANGE, safeText(chunk.getPageRange()));
+        metadata.put(DocumentKnowledgeMetadataKeys.BBOX_JSON, safeText(chunk.getBboxJson()));
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_BLOCK_IDS, safeText(chunk.getSourceBlockIds()));
+        metadata.put(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET, safeText(chunk.getChunkText()));
+        metadata.put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, STRUCTURE_ANCHOR_BODY_CANDIDATE);
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_STRUCTURE_ANCHOR, probe.sourceAnchor());
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, resolveAnchorMatchType(chunk, anchorParent, probe));
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true);
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY, true);
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_BODY_RESOLVED_FROM, resolvedFrom);
+        metadata.put(DocumentKnowledgeMetadataKeys.STRUCTURE_BODY_CANDIDATE_KIND, candidateKind);
+
+        return Document.builder()
+            .id("structure-chunk-" + chunk.getId())
+            .text(trimText(safeText(chunk.getChunkText()), maxChars))
+            .metadata(metadata)
+            .score(1D)
+            .build();
+    }
+
+    private boolean isRawBodyChunk(SuperAgentDocumentChunk chunk, boolean allowListContinuation) {
+        if (chunk == null || chunk.getSourceType() == null
+            || !Objects.equals(chunk.getSourceType(), DocumentChunkSourceTypeEnum.ORIGINAL.getCode())) {
+            return false;
+        }
+        String chunkType = asText(chunk.getChunkType());
+        if ("TEXT".equalsIgnoreCase(chunkType) || "LIST".equalsIgnoreCase(chunkType) || "TABLE".equalsIgnoreCase(chunkType)) {
+            return hasBodyText(chunk.getChunkText()) && !isTitleOnlyText(chunk.getChunkText());
+        }
+        return allowListContinuation && isListContinuationChunk(chunk);
+    }
+
+    private boolean isListContinuationChunk(SuperAgentDocumentChunk chunk) {
+        return chunk != null
+            && hasBodyText(chunk.getChunkText())
+            && containsMultipleOrderedItems(chunk.getChunkText())
+            && !"GRAPH_RAG".equalsIgnoreCase(asText(chunk.getChunkType()))
+            && !safeText(chunk.getChunkText()).startsWith("[GraphRAG")
+            && !safeText(chunk.getChunkText()).startsWith("[RAPTOR");
+    }
+
+    private boolean hasBodyText(String text) {
+        return safeText(text).replace("#", "").trim().length() >= 12;
+    }
+
+    private boolean isTitleOnlyText(String text) {
+        String normalized = safeText(text).trim();
+        if (normalized.isBlank()) {
+            return true;
+        }
+        String withoutHashes = normalized.replaceAll("^#{1,6}\\s*", "").trim();
+        return normalized.length() <= 120
+            && (normalized.startsWith("#")
+            || withoutHashes.matches("^\\d+(?:\\.\\d+){1,5}\\s+\\S[^。；;!?！？]*$"));
+    }
+
+    private boolean containsMultipleOrderedItems(String text) {
+        String normalized = safeText(text).replace('\n', ' ');
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+            .compile("(?:^|\\s)(\\d{1,2})[、.]\\s+")
+            .matcher(normalized);
+        int count = 0;
+        while (matcher.find()) {
+            count++;
+            if (count >= 2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isDirectCanonicalChild(String parentCanonicalPath, String candidateCanonicalPath) {
+        String parent = normalizeAnchor(parentCanonicalPath);
+        String candidate = normalizeAnchor(candidateCanonicalPath);
+        if (parent.isBlank() || !candidate.startsWith(parent + "/")) {
+            return false;
+        }
+        String remainder = candidate.substring(parent.length() + 1);
+        return !remainder.isBlank() && !remainder.contains("/");
+    }
+
+    private String normalizeBodyChunkType(SuperAgentDocumentChunk chunk) {
+        if (chunk == null) {
+            return "TEXT";
+        }
+        if (isListContinuationChunk(chunk)) {
+            return "LIST";
+        }
+        String chunkType = safeText(chunk.getChunkType());
+        return StrUtil.isBlank(chunkType) ? "TEXT" : chunkType;
+    }
+
+    private String resolveAnchorMatchType(SuperAgentDocumentChunk chunk,
+                                          SuperAgentDocumentParentBlock anchorParent,
+                                          StructureAnchorProbe probe) {
+        if (probe.structureNodeId() != null && Objects.equals(probe.structureNodeId(), chunk.getStructureNodeId())) {
+            return MATCH_NODE_ID;
+        }
+        String canonicalPath = normalizeAnchor(chunk.getCanonicalPath());
+        String probeCanonical = normalizeAnchor(probe.canonicalPath());
+        if (StrUtil.isNotBlank(probeCanonical)) {
+            if (canonicalPath.equals(probeCanonical)) {
+                return MATCH_CANONICAL_EXACT;
+            }
+            if (canonicalPath.startsWith(probeCanonical + "/")) {
+                return MATCH_CANONICAL_DESCENDANT;
+            }
+        }
+        if (anchorParent != null && !Objects.equals(anchorParent.getStructureNodeId(), chunk.getStructureNodeId())) {
+            return MATCH_CANONICAL_DESCENDANT;
+        }
+        return MATCH_TITLE_SAME_SECTION;
+    }
+
+    private String resolveAnchorMatchType(SuperAgentDocumentParentBlock parentBlock, StructureAnchorProbe probe) {
+        if (probe.structureNodeId() != null && Objects.equals(probe.structureNodeId(), parentBlock.getStructureNodeId())) {
+            return MATCH_NODE_ID;
+        }
+        String canonicalPath = normalizeAnchor(parentBlock.getCanonicalPath());
+        String probeCanonical = normalizeAnchor(probe.canonicalPath());
+        if (StrUtil.isNotBlank(probeCanonical)) {
+            if (canonicalPath.equals(probeCanonical)) {
+                return MATCH_CANONICAL_EXACT;
+            }
+            if (canonicalPath.startsWith(probeCanonical + "/")) {
+                return MATCH_CANONICAL_DESCENDANT;
+            }
+        }
+        return MATCH_TITLE_SAME_SECTION;
+    }
+
+    private String structureEvidenceIdentity(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return "";
+        }
+        Long parentBlockId = asLong(document.getMetadata().get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
+        if (parentBlockId != null) {
+            return "parent:" + parentBlockId;
+        }
+        return "document:" + asText(document.getMetadata().get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID))
+            + ":section:" + normalizeAnchor(document.getMetadata().get(DocumentKnowledgeMetadataKeys.CANONICAL_PATH));
+    }
+
     private Document buildRetrievedDocument(long chunkId,
                                             String chunkText,
                                             String contentWithWeight,
@@ -323,10 +856,8 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
 
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, descriptor.getDocumentId());
             metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, safeText(descriptor.getDocumentName()));
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_CODE, safeText(descriptor.getKnowledgeScopeCode()));
-            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_SCOPE_NAME, safeText(descriptor.getKnowledgeScopeName()));
-            metadata.put(DocumentKnowledgeMetadataKeys.BUSINESS_CATEGORY, safeText(descriptor.getBusinessCategory()));
-            metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_TAGS, safeText(descriptor.getDocumentTags()));
+            putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, safeText(descriptor.getKnowledgeBaseName()));
         }
         graphRagTypedChunkMetadataSupport.enrichMetadata(metadata, chunkType, sourceBlockIds);
 
@@ -552,6 +1083,19 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
     private double graphRagMetadataPriority(Document document) {
         Map<String, Object> metadata = document.getMetadata();
         double priority = resolveScoreOrZero(document) * 0.01D;
+        if (Boolean.parseBoolean(asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_COMMUNITY_SUMMARY_ONLY)))) {
+            priority -= 30D;
+        }
+        String groundingLevel = asText(metadata.get(DocumentKnowledgeMetadataKeys.KG_EVIDENCE_GROUNDING_LEVEL));
+        if ("RELATION_STRONG_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 18D;
+        }
+        else if ("RELATION_WEAK_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 8D;
+        }
+        else if ("COMMUNITY_SOURCE_QUOTE".equalsIgnoreCase(groundingLevel)) {
+            priority += 6D;
+        }
         if (metadata.get(DocumentKnowledgeMetadataKeys.KG_RELATION_ID) != null) {
             priority += 20D;
         }
@@ -729,6 +1273,35 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         return value == null ? "" : String.valueOf(value);
     }
 
+    private List<Long> normalizeLongs(Collection<Long> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream()
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+    }
+
+    private List<String> normalizeTexts(Collection<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream()
+            .map(this::safeText)
+            .filter(StrUtil::isNotBlank)
+            .distinct()
+            .toList();
+    }
+
+    private String normalizeAnchor(Object value) {
+        return asText(value)
+            .trim()
+            .replace('\\', '/')
+            .replaceAll("\\s+", "")
+            .toLowerCase(Locale.ROOT);
+    }
+
     private int resolveTopK(int topK) {
 
         return topK <= 0 ? 10 : Math.min(topK, 50);
@@ -774,5 +1347,21 @@ public class DocumentKnowledgeServiceImpl implements DocumentKnowledgeService {
         List<Long> taskIds,
         DocumentRetrieveFilters filters
     ) {
+    }
+
+    private record StructureAnchorProbe(Long structureNodeId,
+                                        String canonicalPath,
+                                        String sectionPath,
+                                        String sourceMatchType) {
+
+        private String sourceAnchor() {
+            if (structureNodeId != null) {
+                return String.valueOf(structureNodeId);
+            }
+            if (StrUtil.isNotBlank(canonicalPath)) {
+                return canonicalPath;
+            }
+            return StrUtil.blankToDefault(sectionPath, sourceMatchType);
+        }
     }
 }

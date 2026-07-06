@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import org.javaup.ai.chatagent.rag.model.ConversationExecutionPlan;
 import org.javaup.ai.chatagent.rag.model.DocumentTableQueryPlan;
 import org.javaup.ai.chatagent.rag.config.ChatRagProperties;
+import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.service.DocumentTableQueryPlanner;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
 import org.javaup.ai.manage.model.table.DocumentTableDescriptor;
@@ -50,7 +51,7 @@ public class TableRetrievalChannel implements RetrievalChannel {
     @Override
     public boolean supports(ConversationExecutionPlan plan) {
         return plan != null
-            && properties.isTableChannelEnabled()
+            && RagRuntimeOptions.resolve(plan, properties).isTableChannelEnabled()
             && !resolvedDocumentIds(plan).isEmpty();
     }
 
@@ -67,15 +68,16 @@ public class TableRetrievalChannel implements RetrievalChannel {
 
         DocumentTableQueryPlan planned = queryPlan.get();
         DocumentTableQueryResult result = tableStructureService.query(planned.getQuery());
-        Document document = buildEvidenceDocument(subQuestion, planned, result, resolveDocumentNames());
+        Document document = buildEvidenceDocument(subQuestion, planned, result, resolveDocumentDescriptors(plan));
         return new RetrievalChannelResult(channelName(), List.of(document));
     }
 
     private Document buildEvidenceDocument(String subQuestion,
                                            DocumentTableQueryPlan queryPlan,
                                            DocumentTableQueryResult result,
-                                           Map<Long, String> documentNames) {
-        String documentName = StrUtil.blankToDefault(documentNames.get(result.getDocumentId()), "文档表格");
+                                           Map<Long, KnowledgeDocumentDescriptor> documentDescriptors) {
+        KnowledgeDocumentDescriptor descriptor = documentDescriptors.get(result.getDocumentId());
+        String documentName = StrUtil.blankToDefault(descriptor == null ? null : descriptor.getDocumentName(), "文档表格");
         String text = renderEvidenceText(subQuestion, queryPlan, result);
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_TYPE, SOURCE_TYPE);
@@ -83,6 +85,10 @@ public class TableRetrievalChannel implements RetrievalChannel {
         metadata.put(DocumentKnowledgeMetadataKeys.SCORE, TABLE_QUERY_SCORE);
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, result.getDocumentId());
         metadata.put(DocumentKnowledgeMetadataKeys.DOCUMENT_NAME, documentName);
+        if (descriptor != null) {
+            putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_ID, descriptor.getKnowledgeBaseId());
+            metadata.put(DocumentKnowledgeMetadataKeys.KNOWLEDGE_BASE_NAME, StrUtil.blankToDefault(descriptor.getKnowledgeBaseName(), ""));
+        }
         metadata.put(DocumentKnowledgeMetadataKeys.TASK_ID, result.getTaskId());
         metadata.put(DocumentKnowledgeMetadataKeys.SECTION_PATH, StrUtil.blankToDefault(result.getSectionPath(), ""));
         putIfNotNull(metadata, DocumentKnowledgeMetadataKeys.PAGE_NO, result.getPageNo());
@@ -165,14 +171,21 @@ public class TableRetrievalChannel implements RetrievalChannel {
         return plan.getSelectedTaskId() == null ? List.of() : List.of(plan.getSelectedTaskId());
     }
 
-    private Map<Long, String> resolveDocumentNames() {
-        Map<Long, String> documentNames = new LinkedHashMap<>();
-        for (KnowledgeDocumentDescriptor descriptor : documentKnowledgeService.listRetrievableDocuments()) {
+    private Map<Long, KnowledgeDocumentDescriptor> resolveDocumentDescriptors(ConversationExecutionPlan plan) {
+        Map<Long, KnowledgeDocumentDescriptor> documentDescriptors = new LinkedHashMap<>();
+        List<Long> documentIds = resolvedDocumentIds(plan);
+        List<KnowledgeDocumentDescriptor> descriptors = plan == null
+            || plan.getSelectedKnowledgeBaseIds() == null
+            || plan.getSelectedKnowledgeBaseIds().isEmpty()
+            ? documentKnowledgeService.listRetrievableDocuments()
+            : documentKnowledgeService.listRetrievableDocumentsByKnowledgeBaseIds(plan.getSelectedKnowledgeBaseIds());
+        for (KnowledgeDocumentDescriptor descriptor : descriptors) {
             if (descriptor.getDocumentId() != null) {
-                documentNames.put(descriptor.getDocumentId(), descriptor.getDocumentName());
+                documentDescriptors.put(descriptor.getDocumentId(), descriptor);
             }
         }
-        return documentNames;
+        documentDescriptors.keySet().retainAll(documentIds);
+        return documentDescriptors;
     }
 
     private void putIfNotNull(Map<String, Object> metadata, String key, Object value) {

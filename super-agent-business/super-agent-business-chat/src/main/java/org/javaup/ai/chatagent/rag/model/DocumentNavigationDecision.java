@@ -32,6 +32,8 @@ public class DocumentNavigationDecision {
 
     private QueryUnderstandingResult queryUnderstanding;
 
+    private StructureNavigationResult structureNavigationResult;
+
     @Builder.Default
     private RetrievalIntent retrievalIntent = RetrievalIntent.GENERAL;
 

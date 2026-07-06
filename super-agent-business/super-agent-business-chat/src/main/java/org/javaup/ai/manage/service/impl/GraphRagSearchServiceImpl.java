@@ -57,16 +57,6 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
     private static final int CATALOG_COMMUNITY_LIMIT = 40;
     private static final String JAVA_QUERY_PROFILE_SOURCE = "java.graph_query_profile.v2";
     private static final String ADVISOR_QUERY_PROFILE_SOURCE = "llm.controlled.query_plan.v1";
-    private static final Set<String> ANSWER_ACTION_RELATION_TYPES = Set.of(
-        "APPROVES",
-        "RESPONSIBLE_FOR",
-        "EXECUTES",
-        "REVOKES",
-        "OWNS",
-        "MANAGES",
-        "OPERATES",
-        "MAINTAINS"
-    );
     private static final Set<String> WEAK_SEMANTIC_RELATION_TYPES = Set.of(
         "RECORDS",
         "ASSOCIATED_WITH",
@@ -310,13 +300,36 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         if (result == null) {
             return 0;
         }
+        boolean hasSourceQuote = result.getEvidenceId() != null && StrUtil.isNotBlank(result.getQuoteText());
         if (result.getRelationId() != null) {
+            if (hasSourceQuote) {
+                return 5;
+            }
+            if (result.getEvidenceId() != null) {
+                return 4;
+            }
             return 3;
         }
         if (result.getEntityId() != null) {
-            return 2;
+            return hasSourceQuote ? 2 : 1;
+        }
+        if (isCommunityResult(result)) {
+            if (hasSourceQuote && StrUtil.isNotBlank(result.getRelationGroupKey())) {
+                return 3;
+            }
+            return hasSourceQuote ? 2 : 0;
         }
         return 1;
+    }
+
+    private boolean isCommunityResult(GraphRagSearchResult result) {
+        if (result == null) {
+            return false;
+        }
+        return result.getCommunityId() != null
+            || StrUtil.isNotBlank(result.getCrossDocumentCommunityKey())
+            || StrUtil.isNotBlank(result.getCommunityTitle())
+            || StrUtil.isNotBlank(result.getCommunitySummary());
     }
 
     private GraphRagCrossDocumentIndex loadCrossDocumentIndex(List<Long> documentIds,
@@ -909,7 +922,8 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
         }
         String relationType = normalizedRelationType(relation);
         double penalty = 0.18D + Math.max(0, hopCount - 2) * 0.08D;
-        if (hasAnswerTypeEndpointMatch(source, target, queryProfile) && ANSWER_ACTION_RELATION_TYPES.contains(relationType)) {
+        if (hasAnswerTypeEndpointMatch(source, target, queryProfile)
+            && relationMatchesQueryProfile(relation, relationType, queryProfile)) {
             penalty -= 0.14D;
         }
         if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)
@@ -928,21 +942,13 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return 0D;
         }
         String relationType = normalizedRelationType(relation);
-        if (ANSWER_ACTION_RELATION_TYPES.contains(relationType)) {
-            double boost = hopCount > 1 ? 0.46D : 0.36D;
-            if (queryProfile.relationTypes().contains(relationType)
-                || queryProfile.relationIds().contains(relation.getId())) {
-                boost += 0.12D;
-            }
-            return boost;
-        }
-        if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType)) {
-            return queryProfile.relationTypes().contains(relationType) ? 0.12D : 0.03D;
+        boolean plannedRelation = relationMatchesQueryProfile(relation, relationType, queryProfile);
+        if (WEAK_SEMANTIC_RELATION_TYPES.contains(relationType) && !plannedRelation) {
+            return 0.03D;
         }
         double boost = hopCount > 1 ? 0.24D : 0.18D;
-        if (queryProfile.relationTypes().contains(relationType)
-            || queryProfile.relationIds().contains(relation.getId())) {
-            boost += 0.08D;
+        if (plannedRelation) {
+            boost += 0.16D;
         }
         return boost;
     }
@@ -957,6 +963,16 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             return 0D;
         }
         return 0.30D;
+    }
+
+    private boolean relationMatchesQueryProfile(SuperAgentKgRelation relation,
+                                                String relationType,
+                                                QueryProfile queryProfile) {
+        if (relation == null || queryProfile == null) {
+            return false;
+        }
+        return queryProfile.relationTypes().contains(relationType)
+            || queryProfile.relationIds().contains(relation.getId());
     }
 
     private boolean hasAnswerTypeEndpointMatch(SuperAgentKgEntity source,
@@ -1018,7 +1034,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
             boost += 0.20D;
         }
         if (relationGroupEndpointMatchesAnswerType(group, queryProfile)) {
-            boost += ANSWER_ACTION_RELATION_TYPES.contains(relationType) ? 0.18D : 0.10D;
+            boost += 0.10D;
         }
         if (queryProfile.communityQuestion()) {
             boost += Math.min(0.12D, group.documentCount() * 0.03D + group.evidenceCount() * 0.01D);
@@ -1970,7 +1986,7 @@ public class GraphRagSearchServiceImpl implements GraphRagSearchService {
                 reasons.add("queryRelationId");
             }
             if (relationGroupEndpointMatchesAnswerType(group, queryProfile)) {
-                score += ANSWER_ACTION_RELATION_TYPES.contains(relationType) ? 0.16D : 0.10D;
+                score += 0.10D;
                 reasons.add("answerTypeEndpoint");
             }
             double groupQueryBoost = relationGroupQueryBoost(group, queryProfile);

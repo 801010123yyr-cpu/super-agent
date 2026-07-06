@@ -32,6 +32,10 @@ public class ConversationExchangeView {
     private String errorMessage;
     private Long firstResponseTimeMs;
     private Long totalResponseTimeMs;
+    private String knowledgeBaseSelectionMode;
+    private List<String> selectedKnowledgeBaseIds;
+    private List<String> selectedKnowledgeBaseNames;
+    private String retrievalConfigSnapshotJson;
     private Date createTime;
     private Date editTime;
 }

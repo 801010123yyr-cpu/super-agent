@@ -7,6 +7,7 @@ import org.javaup.ai.manage.dto.DocumentProfileDetailQueryDto;
 import org.javaup.ai.manage.dto.DocumentProfileRegenerateDto;
 import org.javaup.ai.manage.dto.KnowledgeRouteTraceQueryDto;
 import org.javaup.ai.manage.dto.KnowledgeScopeDeleteDto;
+import org.javaup.ai.manage.dto.KnowledgeScopeQueryDto;
 import org.javaup.ai.manage.dto.KnowledgeScopeSaveDto;
 import org.javaup.ai.manage.dto.KnowledgeTopicDeleteDto;
 import org.javaup.ai.manage.dto.KnowledgeTopicQueryDto;
@@ -57,8 +58,8 @@ public class KnowledgeManageController {
 
     @Operation(summary = "查询知识范围列表")
     @PostMapping("/scope/list")
-    public ApiResponse<List<KnowledgeScopeItemVo>> listScopes() {
-        return ApiResponse.ok(knowledgeManageService.listScopes());
+    public ApiResponse<List<KnowledgeScopeItemVo>> listScopes(@RequestBody(required = false) KnowledgeScopeQueryDto dto) {
+        return ApiResponse.ok(knowledgeManageService.listScopes(dto == null ? new KnowledgeScopeQueryDto() : dto));
     }
 
     @Operation(summary = "保存知识主题节点")

@@ -1,5 +1,6 @@
 package org.javaup.ai.manage.service;
 
+import org.javaup.ai.manage.model.route.KnowledgeRouteContext;
 import org.javaup.ai.manage.model.route.KnowledgeRouteDecision;
 
 /**
@@ -9,17 +10,15 @@ import org.javaup.ai.manage.model.route.KnowledgeRouteDecision;
  **/
 public interface KnowledgeRouteService {
 
-    KnowledgeRouteDecision route(String question, String rewriteQuestion);
+    KnowledgeRouteDecision route(KnowledgeRouteContext context);
 
     void recordShadowRoute(String conversationId,
                            long exchangeId,
                            Long selectedDocumentId,
-                           String question,
-                           String rewriteQuestion);
+                           KnowledgeRouteContext context);
 
     void recordAutoRoute(String conversationId,
                          long exchangeId,
-                         String question,
-                         String rewriteQuestion,
+                         KnowledgeRouteContext context,
                          KnowledgeRouteDecision decision);
 }

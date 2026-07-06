@@ -6,6 +6,17 @@
         <h3 class="m-0 text-base font-semibold text-foreground">上传资料并进入推荐流程</h3>
 
         <div class="mt-4 grid grid-cols-2 gap-3.5 max-[860px]:grid-cols-1">
+          <div class="flex flex-col gap-2">
+            <Label class="text-[13px] font-bold text-[var(--color-muted-strong)]">所属知识库</Label>
+            <select
+              v-model="uploadForm.knowledgeBaseId"
+              class="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:bg-secondary"
+              :disabled="loadingKnowledgeBases"
+            >
+              <option value="">请选择知识库</option>
+              <option v-for="item in knowledgeBaseOptions" :key="item.id" :value="item.id">{{ item.baseName }}</option>
+            </select>
+          </div>
           <div v-for="f in uploadFields" :key="f.key" class="flex flex-col gap-2">
             <Label class="text-[13px] font-bold text-[var(--color-muted-strong)]">{{ f.label }}</Label>
             <Input v-model="uploadForm[f.key]" :type="f.type || 'text'" :placeholder="f.placeholder" class="h-9 text-sm" />
@@ -106,11 +117,12 @@
                 class="border-b border-border transition-colors hover:bg-primary/[0.04] last:border-0"
               >
                 <td class="p-4 align-top">
-                  <button class="w-full border-0 bg-transparent p-0 text-left" type="button" @click="openDocumentDetail(item.documentId)">
-                    <strong class="block text-base leading-snug text-foreground hover:text-primary">{{ item.documentName }}</strong>
-                    <span class="mt-1.5 block break-all text-xs text-muted-foreground">{{ item.originalFileName }}</span>
-                  </button>
-                </td>
+	                  <button class="w-full border-0 bg-transparent p-0 text-left" type="button" @click="openDocumentDetail(item.documentId)">
+	                    <strong class="block text-base leading-snug text-foreground hover:text-primary">{{ item.documentName }}</strong>
+	                    <span class="mt-1.5 block break-all text-xs text-muted-foreground">{{ item.originalFileName }}</span>
+                      <span class="mt-1.5 inline-flex rounded-full bg-primary/[0.08] px-2.5 py-1 text-xs font-medium text-primary">{{ item.knowledgeBaseName || '未绑定知识库' }}</span>
+	                  </button>
+	                </td>
                 <td class="p-4 align-top">
                   <Badge variant="secondary" class="rounded-full">{{ item.fileTypeName || '-' }}</Badge>
                 </td>
@@ -173,25 +185,19 @@ const DEFAULT_PAGE_SIZE = 12
 
 const uploadForm = reactive({
   documentName: '',
-  knowledgeScopeCode: '',
-  knowledgeScopeName: '',
-  businessCategory: '',
-  documentTags: '',
+  knowledgeBaseId: '',
   file: null
 })
 
 const uploadFields = [
-  { key: 'documentName', label: '文档名称', placeholder: '不填则使用原始文件名' },
-  { key: 'knowledgeScopeCode', label: '知识域编码', placeholder: '例如 operation_rule' },
-  { key: 'knowledgeScopeName', label: '知识域名称', placeholder: '例如 运营规则' },
-  { key: 'businessCategory', label: '业务分类', placeholder: '例如 手册 / 规则 / 介绍' },
-  { key: 'documentTags', label: '文档标签', placeholder: '多个标签用英文逗号分隔' }
+  { key: 'documentName', label: '文档名称', placeholder: '不填则使用原始文件名' }
 ]
 
 const tableHeads = ['文档', '类型', '大小', '更新时间', '解析', '策略', '索引', '操作']
 
 const fileInputRef = ref(null)
 const uploading = ref(false)
+const loadingKnowledgeBases = ref(false)
 const listLoading = ref(false)
 const keyword = ref('')
 const documents = ref([])
@@ -200,6 +206,7 @@ const pageSize = ref(DEFAULT_PAGE_SIZE)
 const total = ref(0)
 const deletingDocumentId = ref('')
 const pageNotice = reactive({ type: 'info', message: '' })
+const knowledgeBaseOptions = ref([])
 
 const totalPages = computed(() => Math.max(1, Math.ceil((total.value || 0) / pageSize.value)))
 const visibleParseReadyCount = computed(() => documents.value.filter((item) => hasCode(item.parseStatus, 3)).length)
@@ -221,11 +228,22 @@ function handleFileChange(event) { uploadForm.file = event.target.files?.[0] || 
 function clearSelectedFile() {
   uploadForm.file = null
   uploadForm.documentName = ''
-  uploadForm.knowledgeScopeCode = ''
-  uploadForm.knowledgeScopeName = ''
-  uploadForm.businessCategory = ''
-  uploadForm.documentTags = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+async function loadKnowledgeBases() {
+  loadingKnowledgeBases.value = true
+  try {
+    const data = await manageApi.listKnowledgeBases()
+    knowledgeBaseOptions.value = Array.isArray(data) ? data : []
+    if (!uploadForm.knowledgeBaseId && knowledgeBaseOptions.value.length === 1) {
+      uploadForm.knowledgeBaseId = knowledgeBaseOptions.value[0].id
+    }
+  } catch (error) {
+    showNotice(normalizeError(error, '加载知识库失败'), 'danger')
+  } finally {
+    loadingKnowledgeBases.value = false
+  }
 }
 
 async function loadDocuments(page = currentPage.value) {
@@ -275,16 +293,14 @@ function buildDeleteTitle(item) {
 
 async function submitUpload() {
   if (!uploadForm.file) { showNotice('请先选择要上传的文档。', 'danger'); return }
+  if (!uploadForm.knowledgeBaseId) { showNotice('请先选择文档所属知识库。', 'danger'); return }
   uploading.value = true; clearNotice()
   try {
     const result = await manageApi.uploadDocument({
       file: uploadForm.file,
       documentName: uploadForm.documentName.trim(),
       operatorId: OPERATOR_ID,
-      knowledgeScopeCode: uploadForm.knowledgeScopeCode.trim(),
-      knowledgeScopeName: uploadForm.knowledgeScopeName.trim(),
-      businessCategory: uploadForm.businessCategory.trim(),
-      documentTags: uploadForm.documentTags.trim()
+      knowledgeBaseId: uploadForm.knowledgeBaseId
     })
     clearSelectedFile()
     showNotice(`文档已上传，任务 ${result.taskId} 已进入解析与策略推荐队列。`, 'success')
@@ -325,5 +341,8 @@ function normalizeError(error, fallbackMessage) {
   return fallbackMessage
 }
 
-onMounted(() => loadDocuments())
+onMounted(() => {
+  loadKnowledgeBases()
+  loadDocuments()
+})
 </script>
