@@ -671,6 +671,7 @@ class RagRetrievalEngineTest {
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.DOCUMENT_ID, 1L);
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.TASK_ID, 11L);
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID, 9301L);
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CHUNK_ID, 930101L);
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID, 301L);
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.SECTION_PATH, "14.3.1");
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CANONICAL_PATH, "14.3/14.3.1");
@@ -678,6 +679,7 @@ class RagRetrievalEngineTest {
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.CHANNEL, "structure-anchor");
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE, "STRUCTURE_ANCHOR_BODY_CANDIDATE");
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_MATCH_TYPE, "NODE_ID");
+        structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY, true);
         structureBody.getMetadata().put(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW, true);
 
         ExecutorService executorService = Executors.newFixedThreadPool(2);

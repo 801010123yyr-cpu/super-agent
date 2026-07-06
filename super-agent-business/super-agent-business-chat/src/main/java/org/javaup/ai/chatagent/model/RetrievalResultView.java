@@ -40,11 +40,17 @@ public class RetrievalResultView {
     private Long documentId;
     private String documentName;
     private Long chunkId;
+    private String chunkType;
     private Integer chunkNo;
     private Long parentBlockId;
     private Integer parentBlockNo;
     private String sectionPath;
     private String chunkTextPreview;
     private Integer chunkCharCount;
+    private String contextIdentity;
+    private String citationIdentity;
+    private String citationEvidenceType;
+    private boolean contextOnly;
+    private boolean sourceEvidenceResolved;
     private Instant createTime;
 }

@@ -6,6 +6,7 @@ import org.javaup.ai.chatagent.rag.model.QueryType;
 import org.javaup.ai.chatagent.rag.model.QueryUnderstandingResult;
 import org.javaup.ai.chatagent.rag.model.RagRuntimeOptions;
 import org.javaup.ai.chatagent.rag.model.RetrievalIntent;
+import org.javaup.ai.chatagent.rag.support.EvidenceIdentityResolver;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.javaup.enums.RetrievalChannelEnum;
 import org.springframework.ai.document.Document;
@@ -79,7 +80,7 @@ public class FinalEvidenceSelectionPolicy {
             return;
         }
         for (Document bodyCandidate : bodyCandidates) {
-            Document alreadySelected = findSameDocument(selected, bodyCandidate);
+            Document alreadySelected = findSameCitationEvidence(selected, bodyCandidate);
             String reserveType = structureAnchorReserveType(bodyCandidate);
             if (alreadySelected != null) {
                 markReserve(alreadySelected, reserveType);
@@ -108,7 +109,7 @@ public class FinalEvidenceSelectionPolicy {
         }
         for (Document title : selectedTitles) {
             Document body = candidates.stream()
-                .filter(candidate -> !containsSameDocument(selected, candidate))
+                .filter(candidate -> !containsSameCitationEvidence(selected, candidate))
                 .filter(this::isBodyEvidence)
                 .filter(candidate -> sameStructureAnchor(title, candidate))
                 .max(Comparator.comparingDouble(this::finalDocumentScore))
@@ -128,7 +129,7 @@ public class FinalEvidenceSelectionPolicy {
             return;
         }
         Document anchored = candidates.stream()
-            .filter(candidate -> !containsSameDocument(selected, candidate))
+            .filter(candidate -> !containsSameCitationEvidence(selected, candidate))
             .filter(this::isBodyEvidence)
             .filter(candidate -> matchesAnySectionAnchor(candidate, anchors))
             .max(Comparator.comparingDouble(this::finalDocumentScore))
@@ -171,7 +172,7 @@ public class FinalEvidenceSelectionPolicy {
         Document raptorReserve = rerankedCandidates.stream()
             .skip(finalTopK)
             .filter(this::isRaptorSourceCandidate)
-            .filter(candidate -> !containsSameDocument(selected, candidate))
+            .filter(candidate -> !containsSameCitationEvidence(selected, candidate))
             .max(Comparator.comparingDouble(document -> raptorEvidenceBudgetPriority(document, plan)))
             .orElse(null);
         if (raptorReserve != null) {
@@ -188,7 +189,7 @@ public class FinalEvidenceSelectionPolicy {
             .skip(finalTopK)
             .filter(document -> isGraphRagReserveCandidate(document, plan))
             .filter(document -> !crossDocumentCommunityOnly || isGraphRagCrossDocumentCommunityReserveCandidate(document, plan))
-            .filter(candidate -> !containsSameDocument(selected, candidate))
+            .filter(candidate -> !containsSameCitationEvidence(selected, candidate))
             .max(Comparator.comparingDouble(document -> graphRagEvidenceBudgetPriority(document, plan)))
             .orElse(null);
     }
@@ -199,7 +200,7 @@ public class FinalEvidenceSelectionPolicy {
         if (selected == null || selected.isEmpty() || reserve == null) {
             return;
         }
-        if (containsSameDocument(selected, reserve)) {
+        if (containsSameCitationEvidence(selected, reserve)) {
             return;
         }
         int replaceIndex = weakestReplaceableEvidenceIndex(selected);
@@ -213,7 +214,7 @@ public class FinalEvidenceSelectionPolicy {
     private void replaceSummaryOnlyOrWeakestEvidence(List<Document> selected,
                                                      Document reserve,
                                                      String reserveType) {
-        if (selected == null || selected.isEmpty() || reserve == null || containsSameDocument(selected, reserve)) {
+        if (selected == null || selected.isEmpty() || reserve == null || containsSameCitationEvidence(selected, reserve)) {
             return;
         }
         int replaceIndex = firstReplaceableRaptorSummaryOnlyIndex(selected);
@@ -230,7 +231,7 @@ public class FinalEvidenceSelectionPolicy {
     private void replaceGraphRagSummaryOnlyOrWeakestEvidence(List<Document> selected,
                                                              Document reserve,
                                                              String reserveType) {
-        if (selected == null || selected.isEmpty() || reserve == null || containsSameDocument(selected, reserve)) {
+        if (selected == null || selected.isEmpty() || reserve == null || containsSameCitationEvidence(selected, reserve)) {
             return;
         }
         int replaceIndex = firstReplaceableGraphRagCommunitySummaryOnlyIndex(selected);
@@ -372,6 +373,9 @@ public class FinalEvidenceSelectionPolicy {
         if (!booleanMetadataValue(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_RAW_BODY))) {
             return false;
         }
+        if (!EvidenceIdentityResolver.isCitationCapable(document)) {
+            return false;
+        }
         String reserveType = safeText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_RESERVE_TYPE));
         String channel = safeText(metadata.get(DocumentKnowledgeMetadataKeys.CHANNEL));
         Object bypass = metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_ANCHOR_BYPASS_RESERVE_WINDOW);
@@ -487,45 +491,29 @@ public class FinalEvidenceSelectionPolicy {
         return queryUnderstanding.getSectionAnchors();
     }
 
-    private boolean containsSameDocument(List<Document> documents, Document candidate) {
+    private boolean containsSameCitationEvidence(List<Document> documents, Document candidate) {
         return documents != null
-            && documents.stream().anyMatch(document -> sameDocument(document, candidate));
+            && documents.stream().anyMatch(document -> sameCitationEvidence(document, candidate));
     }
 
-    private Document findSameDocument(List<Document> documents, Document candidate) {
+    private Document findSameCitationEvidence(List<Document> documents, Document candidate) {
         if (documents == null || candidate == null) {
             return null;
         }
         return documents.stream()
-            .filter(document -> sameDocument(document, candidate))
+            .filter(document -> sameCitationEvidence(document, candidate))
             .findFirst()
             .orElse(null);
     }
 
-    private boolean sameDocument(Document left, Document right) {
+    private boolean sameCitationEvidence(Document left, Document right) {
         if (left == null || right == null) {
             return false;
         }
         if (Objects.equals(left.getId(), right.getId())) {
             return true;
         }
-        Map<String, Object> leftMetadata = left.getMetadata();
-        Map<String, Object> rightMetadata = right.getMetadata();
-        Long leftDocumentId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID));
-        Long rightDocumentId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.DOCUMENT_ID));
-        if (leftDocumentId != null && rightDocumentId != null && !Objects.equals(leftDocumentId, rightDocumentId)) {
-            return false;
-        }
-        Long leftChunkId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID));
-        Long rightChunkId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID));
-        if (leftChunkId != null && rightChunkId != null && Objects.equals(leftChunkId, rightChunkId)) {
-            return true;
-        }
-        Long leftParentBlockId = longMetadataValue(leftMetadata == null ? null : leftMetadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
-        Long rightParentBlockId = longMetadataValue(rightMetadata == null ? null : rightMetadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID));
-        return leftParentBlockId != null
-            && rightParentBlockId != null
-            && Objects.equals(leftParentBlockId, rightParentBlockId);
+        return EvidenceIdentityResolver.sameCitationEvidence(left, right);
     }
 
     private boolean isRequiredGraphRagReserveCandidate(Document document,

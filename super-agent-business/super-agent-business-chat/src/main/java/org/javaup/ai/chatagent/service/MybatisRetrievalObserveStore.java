@@ -72,12 +72,18 @@ public class MybatisRetrievalObserveStore implements RetrievalObserveStore {
             entity.setDocumentId(view.getDocumentId());
             entity.setDocumentName(view.getDocumentName());
             entity.setChunkId(view.getChunkId());
+            entity.setChunkType(view.getChunkType());
             entity.setChunkNo(view.getChunkNo());
             entity.setParentBlockId(view.getParentBlockId());
             entity.setParentBlockNo(view.getParentBlockNo());
             entity.setSectionPath(view.getSectionPath());
             entity.setChunkTextPreview(view.getChunkTextPreview());
             entity.setChunkCharCount(view.getChunkCharCount());
+            entity.setContextIdentity(view.getContextIdentity());
+            entity.setCitationIdentity(view.getCitationIdentity());
+            entity.setCitationEvidenceType(view.getCitationEvidenceType());
+            entity.setContextOnly(view.isContextOnly() ? 1 : 0);
+            entity.setSourceEvidenceResolved(view.isSourceEvidenceResolved() ? 1 : 0);
             entity.setStatus(BusinessStatus.YES.getCode());
             retrievalResultMapper.insert(entity);
         }
@@ -181,12 +187,18 @@ public class MybatisRetrievalObserveStore implements RetrievalObserveStore {
             entity.getDocumentId(),
             StrUtil.blankToDefault(entity.getDocumentName(), ""),
             entity.getChunkId(),
+            StrUtil.blankToDefault(entity.getChunkType(), ""),
             entity.getChunkNo(),
             entity.getParentBlockId(),
             entity.getParentBlockNo(),
             StrUtil.blankToDefault(entity.getSectionPath(), ""),
             StrUtil.blankToDefault(entity.getChunkTextPreview(), ""),
             entity.getChunkCharCount(),
+            StrUtil.blankToDefault(entity.getContextIdentity(), ""),
+            StrUtil.blankToDefault(entity.getCitationIdentity(), ""),
+            StrUtil.blankToDefault(entity.getCitationEvidenceType(), ""),
+            entity.getContextOnly() != null && entity.getContextOnly() == 1,
+            entity.getSourceEvidenceResolved() != null && entity.getSourceEvidenceResolved() == 1,
             toInstant(entity.getCreateTime())
         );
     }

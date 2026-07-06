@@ -1,6 +1,7 @@
 package org.javaup.ai.chatagent.rag.support;
 
 import org.javaup.ai.chatagent.model.SearchReference;
+import org.javaup.ai.chatagent.rag.model.EvidenceIdentity;
 import org.javaup.ai.manage.support.DocumentKnowledgeMetadataKeys;
 import org.springframework.ai.document.Document;
 
@@ -36,6 +37,11 @@ public final class SearchReferenceMapper {
         reference.setFinalSelectionReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.FINAL_SELECTION_REASON), ""));
         reference.setEvidenceApplicabilityStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_STATUS), ""));
         reference.setEvidenceApplicabilityReason(asText(metadata.get(DocumentKnowledgeMetadataKeys.EVIDENCE_APPLICABILITY_REASON), ""));
+        reference.setContextIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CONTEXT_IDENTITY), ""));
+        reference.setCitationIdentity(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_IDENTITY), ""));
+        reference.setCitationEvidenceType(asText(metadata.get(DocumentKnowledgeMetadataKeys.CITATION_EVIDENCE_TYPE), ""));
+        reference.setContextOnly(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.CONTEXT_ONLY)));
+        reference.setSourceEvidenceResolved(asBoolean(metadata.get(DocumentKnowledgeMetadataKeys.SOURCE_EVIDENCE_RESOLVED)));
 
         if ("WEB".equalsIgnoreCase(sourceType)) {
             reference.setTitle(asText(metadata.get(DocumentKnowledgeMetadataKeys.TITLE), "网页来源"));
@@ -52,6 +58,7 @@ public final class SearchReferenceMapper {
         reference.setParentBlockId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID)));
         reference.setParentBlockNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.PARENT_BLOCK_NO)));
         reference.setChunkId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_ID)));
+        reference.setChunkType(asText(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE), ""));
         reference.setChunkNo(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.CHUNK_NO)));
         reference.setSectionPath(asText(metadata.get(DocumentKnowledgeMetadataKeys.SECTION_PATH), ""));
         reference.setStructureNodeId(asLong(metadata.get(DocumentKnowledgeMetadataKeys.STRUCTURE_NODE_ID)));
@@ -120,7 +127,28 @@ public final class SearchReferenceMapper {
         reference.setRaptorNodeLevel(asInteger(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_NODE_LEVEL)));
         reference.setRaptorSummary(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SUMMARY), ""));
         reference.setRaptorSourceStatus(asText(metadata.get(DocumentKnowledgeMetadataKeys.RAPTOR_SOURCE_STATUS), ""));
+        reference.setQuoteText(asText(metadata.get(DocumentKnowledgeMetadataKeys.ORIGINAL_SNIPPET), ""));
+        enrichEvidenceIdentity(reference);
         return reference;
+    }
+
+    private static void enrichEvidenceIdentity(SearchReference reference) {
+        EvidenceIdentity citationIdentity = EvidenceIdentityResolver.citationIdentity(reference);
+        EvidenceIdentity contextIdentity = EvidenceIdentityResolver.contextIdentity(reference);
+        if (citationIdentity != null && citationIdentity.present()) {
+            reference.setCitationIdentity(citationIdentity.value());
+            reference.setCitationEvidenceType(citationIdentity.type().name());
+            reference.setSourceEvidenceResolved(true);
+            reference.setContextOnly(false);
+        }
+        else {
+            reference.setCitationEvidenceType("CONTEXT_ONLY");
+            reference.setSourceEvidenceResolved(false);
+            reference.setContextOnly(true);
+        }
+        if (contextIdentity != null && contextIdentity.present()) {
+            reference.setContextIdentity(contextIdentity.value());
+        }
     }
 
     private static String asText(Object value, String defaultValue) {

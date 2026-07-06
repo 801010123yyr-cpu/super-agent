@@ -2,6 +2,8 @@ package org.javaup.ai.chatagent.model;
 
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.javaup.ai.chatagent.rag.model.EvidenceIdentity;
+import org.javaup.ai.chatagent.rag.support.EvidenceIdentityResolver;
 
 import java.util.List;
 
@@ -34,6 +36,8 @@ public class SearchReference {
     private String knowledgeBaseName;
 
     private Long chunkId;
+
+    private String chunkType;
 
     private Long parentBlockId;
 
@@ -203,6 +207,16 @@ public class SearchReference {
 
     private String evidenceApplicabilityReason;
 
+    private String contextIdentity;
+
+    private String citationIdentity;
+
+    private String citationEvidenceType;
+
+    private boolean contextOnly;
+
+    private boolean sourceEvidenceResolved;
+
     public SearchReference(String title, String url, String snippet) {
         this.sourceType = "WEB";
         this.title = title;
@@ -213,27 +227,13 @@ public class SearchReference {
     }
 
     public String uniqueKey() {
-        if (raptorNodeId != null && chunkId != null) {
-            return "RAPTOR:" + raptorNodeId + ":" + chunkId;
+        EvidenceIdentity citation = EvidenceIdentityResolver.citationIdentity(this);
+        if (citation != null && citation.present()) {
+            return citation.value();
         }
-        if (raptorNodeId != null) {
-            return "RAPTOR:" + raptorNodeId + ":" + (raptorSourceStatus == null ? "SUMMARY" : raptorSourceStatus);
-        }
-        if (kgEvidenceId != null) {
-            return "GRAPH_RAG:" + kgEvidenceId;
-        }
-        if (tableId != null) {
-            return "TABLE:" + tableId
-                + ":" + (tableOperation == null ? "" : tableOperation)
-                + ":" + (tableMetricColumn == null ? "" : tableMetricColumn)
-                + ":" + (tableGroupByColumn == null ? "" : tableGroupByColumn)
-                + ":" + (snippet == null ? 0 : snippet.hashCode());
-        }
-        if (parentBlockId != null) {
-            return "PARENT:" + parentBlockId;
-        }
-        if (chunkId != null) {
-            return "DOCUMENT:" + chunkId;
+        EvidenceIdentity context = EvidenceIdentityResolver.contextIdentity(this);
+        if (context != null && context.present()) {
+            return context.value();
         }
         if (url != null && !url.isBlank()) {
             return "WEB:" + url;

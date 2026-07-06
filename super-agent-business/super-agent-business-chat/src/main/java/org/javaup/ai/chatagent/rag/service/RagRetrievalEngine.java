@@ -18,6 +18,7 @@ import org.javaup.ai.chatagent.rag.model.SubQuestionChannelTrace;
 import org.javaup.ai.chatagent.rag.model.SubQuestionEvidence;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannel;
 import org.javaup.ai.chatagent.rag.retrieve.channel.RetrievalChannelResult;
+import org.javaup.ai.chatagent.rag.support.EvidenceIdentityResolver;
 import org.javaup.ai.chatagent.rag.support.SearchReferenceMapper;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.manage.model.KnowledgeDocumentDescriptor;
@@ -472,7 +473,7 @@ public class RagRetrievalEngine {
             .skip(finalTopK)
             .filter(document -> isGraphRagReserveCandidate(document, plan))
             .filter(document -> !crossDocumentCommunityOnly || isGraphRagCrossDocumentCommunityReserveCandidate(document, plan))
-            .filter(candidate -> selected.stream().noneMatch(selectedDocument -> sameDocument(selectedDocument, candidate)))
+            .filter(candidate -> selected.stream().noneMatch(selectedDocument -> sameEvidenceIdentity(selectedDocument, candidate)))
             .max(Comparator.comparingDouble(document -> graphRagEvidenceBudgetPriority(document, plan)))
             .orElse(null);
     }
@@ -484,13 +485,6 @@ public class RagRetrievalEngine {
             return false;
         }
         return !preferCrossDocumentCommunity || isGraphRagCrossDocumentCommunityReserveCandidate(document, plan);
-    }
-
-    private boolean sameDocument(Document left, Document right) {
-        if (left == null || right == null) {
-            return false;
-        }
-        return Objects.equals(left.getId(), right.getId());
     }
 
     private int weakestNonReservedEvidenceIndex(List<Document> selected, ConversationExecutionPlan plan) {
@@ -628,7 +622,7 @@ public class RagRetrievalEngine {
             .filter(holder -> holder != null && holder.document != null)
             .filter(holder -> isGraphRagReserveCandidate(holder.document, plan))
             .filter(holder -> !crossDocumentCommunityOnly || isGraphRagCrossDocumentCommunityReserveCandidate(holder.document, plan))
-            .filter(candidate -> selected.stream().noneMatch(selectedHolder -> sameDocument(selectedHolder.document, candidate.document)))
+            .filter(candidate -> selected.stream().noneMatch(selectedHolder -> sameEvidenceIdentity(selectedHolder.document, candidate.document)))
             .max(Comparator.comparingDouble(holder -> graphRagEvidenceBudgetPriority(holder.document, plan)))
             .orElse(null);
     }
@@ -1255,6 +1249,16 @@ public class RagRetrievalEngine {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
+    private boolean booleanMetadataValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        return value != null && Boolean.parseBoolean(String.valueOf(value));
+    }
+
     private List<Document> applyRerank(int subQuestionIndex,
                                        String subQuestion,
                                        List<Document> candidates,
@@ -1804,6 +1808,11 @@ public class RagRetrievalEngine {
                     finalRankMap.put(docId, i + 1);
                     finalDocumentMap.put(docId, finalDocument);
                 }
+                String citationIdentity = EvidenceIdentityResolver.citationIdentityValue(finalDocument);
+                if (!citationIdentity.isBlank()) {
+                    finalRankMap.put(citationIdentity, i + 1);
+                    finalDocumentMap.put(citationIdentity, finalDocument);
+                }
             }
         }
         if (mergedCandidates != null) {
@@ -1893,6 +1902,11 @@ public class RagRetrievalEngine {
                         view.setChunkId(Long.parseLong(String.valueOf(chunkIdObj)));
                     }
 
+                    Object chunkTypeObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CHUNK_TYPE);
+                    if (chunkTypeObj != null) {
+                        view.setChunkType(String.valueOf(chunkTypeObj));
+                    }
+
                     Object chunkNoObj = doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CHUNK_NO);
                     if (chunkNoObj != null) {
                         view.setChunkNo(Integer.parseInt(String.valueOf(chunkNoObj)));
@@ -1912,6 +1926,12 @@ public class RagRetrievalEngine {
                     if (sectionPathObj != null) {
                         view.setSectionPath(String.valueOf(sectionPathObj));
                     }
+                    enrichEvidenceIdentityMetadata(doc);
+                    view.setContextIdentity(safeText(doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CONTEXT_IDENTITY)));
+                    view.setCitationIdentity(safeText(doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CITATION_IDENTITY)));
+                    view.setCitationEvidenceType(safeText(doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CITATION_EVIDENCE_TYPE)));
+                    view.setContextOnly(booleanMetadataValue(doc.getMetadata().get(DocumentKnowledgeMetadataKeys.CONTEXT_ONLY)));
+                    view.setSourceEvidenceResolved(booleanMetadataValue(doc.getMetadata().get(DocumentKnowledgeMetadataKeys.SOURCE_EVIDENCE_RESOLVED)));
 
                     String content = doc.getText();
                     if (content != null && !content.isEmpty()) {
@@ -1984,6 +2004,10 @@ public class RagRetrievalEngine {
         if (candidate.getId() != null && byId != null && byId.containsKey(candidate.getId())) {
             return byId.get(candidate.getId());
         }
+        String citationIdentity = EvidenceIdentityResolver.citationIdentityValue(candidate);
+        if (!citationIdentity.isBlank() && byId != null && byId.containsKey(citationIdentity)) {
+            return byId.get(citationIdentity);
+        }
         return documents.stream()
             .filter(document -> sameEvidenceIdentity(candidate, document))
             .findFirst()
@@ -2009,6 +2033,10 @@ public class RagRetrievalEngine {
         if (candidate.getId() != null && finalRankMap != null && finalRankMap.containsKey(candidate.getId())) {
             return finalRankMap.get(candidate.getId());
         }
+        String citationIdentity = EvidenceIdentityResolver.citationIdentityValue(candidate);
+        if (!citationIdentity.isBlank() && finalRankMap != null && finalRankMap.containsKey(citationIdentity)) {
+            return finalRankMap.get(citationIdentity);
+        }
         for (int index = 0; index < finalDocuments.size(); index++) {
             if (sameEvidenceIdentity(candidate, finalDocuments.get(index))) {
                 return index + 1;
@@ -2024,24 +2052,31 @@ public class RagRetrievalEngine {
         if (Objects.equals(left.getId(), right.getId())) {
             return true;
         }
-        Map<String, Object> leftMetadata = left.getMetadata();
-        Map<String, Object> rightMetadata = right.getMetadata();
-        Long leftDocumentId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
-        Long rightDocumentId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.DOCUMENT_ID);
-        if (leftDocumentId != null && rightDocumentId != null && !Objects.equals(leftDocumentId, rightDocumentId)) {
-            return false;
-        }
-        Long leftChunkId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.CHUNK_ID);
-        Long rightChunkId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.CHUNK_ID);
-        if (leftChunkId != null && rightChunkId != null && Objects.equals(leftChunkId, rightChunkId)) {
+        if (EvidenceIdentityResolver.sameCitationEvidence(left, right)) {
             return true;
         }
-        Long leftParentBlockId = metadataLong(leftMetadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
-        Long rightParentBlockId = metadataLong(rightMetadata, DocumentKnowledgeMetadataKeys.PARENT_BLOCK_ID);
-        return leftChunkId == null && rightChunkId == null
-            && leftParentBlockId != null
-            && rightParentBlockId != null
-            && Objects.equals(leftParentBlockId, rightParentBlockId);
+        return EvidenceIdentityResolver.isContextOnly(left)
+            && EvidenceIdentityResolver.isContextOnly(right)
+            && EvidenceIdentityResolver.sameContext(left, right);
+    }
+
+    private void enrichEvidenceIdentityMetadata(Document document) {
+        if (document == null || document.getMetadata() == null) {
+            return;
+        }
+        Map<String, Object> metadata = document.getMetadata();
+        String citationIdentity = EvidenceIdentityResolver.citationIdentityValue(document);
+        String contextIdentity = EvidenceIdentityResolver.contextIdentityValue(document);
+        if (!citationIdentity.isBlank()) {
+            metadata.put(DocumentKnowledgeMetadataKeys.CITATION_IDENTITY, citationIdentity);
+        }
+        if (!contextIdentity.isBlank()) {
+            metadata.put(DocumentKnowledgeMetadataKeys.CONTEXT_IDENTITY, contextIdentity);
+        }
+        metadata.put(DocumentKnowledgeMetadataKeys.CITATION_EVIDENCE_TYPE, EvidenceIdentityResolver.citationEvidenceType(document).name());
+        boolean contextOnly = EvidenceIdentityResolver.isContextOnly(document);
+        metadata.put(DocumentKnowledgeMetadataKeys.CONTEXT_ONLY, contextOnly);
+        metadata.put(DocumentKnowledgeMetadataKeys.SOURCE_EVIDENCE_RESOLVED, !contextOnly);
     }
 
     private Long metadataLong(Map<String, Object> metadata, String key) {

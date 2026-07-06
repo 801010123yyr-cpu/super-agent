@@ -880,12 +880,18 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_retrieval_result (
     document_id BIGINT DEFAULT NULL COMMENT '文档id',
     document_name VARCHAR(255) DEFAULT NULL COMMENT '文档名称',
     chunk_id BIGINT DEFAULT NULL COMMENT '文档切块id',
+    chunk_type VARCHAR(32) DEFAULT NULL COMMENT '切块类型：TEXT/LIST/TABLE/TITLE/RAPTOR_SOURCE_CHUNK等',
     chunk_no INT DEFAULT NULL COMMENT '切块序号',
     parent_block_id BIGINT DEFAULT NULL COMMENT '父块id',
     parent_block_no INT DEFAULT NULL COMMENT '父块序号',
     section_path VARCHAR(512) DEFAULT NULL COMMENT '章节路径',
     chunk_text_preview VARCHAR(500) DEFAULT NULL COMMENT '文档块内容预览（前500字符）',
     chunk_char_count INT DEFAULT NULL COMMENT '文档块字符数',
+    context_identity VARCHAR(255) DEFAULT NULL COMMENT '上下文身份：ParentBlock、GraphRAG包装、RAPTOR摘要等',
+    citation_identity VARCHAR(255) DEFAULT NULL COMMENT '真实可引用证据身份：chunk/quote/table cell/source chunk',
+    citation_evidence_type VARCHAR(64) DEFAULT NULL COMMENT '引用证据类型：CHUNK/TABLE_CELL_OR_ROW/KG_QUOTE_SOURCE/RAPTOR_SOURCE_CHUNK/CONTEXT_ONLY',
+    context_only TINYINT(1) DEFAULT '0' COMMENT '是否仅为上下文，不可直接作为citation证据',
+    source_evidence_resolved TINYINT(1) DEFAULT '0' COMMENT '是否已解析到真实可引用source evidence',
     create_time DATETIME DEFAULT NULL COMMENT '创建时间',
     edit_time DATETIME DEFAULT NULL COMMENT '编辑时间',
     status TINYINT(1) DEFAULT '1' COMMENT '1:正常 0:删除',
@@ -894,7 +900,9 @@ CREATE TABLE IF NOT EXISTS super_agent_chat_retrieval_result (
     KEY idx_retrieval_result_trace (trace_id),
     KEY idx_retrieval_result_sub_question (exchange_id, sub_question_index),
     KEY idx_retrieval_result_channel (channel_type, is_selected),
-    KEY idx_retrieval_result_document (document_id, chunk_id)
+    KEY idx_retrieval_result_document (document_id, chunk_id),
+    KEY idx_retrieval_result_citation_identity (citation_identity),
+    KEY idx_retrieval_result_context_only (context_only, source_evidence_resolved)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='检索结果快照表';
 
 CREATE TABLE IF NOT EXISTS super_agent_chat_channel_execution (

@@ -4,6 +4,8 @@ import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.javaup.ai.chatagent.model.SearchReference;
 import org.javaup.ai.chatagent.model.trace.ConversationTraceStageCode;
+import org.javaup.ai.chatagent.rag.model.EvidenceIdentity;
+import org.javaup.ai.chatagent.rag.support.EvidenceIdentityResolver;
 import org.javaup.ai.chatagent.service.ConversationTraceRecorder;
 import org.javaup.ai.ragtools.client.RagToolsClient;
 import org.javaup.ai.ragtools.model.RagToolsCitationRepairRequest;
@@ -176,6 +178,25 @@ public class RagCitationRepairService {
         if (StrUtil.isNotBlank(citation.getSectionPath())) {
             reference.setSectionPath(citation.getSectionPath());
         }
+        refreshEvidenceIdentity(reference);
+    }
+
+    private void refreshEvidenceIdentity(SearchReference reference) {
+        EvidenceIdentity citationIdentity = EvidenceIdentityResolver.citationIdentity(reference);
+        EvidenceIdentity contextIdentity = EvidenceIdentityResolver.contextIdentity(reference);
+        if (citationIdentity != null && citationIdentity.present()) {
+            reference.setCitationIdentity(citationIdentity.value());
+            reference.setCitationEvidenceType(citationIdentity.type().name());
+            reference.setSourceEvidenceResolved(true);
+            reference.setContextOnly(false);
+        }
+        else {
+            reference.setCitationIdentity("");
+            reference.setCitationEvidenceType("CONTEXT_ONLY");
+            reference.setSourceEvidenceResolved(false);
+            reference.setContextOnly(true);
+        }
+        reference.setContextIdentity(contextIdentity == null || !contextIdentity.present() ? "" : contextIdentity.value());
     }
 
     private Map<String, Object> buildEvidenceMetadata(SearchReference reference) {
@@ -185,6 +206,7 @@ public class RagCitationRepairService {
         metadata.put("evidenceApplicabilityStatus", StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), ""));
         metadata.put("evidenceApplicabilityReason", StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), ""));
         metadata.put("chunkNo", reference.getChunkNo());
+        metadata.put("chunkType", StrUtil.blankToDefault(reference.getChunkType(), ""));
         metadata.put("parentBlockNo", reference.getParentBlockNo());
         metadata.put("sourceBlockIds", StrUtil.blankToDefault(reference.getSourceBlockIds(), ""));
         metadata.put("channel", StrUtil.blankToDefault(reference.getChannel(), ""));
@@ -361,9 +383,15 @@ public class RagCitationRepairService {
         item.put("finalSelectionReason", StrUtil.blankToDefault(reference.getFinalSelectionReason(), ""));
         item.put("evidenceApplicabilityStatus", StrUtil.blankToDefault(reference.getEvidenceApplicabilityStatus(), ""));
         item.put("evidenceApplicabilityReason", StrUtil.blankToDefault(reference.getEvidenceApplicabilityReason(), ""));
+        item.put("contextIdentity", StrUtil.blankToDefault(reference.getContextIdentity(), ""));
+        item.put("citationIdentity", StrUtil.blankToDefault(reference.getCitationIdentity(), ""));
+        item.put("citationEvidenceType", StrUtil.blankToDefault(reference.getCitationEvidenceType(), ""));
+        item.put("contextOnly", reference.isContextOnly());
+        item.put("sourceEvidenceResolved", reference.isSourceEvidenceResolved());
         item.put("documentId", reference.getDocumentId());
         item.put("documentName", StrUtil.blankToDefault(reference.getDocumentName(), reference.getTitle()));
         item.put("chunkId", reference.getChunkId());
+        item.put("chunkType", StrUtil.blankToDefault(reference.getChunkType(), ""));
         item.put("chunkNo", reference.getChunkNo());
         item.put("parentBlockId", reference.getParentBlockId());
         item.put("parentBlockNo", reference.getParentBlockNo());
@@ -393,8 +421,7 @@ public class RagCitationRepairService {
 
     private boolean isRepairableDocumentReference(SearchReference reference) {
         return reference != null
-            && ("DOCUMENT".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), ""))
-            || "DOCUMENT_TABLE".equalsIgnoreCase(StrUtil.blankToDefault(reference.getSourceType(), "")))
+            && EvidenceIdentityResolver.citationIdentity(reference) != null
             && StrUtil.isNotBlank(reference.getSnippet());
     }
 
