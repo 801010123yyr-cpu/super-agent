@@ -62,7 +62,7 @@ spring:
           # 当前文档切块向量化时，会直接使用这里配置的模型，不再额外在 manage 下重复维护一份。
           model: text-embedding-v4
   main:
-    allow-bean-definition-overriding: true
+    allow-bean-definition-overriding: true//允许重名bean覆盖
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher
