@@ -62,19 +62,19 @@ spring:
           # 当前文档切块向量化时，会直接使用这里配置的模型，不再额外在 manage 下重复维护一份。
           model: text-embedding-v4
   main:
-    allow-bean-definition-overriding: true//允许重名bean覆盖
+    allow-bean-definition-overriding: true #允许重名bean覆盖
   mvc:
     pathmatch:
-      matching-strategy: ant_path_matcher
+      matching-strategy: ant_path_matcher  #路径匹配的方式
     servlet:
-      load-on-startup: 1
+      load-on-startup: 1  #mvc都要经过dispatch,启动时加载
   jackson:
     time-zone: GMT+8
     date-format: yyyy-MM-dd HH:mm:ss
 mybatis-plus:
-  mapper-locations: classpath:mapper/*.xml
+  mapper-locations: classpath:mapper/*.xml #xml文件的位置
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  #日志和缓存
     local-cache-scope: statement  
 
 app:
@@ -172,19 +172,19 @@ app:
       # 单个父块证据允许保留的最大字符数。
       # Parent-Child 结构下，最终回答阶段看到的是父块而不是邻块扩窗结果，
       # 因此这里控制的是“父块正文 + 命中子片段摘要”的整体预算。
-      parent-evidence-max-chars: 2200
+      parent-evidence-max-chars: 2200  #检索出来的父块最大占位
       # 编排阶段历史上下文最大字符数。
       # 改写和检索规划只需要“足够判断当前轮”的历史，不适合吃完整长会话。
-      planning-history-max-chars: 1600
+      planning-history-max-chars: 1600  #改写时看到的最大历史token数
       # 回答阶段历史上下文最大字符数。
       # 这一层会优先使用“更干净的最近用户问题 + 结构化历史要点”，避免上一轮 assistant 输出污染当前回答。
-      answer-history-max-chars: 1000
+      answer-history-max-chars: 1000   #回答时看到的最大历史token数
       # 回答阶段全部证据的总字符预算。
-      # 用来防止“多子问题 × 多证据”把模型上下文窗口吃满。
-      total-evidence-max-chars: 5200
+      # 用来防止“多子问题 × 多证据”把模型上下文窗口吃满。 
+      total-evidence-max-chars: 5200    #所有子问题合起来检索到的最大token数
       # 单个子问题最多允许占用的证据字符预算。
       # 避免某一个子问题的长证据把其他子问题完全挤掉。
-      per-sub-question-evidence-max-chars: 2200
+      per-sub-question-evidence-max-chars: 2200  #每一个子问题检索出来的最大的token数
       # 当知识问题没有任何证据时，直接返回的兜底文案。
       no-evidence-reply: 当前没有从当前文档中检索到足够证据，暂时不能给出可靠结论。你可以补充更具体的章节名、标题或关键词后再试。
       # RAG 回答阶段的系统提示词。
