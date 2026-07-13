@@ -17,5 +17,5 @@ public class RetrievalObserveQueryDto {
     private String conversationId;
 
     @NotNull(message = "exchangeId 不能为空")
-    private String exchangeId;
+    private String exchangeId; #一次会话里每次对话（问题+回答）就是一个exchangeid。
 }
