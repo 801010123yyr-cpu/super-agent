@@ -109,7 +109,7 @@ public class BusinessChatService {
         StreamLaunchPlan launchPlan = null;
         boolean leaseClaimed = false;
         try {
-
+#获取租约
             launchPlan = buildLaunchPlan(request);
 
             leaseClaimed = claimConversationLease(launchPlan);
@@ -246,11 +246,11 @@ public class BusinessChatService {
 
     private Flux<String> bindClientChannel(TaskInfo taskInfo) {
 
-        return taskInfo.sink().asFlux()
+        return taskInfo.sink().asFlux()#taskinfo是存任务，sink接受前端数据流，asflux就是其他人订阅就可以接收到
 
-            .doOnSubscribe(ignored -> activateGeneration(taskInfo))
+            .doOnSubscribe(ignored -> activateGeneration(taskInfo))#订阅，有数据来就启动llm,llm是在后端的
 
-            .doOnCancel(() -> stopTask(taskInfo, "客户端已取消请求"));
+            .doOnCancel(() -> stopTask(taskInfo, "客户端已取消请求"));#当发生浏览器关闭之类的任务时，就告诉llm马上停止
     }
 
     private void activateGeneration(TaskInfo taskInfo) {
